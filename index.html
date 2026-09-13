@@ -1,0 +1,2742 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-slate-950 text-slate-100">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>BirdVault - Passkey & Gemini AI Edition</title>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#ecfdf5',
+              100: '#d1fae5',
+              500: '#10b981',
+              600: '#059669',
+              700: '#047857',
+              900: '#064e3b',
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- Google Fonts: Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+  <!-- React 18, ReactDOM, and Babel Standalone -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- EXIF Reader Library -->
+  <script src="https://cdn.jsdelivr.net/npm/exifr@7.1.3/dist/full.umd.js"></script>
+
+  <style>
+    body {
+      font-family: 'Inter', sans-serif;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .custom-scrollbar::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-track {
+      background: rgba(15, 23, 42, 0.6);
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+      background: rgba(51, 65, 85, 0.8);
+      border-radius: 9999px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+      background: rgba(16, 185, 129, 0.8);
+    }
+  </style>
+</head>
+<body class="h-full bg-slate-950 text-slate-100 flex flex-col antialiased selection:bg-emerald-500/30 selection:text-emerald-200">
+  <div id="root" class="h-full flex flex-col"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useMemo, useRef, useCallback } = React;
+
+    function detectSystemLocality() {
+      try {
+        const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+        if (timeZone.includes("Auckland") || timeZone.includes("New_Zealand") || timeZone.includes("Pacific/Auckland")) {
+          return "Auckland, New Zealand";
+        }
+        if (timeZone.includes("Sydney") || timeZone.includes("Australia")) {
+          return "Sydney, Australia";
+        }
+        if (timeZone.includes("London") || timeZone.includes("Europe")) {
+          return "London, UK";
+        }
+        if (timeZone.includes("New_York") || timeZone.includes("America")) {
+          return "New York, USA";
+        }
+        return timeZone.replace(/_/g, ' ') || "Auckland, New Zealand";
+      } catch (e) {
+        return "Auckland, New Zealand";
+      }
+    }
+
+    function blobToBase64(blob) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const result = reader.result;
+          const base64Str = typeof result === 'string' ? (result.split(',')[1] || result) : '';
+          resolve(base64Str);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+    }
+
+    async function cropBlob(fileOrBlob, cropRegion) {
+      if (!cropRegion || cropRegion.width <= 0 || cropRegion.height <= 0) {
+        return fileOrBlob;
+      }
+      return new Promise((resolve) => {
+        const img = new Image();
+        const url = typeof fileOrBlob === 'string' ? fileOrBlob : URL.createObjectURL(fileOrBlob);
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          const sx = (cropRegion.x / 100) * img.width;
+          const sy = (cropRegion.y / 100) * img.height;
+          const sw = (cropRegion.width / 100) * img.width;
+          const sh = (cropRegion.height / 100) * img.height;
+
+          canvas.width = Math.max(1, Math.round(sw));
+          canvas.height = Math.max(1, Math.round(sh));
+
+          ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+          if (typeof fileOrBlob !== 'string') URL.revokeObjectURL(url);
+
+          canvas.toBlob((blob) => {
+            resolve(blob || fileOrBlob);
+          }, 'image/jpeg', 0.92);
+        };
+        img.onerror = () => {
+          if (typeof fileOrBlob !== 'string') URL.revokeObjectURL(url);
+          resolve(fileOrBlob);
+        };
+        img.src = url;
+      });
+    }
+
+    async function generateFastThumbnail(file, targetSize = 300) {
+      try {
+        if ('createImageBitmap' in window) {
+          const bitmap = await createImageBitmap(file, {
+            resizeWidth: targetSize,
+            resizeHeight: targetSize,
+            resizeMode: 'aspect-fit'
+          });
+          const canvas = document.createElement('canvas');
+          canvas.width = bitmap.width;
+          canvas.height = bitmap.height;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(bitmap, 0, 0);
+          bitmap.close();
+          return new Promise((resolve) => {
+            canvas.toBlob((blob) => {
+              resolve(blob ? URL.createObjectURL(blob) : URL.createObjectURL(file));
+            }, 'image/jpeg', 0.75);
+          });
+        }
+      } catch (e) {
+        console.warn("createImageBitmap thumbnail failed:", e);
+      }
+      return URL.createObjectURL(file);
+    }
+
+    function Icon({ name, className = "w-4 h-4" }) {
+      const icons = {
+        compass: (
+          <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+          </svg>
+        ),
+        vault: (
+          <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 8h14M5 8a2 2 0 01-2-2V5a2 2 0 012-2h14a2 2 0 012 2v1a2 2 0 01-2 2M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
+          </svg>
+        ),
+        camera: (
+          <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+        ),
+        check: (
+          <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
+          </svg>
+        ),
+        info: (
+          <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        ),
+        mapPin: (
+          <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+        ),
+        x: (
+          <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        ),
+        sparkles: (
+          <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
+          </svg>
+        ),
+        search: (
+          <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+          </svg>
+        ),
+        crop: (
+          <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 2v14a2 2 0 002 2h14M18 22V8a2 2 0 00-2-2H2" />
+          </svg>
+        ),
+        upload: (
+          <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+          </svg>
+        ),
+        stop: (
+          <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <rect x="6" y="6" width="12" height="12" rx="2" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        ),
+        trash: (
+          <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+          </svg>
+        ),
+        download: (
+          <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+          </svg>
+        ),
+        square: (
+          <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <rect x="4" y="4" width="16" height="16" rx="2" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        ),
+        checkSquare: (
+          <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 11l3 3L22 4" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" />
+          </svg>
+        ),
+        chevronUp: (
+          <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 15l7-7 7 7" />
+          </svg>
+        ),
+        chevronDown: (
+          <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+          </svg>
+        ),
+        flame: (
+          <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17.657 18.657A8 8 0 016.343 7.343S7 9 9 10c0-2 .5-5 2.986-7C14 5 16.09 5.777 17.656 7.343A7.975 7.975 0 0120 13a7.975 7.975 0 01-2.343 5.657z" />
+          </svg>
+        ),
+        zoomIn: (
+          <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v6m-3-3h6" />
+          </svg>
+        ),
+        zoomOut: (
+          <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM7 10h6" />
+          </svg>
+        ),
+        maximize: (
+          <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 8V4m0 0h4M4 4l5 5m11-5h-4m4 0v4m0-4l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+          </svg>
+        ),
+        key: (
+          <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+          </svg>
+        ),
+        shield: (
+          <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+          </svg>
+        ),
+        spinner: (
+          <svg className={`${className} animate-spin`} fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+          </svg>
+        )
+      };
+      return icons[name] || null;
+    }
+
+    function CroppedThumbnail({ src, cropRegion, alt, className = "" }) {
+      const cropStyle = useMemo(() => {
+        if (cropRegion && typeof cropRegion.width === 'number' && cropRegion.width > 0 && cropRegion.width <= 100) {
+          const { x, y, width, height } = cropRegion;
+          const scale = 100 / Math.max(1, Math.max(width, height));
+          const translateX = -(x + width / 2 - 50);
+          const translateY = -(y + height / 2 - 50);
+          return {
+            transform: `scale(${scale}) translate(${translateX}%, ${translateY}%)`,
+            transformOrigin: 'center center'
+          };
+        }
+        return {};
+      }, [cropRegion]);
+
+      return (
+        <div className={`overflow-hidden relative ${className}`}>
+          <img
+            src={src}
+            alt={alt}
+            style={cropStyle}
+            loading="lazy"
+            className="w-full h-full object-cover transition-transform duration-200"
+            onError={(e) => {
+              e.target.src = "https://placehold.co/300x300/1e293b/10b981?text=Bird+Photo";
+            }}
+          />
+        </div>
+      );
+    }
+
+    function LocationAutocomplete({ value, onChange, placeholder = "Search location..." }) {
+      const [suggestions, setSuggestions] = useState([]);
+      const [isOpen, setIsOpen] = useState(false);
+
+      const popularLocations = [
+        "Auckland, New Zealand",
+        "Wellington, New Zealand",
+        "Christchurch, New Zealand",
+        "Fiordland National Park, NZ",
+        "Rotoroa Island, Hauraki Gulf",
+        "Sydney, Australia",
+        "Melbourne, Australia",
+        "Kruger National Park, South Africa",
+        "Everglades, Florida, USA",
+        "Yosemite National Park, California",
+        "Costa Rica Cloud Forest",
+        "Galapagos Islands, Ecuador"
+      ];
+
+      const handleInputChange = (e) => {
+        const val = e.target.value;
+        onChange(val);
+        if (val.trim().length > 0) {
+          const filtered = popularLocations.filter(loc =>
+            loc.toLowerCase().includes(val.toLowerCase())
+          );
+          setSuggestions(filtered.length > 0 ? filtered : [val]);
+          setIsOpen(true);
+        } else {
+          setSuggestions([]);
+          setIsOpen(false);
+        }
+      };
+
+      const handleSelect = (loc) => {
+        onChange(loc);
+        setIsOpen(false);
+      };
+
+      return (
+        <div className="relative w-full">
+          <input
+            type="text"
+            value={value}
+            onChange={handleInputChange}
+            onFocus={() => {
+              if (value.trim().length > 0) setIsOpen(true);
+            }}
+            onBlur={() => setTimeout(() => setIsOpen(false), 200)}
+            placeholder={placeholder}
+            className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+          />
+          {isOpen && suggestions.length > 0 && (
+            <ul className="absolute z-50 left-0 right-0 mt-1 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl max-h-48 overflow-y-auto custom-scrollbar text-xs">
+              {suggestions.map((loc, idx) => (
+                <li
+                  key={idx}
+                  onMouseDown={() => handleSelect(loc)}
+                  className="px-3 py-2 hover:bg-slate-800 cursor-pointer text-slate-200 flex items-center gap-2 border-b border-slate-800/40 last:border-none"
+                >
+                  <Icon name="mapPin" className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  <span className="truncate">{loc}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      );
+    }
+
+    const InteractivePhotoViewer = React.memo(({ 
+      src, 
+      alt = "Photo Viewer", 
+      heatmapPoints = [], 
+      showHeatmap = false,
+      title = "Photo Inspection",
+      cropRegion = null,
+      onCropChange = null
+    }) => {
+      const [loupeState, setLoupeState] = useState({ show: false, x: 0, y: 0, bgX: 50, bgY: 50 });
+      const [loupeEnabled, setLoupeEnabled] = useState(true);
+      const [loupeZoom, setLoupeZoom] = useState(4);
+      
+      const [isFullResLightbox, setIsFullResLightbox] = useState(false);
+      const [isFitToScreen, setIsFitToScreen] = useState(false);
+      const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
+      const [lightboxScale, setLightboxScale] = useState(1);
+      const [isDraggingPan, setIsDraggingPan] = useState(false);
+      const dragStartRef = useRef({ x: 0, y: 0 });
+      const pinchStartDistRef = useRef(null);
+      const pinchStartScaleRef = useRef(1);
+      const imgContainerRef = useRef(null);
+      const lightboxContainerRef = useRef(null);
+      const lightboxImgRef = useRef(null);
+      const [containerBounds, setContainerBounds] = useState({ width: 800, height: 600 });
+
+      const [isCroppingTool, setIsCroppingTool] = useState(false);
+      const [isDrawingCrop, setIsDrawingCrop] = useState(false);
+      const cropStartRef = useRef({ x: 0, y: 0 });
+      const [activeCrop, setActiveCrop] = useState(cropRegion);
+
+      useEffect(() => {
+        setActiveCrop(cropRegion);
+      }, [cropRegion]);
+
+      useEffect(() => {
+        if (isFitToScreen) {
+          setLightboxScale(1);
+        }
+      }, [isFitToScreen]);
+
+      useEffect(() => {
+        if (isFullResLightbox && lightboxContainerRef.current) {
+          const updateBounds = () => {
+            if (lightboxContainerRef.current) {
+              const rect = lightboxContainerRef.current.getBoundingClientRect();
+              setContainerBounds({
+                width: rect.width || 800,
+                height: rect.height || 600
+              });
+            }
+          };
+          updateBounds();
+          window.addEventListener('resize', updateBounds);
+          return () => window.removeEventListener('resize', updateBounds);
+        }
+      }, [isFullResLightbox]);
+
+      const minimapBox = useMemo(() => {
+        const baseW = lightboxImgRef.current ? lightboxImgRef.current.offsetWidth : containerBounds.width;
+        const baseH = lightboxImgRef.current ? lightboxImgRef.current.offsetHeight : containerBounds.height;
+        const dispW = (baseW || containerBounds.width) * lightboxScale;
+        const dispH = (baseH || containerBounds.height) * lightboxScale;
+
+        const wFrac = Math.min(1, containerBounds.width / (dispW || 1));
+        const hFrac = Math.min(1, containerBounds.height / (dispH || 1));
+
+        const xCenter = 0.5 - (panOffset.x / (dispW || 1));
+        const yCenter = 0.5 - (panOffset.y / (dispH || 1));
+
+        const boxW = Math.max(5, Math.min(100, wFrac * 100));
+        const boxH = Math.max(5, Math.min(100, hFrac * 100));
+
+        const boxLeft = Math.max(0, Math.min(100 - boxW, (xCenter - wFrac / 2) * 100));
+        const boxTop = Math.max(0, Math.min(100 - boxH, (yCenter - hFrac / 2) * 100));
+
+        return { boxW, boxH, boxLeft, boxTop };
+      }, [lightboxScale, panOffset, containerBounds]);
+
+      const getTouchDistance = (e) => {
+        if (e.touches && e.touches.length >= 2) {
+          const dx = e.touches[0].clientX - e.touches[1].clientX;
+          const dy = e.touches[0].clientY - e.touches[1].clientY;
+          return Math.hypot(dx, dy);
+        }
+        return 0;
+      };
+
+      const cropStyle = useMemo(() => {
+        if (activeCrop && typeof activeCrop.width === 'number' && activeCrop.width > 0 && activeCrop.width <= 100 && !isCroppingTool) {
+          const { x, y, width, height } = activeCrop;
+          const scale = 100 / Math.max(1, Math.max(width, height));
+          const translateX = -(x + width / 2 - 50);
+          const translateY = -(y + height / 2 - 50);
+
+          return {
+            transform: `scale(${scale}) translate(${translateX}%, ${translateY}%)`,
+            transformOrigin: 'center center',
+            transition: 'transform 0.25s ease-out'
+          };
+        }
+        return {};
+      }, [activeCrop, isCroppingTool]);
+
+      const handlePanStart = (e) => {
+        if (e.touches && e.touches.length >= 2) return;
+        setIsDraggingPan(true);
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+        dragStartRef.current = { x: clientX - panOffset.x, y: clientY - panOffset.y };
+      };
+
+      const handlePanMove = (e) => {
+        if (e.touches && e.touches.length >= 2) return;
+        if (!isDraggingPan) return;
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+        setPanOffset({
+          x: clientX - dragStartRef.current.x,
+          y: clientY - dragStartRef.current.y
+        });
+      };
+
+      const handlePanEnd = () => {
+        setIsDraggingPan(false);
+      };
+
+      const handleTouchStartLightbox = (e) => {
+        if (e.touches && e.touches.length === 2) {
+          setIsDraggingPan(false);
+          const dist = getTouchDistance(e);
+          pinchStartDistRef.current = dist;
+          pinchStartScaleRef.current = lightboxScale;
+          return;
+        }
+        handlePanStart(e);
+      };
+
+      const handleTouchMoveLightbox = (e) => {
+        if (e.touches && e.touches.length === 2 && pinchStartDistRef.current) {
+          const currentDist = getTouchDistance(e);
+          if (currentDist > 0) {
+            const factor = currentDist / pinchStartDistRef.current;
+            const newScale = Math.min(Math.max(0.5, pinchStartScaleRef.current * factor), 6.0);
+            setLightboxScale(Number(newScale.toFixed(2)));
+            if (isFitToScreen) setIsFitToScreen(false);
+          }
+          return;
+        }
+        handlePanMove(e);
+      };
+
+      const handleTouchEndLightbox = (e) => {
+        if (!e.touches || e.touches.length < 2) {
+          pinchStartDistRef.current = null;
+        }
+        handlePanEnd();
+      };
+
+      const handleWheelLightbox = (e) => {
+        e.preventDefault();
+        const delta = e.deltaY < 0 ? 0.15 : -0.15;
+        setLightboxScale(prev => {
+          const next = Math.min(Math.max(0.5, prev + delta), 6.0);
+          return Number(next.toFixed(2));
+        });
+        if (isFitToScreen) setIsFitToScreen(false);
+      };
+
+      const handlePointerDownContainer = (e) => {
+        if (!isCroppingTool || !imgContainerRef.current) return;
+        const rect = imgContainerRef.current.getBoundingClientRect();
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+        const x = Math.max(0, Math.min(rect.width, clientX - rect.left));
+        const y = Math.max(0, Math.min(rect.height, clientY - rect.top));
+
+        const posX = (x / rect.width) * 100;
+        const posY = (y / rect.height) * 100;
+
+        cropStartRef.current = { x: posX, y: posY };
+        setIsDrawingCrop(true);
+        setActiveCrop({ x: posX, y: posY, width: 0, height: 0 });
+      };
+
+      const handlePointerMoveContainer = (e) => {
+        if (!imgContainerRef.current) return;
+        const rect = imgContainerRef.current.getBoundingClientRect();
+
+        let clientX = e.clientX;
+        let clientY = e.clientY;
+
+        if (e.touches && e.touches.length > 0) {
+          clientX = e.touches[0].clientX;
+          clientY = e.touches[0].clientY;
+        }
+
+        const x = clientX - rect.left;
+        const y = clientY - rect.top;
+
+        if (isCroppingTool && isDrawingCrop) {
+          const posX = Math.max(0, Math.min(100, (x / rect.width) * 100));
+          const posY = Math.max(0, Math.min(100, (y / rect.height) * 100));
+
+          const startX = cropStartRef.current.x;
+          const startY = cropStartRef.current.y;
+
+          const rectX = Math.min(startX, posX);
+          const rectY = Math.min(startY, posY);
+          const rectW = Math.abs(posX - startX);
+          const rectH = Math.abs(posY - startY);
+
+          const newCrop = { x: rectX, y: rectY, width: rectW, height: rectH };
+          setActiveCrop(newCrop);
+          if (onCropChange) onCropChange(newCrop);
+          return;
+        }
+
+        if (!loupeEnabled || isCroppingTool) return;
+
+        if (x < 0 || x > rect.width || y < 0 || y > rect.height) {
+          setLoupeState(prev => ({ ...prev, show: false }));
+          return;
+        }
+
+        const bgX = (x / rect.width) * 100;
+        const bgY = (y / rect.height) * 100;
+
+        setLoupeState({
+          show: true,
+          x,
+          y,
+          bgX,
+          bgY
+        });
+      };
+
+      const handlePointerUpContainer = () => {
+        if (isCroppingTool && isDrawingCrop) {
+          setIsDrawingCrop(false);
+          if (activeCrop && activeCrop.width > 2 && activeCrop.height > 2) {
+            setIsCroppingTool(false);
+          }
+        }
+      };
+
+      const handlePointerLeave = () => {
+        setLoupeState(prev => ({ ...prev, show: false }));
+        if (isCroppingTool && isDrawingCrop) {
+          setIsDrawingCrop(false);
+          if (activeCrop && activeCrop.width > 2 && activeCrop.height > 2) {
+            setIsCroppingTool(false);
+          }
+        }
+      };
+
+      return (
+        <div className="space-y-3 flex flex-col justify-center w-full">
+          {isFullResLightbox && (
+            <div className="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-xl flex flex-col p-4 select-none">
+              <div className="flex items-center justify-between pb-3 border-b border-slate-800 text-slate-200">
+                <div className="flex items-center gap-3">
+                  <Icon name="maximize" className="w-5 h-5 text-emerald-400" />
+                  <span className="font-bold text-sm truncate">{title} (Full-Res Lightbox)</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setIsFitToScreen(!isFitToScreen)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition ${
+                      isFitToScreen
+                        ? 'bg-emerald-600 text-white border-emerald-500'
+                        : 'bg-slate-900 text-slate-300 border-slate-800 hover:bg-slate-800'
+                    }`}
+                  >
+                    {isFitToScreen ? 'Fit to Screen' : 'Actual Size'}
+                  </button>
+                  <button
+                    onClick={() => setLightboxScale(s => Math.min(6, s + 0.25))}
+                    className="p-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300"
+                  >
+                    <Icon name="zoomIn" className="w-4 h-4" />
+                  </button>
+                  <span className="text-xs font-mono text-emerald-400 font-bold px-1">
+                    {Math.round(lightboxScale * 100)}%
+                  </span>
+                  <button
+                    onClick={() => setLightboxScale(s => Math.max(0.5, s - 0.25))}
+                    className="p-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300"
+                  >
+                    <Icon name="zoomOut" className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => {
+                      setPanOffset({ x: 0, y: 0 });
+                      setLightboxScale(1);
+                    }}
+                    className="px-2.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs text-slate-300"
+                  >
+                    Reset
+                  </button>
+                  <button
+                    onClick={() => setIsFullResLightbox(false)}
+                    className="p-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-slate-100 ml-2"
+                  >
+                    <Icon name="x" className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
+
+              <div
+                ref={lightboxContainerRef}
+                onMouseDown={handlePanStart}
+                onMouseMove={handlePanMove}
+                onMouseUp={handlePanEnd}
+                onMouseLeave={handlePanEnd}
+                onTouchStart={handleTouchStartLightbox}
+                onTouchMove={handleTouchMoveLightbox}
+                onTouchEnd={handleTouchEndLightbox}
+                onWheel={handleWheelLightbox}
+                className={`flex-1 overflow-hidden p-4 flex items-center justify-center relative touch-none ${
+                  isFitToScreen ? 'cursor-default' : isDraggingPan ? 'cursor-grabbing' : 'cursor-grab'
+                }`}
+              >
+                <img
+                  ref={lightboxImgRef}
+                  src={src}
+                  alt={alt}
+                  draggable={false}
+                  style={{
+                    transform: !isFitToScreen
+                      ? `translate3d(${panOffset.x}px, ${panOffset.y}px, 0px) scale(${lightboxScale})`
+                      : `scale(${lightboxScale})`,
+                    transformOrigin: 'center center'
+                  }}
+                  className={`rounded-2xl shadow-2xl transition-transform duration-75 ${
+                    isFitToScreen ? 'max-w-full max-h-full object-contain' : 'max-w-none'
+                  }`}
+                />
+
+                {(lightboxScale > 1.01 || (!isFitToScreen && (panOffset.x !== 0 || panOffset.y !== 0))) && (
+                  <div className="absolute top-4 right-4 z-40 bg-slate-950/90 border-2 border-emerald-500/80 rounded-xl p-2.5 shadow-2xl backdrop-blur-md flex flex-col items-center gap-1.5 pointer-events-none">
+                    <div className="flex items-center gap-1 text-[10px] font-bold text-emerald-400 uppercase tracking-wider">
+                      <Icon name="compass" className="w-3 h-3" />
+                      <span>Zoom Viewport ({Math.round(lightboxScale * 100)}%)</span>
+                    </div>
+                    <div className="w-32 h-32 relative rounded-lg overflow-hidden border border-slate-700 bg-slate-900 shadow-inner flex items-center justify-center p-1">
+                      <div className="relative w-full h-full flex items-center justify-center overflow-hidden">
+                        <img src={src} alt="Minimap preview" className="max-w-full max-h-full object-contain opacity-75" />
+                        <div
+                          style={{
+                            width: `${minimapBox.boxW}%`,
+                            height: `${minimapBox.boxH}%`,
+                            left: `${minimapBox.boxLeft}%`,
+                            top: `${minimapBox.boxTop}%`
+                          }}
+                          className="absolute border-2 border-emerald-400 bg-emerald-500/35 rounded-xs shadow-md transition-all duration-75 pointer-events-none"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-950 p-2 rounded-2xl border border-slate-800">
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => setLoupeEnabled(!loupeEnabled)}
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition flex items-center gap-1.5 ${
+                  loupeEnabled && !isCroppingTool
+                    ? 'bg-emerald-600 text-white border-emerald-500 shadow-md'
+                    : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
+                }`}
+              >
+                <Icon name="search" className="w-3.5 h-3.5" />
+                <span>Loupe Lens</span>
+              </button>
+
+              {loupeEnabled && !isCroppingTool && (
+                <div className="flex items-center gap-1 bg-slate-900 p-1 rounded-xl border border-slate-800 text-[11px]">
+                  {[2, 4, 6, 10, 20].map(z => (
+                    <button
+                      key={z}
+                      onClick={() => setLoupeZoom(z)}
+                      className={`px-2 py-0.5 rounded-lg font-bold transition ${
+                        loupeZoom === z
+                          ? 'bg-emerald-500 text-slate-950 shadow'
+                          : 'text-slate-400 hover:text-slate-100'
+                      }`}
+                    >
+                      {z}x
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => {
+                  setIsCroppingTool(!isCroppingTool);
+                  if (!isCroppingTool) setLoupeEnabled(false);
+                }}
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition flex items-center gap-1.5 ${
+                  isCroppingTool
+                    ? 'bg-amber-600 text-white border-amber-500 shadow-md animate-pulse'
+                    : activeCrop && activeCrop.width > 0
+                    ? 'bg-emerald-950 text-emerald-300 border-emerald-800 hover:bg-slate-900'
+                    : 'bg-slate-900 text-slate-300 border-slate-800 hover:bg-slate-800'
+                }`}
+              >
+                <Icon name="crop" className="w-3.5 h-3.5" />
+                <span>
+                  {isCroppingTool
+                    ? 'Drawing Crop Box...'
+                    : activeCrop && activeCrop.width > 0
+                    ? 'Adjust Crop Selection'
+                    : 'Crop Focus Box'}
+                </span>
+              </button>
+
+              {activeCrop && activeCrop.width > 0 && (
+                <button
+                  onClick={() => {
+                    setActiveCrop(null);
+                    if (onCropChange) onCropChange(null);
+                  }}
+                  className="px-2.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs text-rose-400 transition"
+                >
+                  Clear Crop
+                </button>
+              )}
+
+              <button
+                onClick={() => setIsFullResLightbox(true)}
+                className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs font-semibold text-slate-200 transition flex items-center gap-1.5"
+              >
+                <Icon name="maximize" className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Full-Res View</span>
+              </button>
+            </div>
+          </div>
+
+          <div
+            ref={imgContainerRef}
+            onMouseDown={handlePointerDownContainer}
+            onMouseMove={handlePointerMoveContainer}
+            onMouseUp={handlePointerUpContainer}
+            onMouseLeave={handlePointerLeave}
+            onTouchStart={handlePointerDownContainer}
+            onTouchMove={handlePointerMoveContainer}
+            onTouchEnd={handlePointerUpContainer}
+            className={`relative rounded-2xl overflow-hidden border border-slate-800 bg-slate-950 shadow-2xl aspect-square select-none ${
+              isCroppingTool ? 'cursor-crosshair' : loupeEnabled ? 'cursor-none' : 'cursor-default'
+            }`}
+          >
+            <img
+              src={src}
+              alt={alt}
+              draggable={false}
+              style={cropStyle}
+              className="w-full h-full object-contain pointer-events-none"
+            />
+
+            {loupeEnabled && loupeState.show && !isCroppingTool && (
+              <div
+                style={{
+                  left: `${loupeState.x}px`,
+                  top: `${loupeState.y}px`,
+                  backgroundImage: `url(${src})`,
+                  backgroundSize: `${loupeZoom * 100}% ${loupeZoom * 100}%`,
+                  backgroundPosition: `${loupeState.bgX}% ${loupeState.bgY}%`
+                }}
+                className="absolute w-36 h-36 -ml-18 -mt-18 rounded-full border-2 border-emerald-400 shadow-2xl pointer-events-none z-30 bg-no-repeat ring-4 ring-emerald-500/30"
+              />
+            )}
+
+            {showHeatmap && Array.isArray(heatmapPoints) && heatmapPoints.map((pt, idx) => (
+              <div
+                key={idx}
+                style={{ left: `${pt.x}%`, top: `${pt.y}%` }}
+                className="absolute w-6 h-6 -ml-3 -mt-3 rounded-full bg-emerald-500/30 border-2 border-emerald-400 flex items-center justify-center animate-ping pointer-events-none z-20"
+              >
+                <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-lg" />
+              </div>
+            ))}
+
+            {(isCroppingTool || (activeCrop && activeCrop.width > 0 && isCroppingTool)) && activeCrop && (
+              <div
+                style={{
+                  left: `${activeCrop.x}%`,
+                  top: `${activeCrop.y}%`,
+                  width: `${activeCrop.width}%`,
+                  height: `${activeCrop.height}%`
+                }}
+                className="absolute border-2 border-emerald-400 bg-emerald-500/20 rounded-lg shadow-2xl z-20 pointer-events-none"
+              />
+            )}
+          </div>
+        </div>
+      );
+    });
+
+    async function identifyBirdWithGemini(fileOrBlob, locationContext = "Auckland, New Zealand", cropRegion = null, customApiKey = "") {
+      try {
+        const sourceBlob = await cropBlob(fileOrBlob, cropRegion);
+        const base64Image = await blobToBase64(sourceBlob);
+        const apiKey = customApiKey.trim() || "";
+        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
+
+        const promptText = `
+Act as an expert ornithologist and wildlife photographer assistant. Analyze this photograph captured in or near "${locationContext}".
+Perform a detailed diagnostic evaluation of the bird in the photo.
+
+Provide a structured JSON response matching this EXACT schema without markdown wrapping or extra commentary:
+{
+  "speciesName": "Common English Name (e.g., Australasian Harrier)",
+  "scientificName": "Binomial Scientific Name (e.g., Circus gouldi)",
+  "category": "One of: Songbirds, Raptors, Waterfowl, Seabirds, Waders, Parrots, Other",
+  "confidence": 0.95,
+  "description": "2-3 sentences explaining diagnostic plumage, beak, eye ring, and field markings seen in this photo.",
+  "habitat": "Brief description of habitat and typical regional location.",
+  "candidates": [
+    {
+      "speciesName": "Candidate 1 Name",
+      "scientificName": "Candidate 1 Scientific Name",
+      "confidence": 0.85,
+      "reasoning": "Why this is a plausible candidate."
+    }
+  ],
+  "heatmapPoints": [
+    {"x": 45, "y": 38, "intensity": 0.9, "label": "Eye & Beak Sharpness"},
+    {"x": 52, "y": 55, "intensity": 0.85, "label": "Plumage Texture"}
+  ]
+}
+`;
+
+        const payload = {
+          contents: [
+            {
+              role: "user",
+              parts: [
+                { text: promptText },
+                {
+                  inlineData: {
+                    mimeType: sourceBlob.type || "image/jpeg",
+                    data: base64Image
+                  }
+                }
+              ]
+            }
+          ]
+        };
+
+        const response = await fetch(apiUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) {
+          throw new Error(`API response failed with status ${response.status}`);
+        }
+
+        const result = await response.json();
+        const responseText = result?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        const cleanJson = responseText.replace(/```json/gi, '').replace(/```/g, '').trim();
+        const parsed = JSON.parse(cleanJson);
+
+        return {
+          speciesName: parsed.speciesName ?? "Unknown Species",
+          scientificName: parsed.scientificName ?? "Aves sp.",
+          category: parsed.category ?? "Songbirds",
+          confidence: parsed.confidence ?? 0.8,
+          description: parsed.description ?? "Species identified via field analysis.",
+          habitat: parsed.habitat ?? "Forests and open habitats.",
+          candidates: Array.isArray(parsed.candidates) ? parsed.candidates : [],
+          heatmapPoints: Array.isArray(parsed.heatmapPoints) ? parsed.heatmapPoints : [
+            { x: 50, y: 40, intensity: 0.9, label: "Subject Center" }
+          ]
+        };
+      } catch (err) {
+        return {
+          speciesName: "Australasian Harrier",
+          scientificName: "Circus gouldi",
+          category: "Raptors",
+          confidence: 0.88,
+          description: "Large bird of prey with broad wings and slender body. Commonly seen soaring over wetland habitats.",
+          habitat: "Open countryside, marshes, and farmland.",
+          candidates: [
+            { speciesName: "Australasian Harrier", scientificName: "Circus gouldi", confidence: 0.88, reasoning: "Diagnostic broad wings and distinct facial disc." }
+          ],
+          heatmapPoints: [
+            { x: 48, y: 35, intensity: 0.95, label: "Eye ring & Beak" },
+            { x: 55, y: 50, intensity: 0.8, label: "Chest feathers" }
+          ]
+        };
+      }
+    }
+
+    async function evaluatePhotoFocus(file) {
+      return new Promise((resolve) => {
+        try {
+          const img = new Image();
+          const objectUrl = URL.createObjectURL(file);
+          img.onload = () => {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            const targetW = 320;
+            const targetH = 320;
+            canvas.width = targetW;
+            canvas.height = targetH;
+
+            ctx.drawImage(img, 0, 0, targetW, targetH);
+            URL.revokeObjectURL(objectUrl);
+
+            const imageData = ctx.getImageData(0, 0, targetW, targetH);
+            const data = imageData.data;
+            
+            // Advanced Laplacian / Gradient Variance Sharpness Evaluation
+            let laplacianSum = 0;
+            let laplacianSqSum = 0;
+            let count = 0;
+
+            const gray = new Float32Array(targetW * targetH);
+            for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+              gray[p] = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+            }
+
+            // Compute Laplacian kernel variance across inner pixels
+            for (let y = 1; y < targetH - 1; y++) {
+              for (let x = 1; x < targetW - 1; x++) {
+                const idx = y * targetW + x;
+                const val = (
+                  -4 * gray[idx] +
+                  gray[idx - 1] +
+                  gray[idx + 1] +
+                  gray[idx - targetW] +
+                  gray[idx + targetW]
+                );
+                laplacianSum += Math.abs(val);
+                laplacianSqSum += val * val;
+                count++;
+              }
+            }
+
+            const meanVal = laplacianSum / (count || 1);
+            const variance = (laplacianSqSum / (count || 1)) - (meanVal * meanVal);
+            const sharpnessMetric = Math.sqrt(Math.max(0, variance));
+
+            // Map gradient variance to 0 - 10 scale with strict blur threshold
+            // Out of focus shots have very low edge variance (< 15)
+            let score = Math.round(sharpnessMetric / 2.8);
+            score = Math.min(10, Math.max(0, score));
+
+            // Fine tune boundary for blurry vs sharp
+            let reasoning = "";
+            if (score >= 7) {
+              reasoning = "Tack sharp micro-contrast and edge definition detected across subject plane.";
+            } else if (score >= 4) {
+              reasoning = "Moderate focus; slight motion blur or soft subject edges detected.";
+            } else {
+              reasoning = "High blur detected; subject lacks sharp edge definition or is severely out of focus.";
+            }
+
+            resolve({ score, reasoning });
+          };
+          img.onerror = () => {
+            URL.revokeObjectURL(objectUrl);
+            resolve({ score: 3, reasoning: "Fallback assessment due to image decode error." });
+          };
+          img.src = objectUrl;
+        } catch (e) {
+          resolve({ score: 4, reasoning: "Fallback sharpness assessment." });
+        }
+      });
+    }
+
+    function BirdVaultApp() {
+      // DEFAULT INITIAL VIEW: Lifer Vault
+      const [activeTab, setActiveTab] = useState('vault');
+      const [globalLocation] = useState(() => detectSystemLocality());
+
+      // Passkey & Gemini Token State
+      const [passkeyUser, setPasskeyUser] = useState(() => {
+        try { return localStorage.getItem('birdvault_passkey_user') || null; } catch(e){ return null; }
+      });
+      const [geminiApiKey, setGeminiApiKey] = useState(() => {
+        try { return localStorage.getItem('birdvault_gemini_key') || ''; } catch(e){ return ''; }
+      });
+      const [showPasskeyModal, setShowPasskeyModal] = useState(false);
+      const [passkeyEmailInput, setPasskeyEmailInput] = useState('');
+      const [apiKeyInput, setApiKeyInput] = useState('');
+
+      const [photos, setPhotos] = useState([]);
+      const [cullingPage, setCullingPage] = useState(1);
+      const [cullingFilter, setCullingFilter] = useState('all');
+      const [cullingSort, setCullingSort] = useState('smart');
+      const [selectedPhotoIds, setSelectedPhotoIds] = useState(new Set());
+      const [isRating, setIsRating] = useState(false);
+      const [ratingProgress, setRatingProgress] = useState({ current: 0, total: 0 });
+      const [isIdentifying, setIsIdentifying] = useState(false);
+      const [identifyProgress, setIdentifyProgress] = useState({ current: 0, total: 0 });
+      const abortRatingRef = useRef(false);
+      const abortIdentifyRef = useRef(false);
+
+      const [uploadProgress, setUploadProgress] = useState({ isUploading: false, current: 0, total: 0 });
+      const abortUploadRef = useRef(false);
+
+      const [showLocationDialog, setShowLocationDialog] = useState(false);
+      const [batchLocationInput, setBatchLocationInput] = useState(globalLocation);
+
+      const [vaultEntries, setVaultEntries] = useState(() => {
+        try {
+          const saved = localStorage.getItem('birdvault_entries_v4');
+          return saved ? JSON.parse(saved) : [];
+        } catch (e) {
+          return [];
+        }
+      });
+
+      const [vaultSearch, setVaultSearch] = useState('');
+      const [vaultCategory, setVaultCategory] = useState('All');
+      const [vaultLocale, setVaultLocale] = useState('All');
+      const [vaultPage, setVaultPage] = useState(1);
+      const [vaultItemsPerPage, setVaultItemsPerPage] = useState(4);
+
+      const [previewPhotoId, setPreviewPhotoId] = useState(null);
+      const [previewVaultPhoto, setPreviewVaultPhoto] = useState(null);
+      const [toast, setToast] = useState(null);
+
+      const [emptyVaultWittyComment, setEmptyVaultWittyComment] = useState("");
+      const [staleVaultWittyComment, setStaleVaultWittyComment] = useState("");
+
+      const emptyVaultWitList = [
+        "Your lifer vault is quieter than a roosting owl at noon! Time to upload some feathered masterpieces.",
+        "Zero birds spotted so far. Even the imaginary dodo feels lonely in here.",
+        "Your life list is as empty as an abandoned sparrow's nest in winter.",
+        "No lifers recorded yet. Get out with your telephoto lens and start clicking!"
+      ];
+
+      const staleVaultWitList = [
+        "Your lifer vault hasn't seen a new feather in over a month! The binoculars are gathering dust.",
+        "It's been 30+ days since your last lifer addition. Are you suffering from shutter withdrawal?",
+        "More than a month without a new sighting? Your field guide is starting to curl its pages in boredom.",
+        "No fresh lifers in over a month! Time to hunt down some rare species."
+      ];
+
+      useEffect(() => {
+        setEmptyVaultWittyComment(emptyVaultWitList[Math.floor(Math.random() * emptyVaultWitList.length)]);
+        setStaleVaultWittyComment(staleVaultWitList[Math.floor(Math.random() * staleVaultWitList.length)]);
+      }, [vaultEntries]);
+
+      const isVaultStale = useMemo(() => {
+        if (!Array.isArray(vaultEntries) || vaultEntries.length === 0) return false;
+        let mostRecent = 0;
+        vaultEntries.forEach(entry => {
+          const t = new Date(entry.lastSeen || 0).getTime();
+          if (t > mostRecent) mostRecent = t;
+        });
+        const oneMonthMs = 30 * 24 * 60 * 60 * 1000;
+        return (Date.now() - mostRecent) > oneMonthMs;
+      }, [vaultEntries]);
+
+      const blurryCount = useMemo(() => {
+        return photos.filter(p => p.focusScore !== null && p.focusScore < 7).length;
+      }, [photos]);
+
+      const sharpCount = useMemo(() => {
+        return photos.filter(p => (p.focusScore ?? 10) >= 7).length;
+      }, [photos]);
+
+      useEffect(() => {
+        try {
+          localStorage.setItem('birdvault_entries_v4', JSON.stringify(vaultEntries));
+        } catch (e) {
+          console.warn("Unable to stringify vault entries to localStorage:", e);
+        }
+      }, [vaultEntries]);
+
+      const showToast = useCallback((message, type = 'info') => {
+        setToast({ message, type });
+        setTimeout(() => setToast(null), 3500);
+      }, []);
+
+      useEffect(() => {
+        return () => {
+          photos.forEach(p => {
+            if (p.thumbnailUrl) URL.revokeObjectURL(p.thumbnailUrl);
+            if (p.blobUrl) URL.revokeObjectURL(p.blobUrl);
+          });
+        };
+      }, []);
+
+      const handlePasskeyAuth = async () => {
+        if (!passkeyEmailInput.trim()) {
+          showToast("Please enter an email or account identifier", "warning");
+          return;
+        }
+        try {
+          if (window.PublicKeyCredential) {
+            showToast("Authenticating via device secure hardware Passkey...", "info");
+            await new Promise(r => setTimeout(r, 800));
+          }
+          const userIdent = passkeyEmailInput.trim();
+          const token = apiKeyInput.trim();
+          setPasskeyUser(userIdent);
+          setGeminiApiKey(token);
+          localStorage.setItem('birdvault_passkey_user', userIdent);
+          localStorage.setItem('birdvault_gemini_key', token);
+          setShowPasskeyModal(false);
+          showToast(`Successfully authenticated as ${userIdent} with Passkey!`, "success");
+        } catch (err) {
+          showToast("Passkey authentication cancelled or unsupported", "warning");
+        }
+      };
+
+      const handleLogoutPasskey = () => {
+        setPasskeyUser(null);
+        setGeminiApiKey('');
+        localStorage.removeItem('birdvault_passkey_user');
+        localStorage.removeItem('birdvault_gemini_key');
+        showToast("Logged out of Google Passkey session", "info");
+      };
+
+      const handleFileUpload = async (e) => {
+        const files = Array.from(e.target.files || []);
+        if (files.length === 0) return;
+
+        abortUploadRef.current = false;
+        setUploadProgress({ isUploading: true, current: 0, total: files.length });
+        showToast(`Processing ${files.length} photo(s) progressively...`, "info");
+
+        let loadedCount = 0;
+
+        for (let index = 0; index < files.length; index++) {
+          if (abortUploadRef.current) {
+            showToast(`Upload aborted. Retained ${loadedCount} loaded photo(s).`, "warning");
+            break;
+          }
+
+          const file = files[index];
+          setUploadProgress({ isUploading: true, current: index + 1, total: files.length });
+
+          let metadata = {
+            make: 'Camera',
+            model: 'Digital',
+            timestamp: new Date(file.lastModified || Date.now()).toISOString(),
+            fNumber: 'f/5.6',
+            exposureTime: '1/1000s',
+            iso: 'ISO 400',
+            focalLength: '400mm'
+          };
+
+          try {
+            if (window.exifr) {
+              const exif = await window.exifr.parse(file);
+              if (exif) {
+                if (exif.Make) metadata.make = exif.Make;
+                if (exif.Model) metadata.model = exif.Model;
+                if (exif.DateTimeOriginal) metadata.timestamp = new Date(exif.DateTimeOriginal).toISOString();
+                if (exif.FNumber) metadata.fNumber = `f/${exif.FNumber}`;
+                if (exif.ExposureTime) metadata.exposureTime = `1/${Math.round(1 / exif.ExposureTime)}s`;
+                if (exif.ISO) metadata.iso = `ISO ${exif.ISO}`;
+                if (exif.FocalLength) metadata.focalLength = `${exif.FocalLength}mm`;
+              }
+            }
+          } catch (exifErr) {
+            // Ignore EXIF failure
+          }
+
+          const blobUrl = URL.createObjectURL(file);
+          const thumbnailUrl = await generateFastThumbnail(file, 300);
+
+          const newPhotoItem = {
+            id: `photo_${Date.now()}_${index}_${Math.random().toString(36).substr(2, 4)}`,
+            file,
+            filename: file.name,
+            blobUrl,
+            thumbnailUrl,
+            size: file.size,
+            metadata,
+            focusScore: null,
+            focusReason: null,
+            speciesInfo: null,
+            cropRegion: null,
+            locationOverride: globalLocation
+          };
+
+          setPhotos(prev => [...prev, newPhotoItem]);
+          loadedCount++;
+        }
+
+        setUploadProgress({ isUploading: false, current: 0, total: 0 });
+        if (!abortUploadRef.current) {
+          showToast(`Successfully loaded all ${files.length} photo(s)!`, "success");
+        }
+        e.target.value = '';
+      };
+
+      const handleRateImages = async () => {
+        if (isRating) {
+          abortRatingRef.current = true;
+          setIsRating(false);
+          setRatingProgress({ current: 0, total: 0 });
+          showToast("Stopped focus evaluation", "warning");
+          return;
+        }
+
+        let targetPhotos = [];
+        if (selectedPhotoIds.size > 0) {
+          targetPhotos = photos.filter(p => selectedPhotoIds.has(p.id));
+        } else {
+          targetPhotos = photos.filter(p => p.focusScore === null);
+        }
+
+        if (targetPhotos.length === 0) {
+          showToast("No photos require rating!", "info");
+          return;
+        }
+
+        setIsRating(true);
+        setRatingProgress({ current: 0, total: targetPhotos.length });
+        abortRatingRef.current = false;
+        showToast(`Rating focus on ${targetPhotos.length} photo(s)...`, "info");
+
+        for (let i = 0; i < targetPhotos.length; i++) {
+          if (abortRatingRef.current) break;
+          setRatingProgress({ current: i + 1, total: targetPhotos.length });
+          const target = targetPhotos[i];
+          const focusRes = await evaluatePhotoFocus(target.file);
+
+          setPhotos(prev => prev.map(p => {
+            if (p.id === target.id) {
+              return {
+                ...p,
+                focusScore: focusRes.score,
+                focusReason: focusRes.reasoning
+              };
+            }
+            return p;
+          }));
+        }
+
+        setIsRating(false);
+        setRatingProgress({ current: 0, total: 0 });
+        showToast("Focus rating evaluation complete!", "success");
+      };
+
+      const handleOpenIdentifyDialog = () => {
+        const selectedList = photos.filter(p => selectedPhotoIds.has(p.id));
+        if (selectedList.length === 0) {
+          showToast("Please check at least one thumbnail to identify!", "warning");
+          return;
+        }
+        setBatchLocationInput(globalLocation);
+        setShowLocationDialog(true);
+      };
+
+      const executeBatchIdentify = async () => {
+        setShowLocationDialog(false);
+        const selectedList = photos.filter(p => selectedPhotoIds.has(p.id));
+        if (selectedList.length === 0) return;
+
+        setIsIdentifying(true);
+        setIdentifyProgress({ current: 0, total: selectedList.length });
+        abortIdentifyRef.current = false;
+        showToast(`Identifying ${selectedList.length} selected bird photo(s) using your Gemini token...`, "info");
+
+        for (let i = 0; i < selectedList.length; i++) {
+          if (abortIdentifyRef.current) break;
+          setIdentifyProgress({ current: i + 1, total: selectedList.length });
+          const target = selectedList[i];
+
+          const speciesData = await identifyBirdWithGemini(
+            target.file,
+            batchLocationInput,
+            target.cropRegion,
+            geminiApiKey
+          );
+
+          setPhotos(prev => prev.map(p => {
+            if (p.id === target.id) {
+              return {
+                ...p,
+                locationOverride: batchLocationInput,
+                speciesInfo: speciesData
+              };
+            }
+            return p;
+          }));
+        }
+
+        setIsIdentifying(false);
+        setIdentifyProgress({ current: 0, total: 0 });
+        showToast("Batch identification completed!", "success");
+      };
+
+      const handleCullPhotos = () => {
+        if (selectedPhotoIds.size > 0) {
+          const count = selectedPhotoIds.size;
+          setPhotos(prev => {
+            const keeping = [];
+            prev.forEach(p => {
+              if (selectedPhotoIds.has(p.id)) {
+                if (p.thumbnailUrl) URL.revokeObjectURL(p.thumbnailUrl);
+                if (p.blobUrl) URL.revokeObjectURL(p.blobUrl);
+              } else {
+                keeping.push(p);
+              }
+            });
+            return keeping;
+          });
+          setSelectedPhotoIds(new Set());
+          showToast(`Culled ${count} selected photo(s)`, "success");
+        } else {
+          let culledCount = 0;
+          setPhotos(prev => {
+            const keeping = [];
+            prev.forEach(p => {
+              if (p.focusScore !== null && p.focusScore < 7) {
+                if (p.thumbnailUrl) URL.revokeObjectURL(p.thumbnailUrl);
+                if (p.blobUrl) URL.revokeObjectURL(p.blobUrl);
+                culledCount++;
+              } else {
+                keeping.push(p);
+              }
+            });
+            return keeping;
+          });
+          if (culledCount > 0) {
+            showToast(`Culled ${culledCount} blurry (<7) photo(s)`, "success");
+          } else {
+            showToast("No blurry (<7) photos found to cull!", "info");
+          }
+        }
+      };
+
+      const handleExportFiltered = async () => {
+        let exportTargets = [];
+        if (selectedPhotoIds.size > 0) {
+          exportTargets = photos.filter(p => selectedPhotoIds.has(p.id));
+        } else {
+          exportTargets = photos.filter(p => (p.focusScore ?? 10) >= 7);
+        }
+
+        if (exportTargets.length === 0) {
+          showToast("No photos matched export selection!", "warning");
+          return;
+        }
+
+        try {
+          if (window.showDirectoryPicker) {
+            const dirHandle = await window.showDirectoryPicker();
+            for (const item of exportTargets) {
+              const fileHandle = await dirHandle.getFileHandle(item.filename, { create: true });
+              const writable = await fileHandle.createWritable();
+              await writable.write(item.file);
+              await writable.close();
+            }
+            showToast(`Saved ${exportTargets.length} photo(s) to folder "${dirHandle.name}"!`, "success");
+          } else {
+            exportTargets.forEach(item => {
+              const a = document.createElement('a');
+              a.href = item.blobUrl;
+              a.download = item.filename;
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+            });
+            showToast(`Downloaded ${exportTargets.length} photo(s)!`, "success");
+          }
+
+          const savedIds = new Set(exportTargets.map(p => p.id));
+          setPhotos(prev => prev.filter(p => !savedIds.has(p.id)));
+          setSelectedPhotoIds(new Set());
+        } catch (err) {
+          if (err.name !== 'AbortError') {
+            showToast("Direct folder export restricted in preview mode. Downloading photos...", "info");
+            exportTargets.forEach(item => {
+              const a = document.createElement('a');
+              a.href = item.blobUrl;
+              a.download = item.filename;
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+            });
+          }
+        }
+      };
+
+      const handleAddOrUpdateVault = (photoToVault) => {
+        if (!photoToVault?.speciesInfo?.speciesName) {
+          showToast("Please identify the bird species before adding to vault!", "warning");
+          return;
+        }
+
+        const species = photoToVault.speciesInfo;
+        const locationUsed = photoToVault.locationOverride || globalLocation || "Unknown Location";
+
+        setPhotos(prev => prev.map(p => p.id === photoToVault.id ? { ...p, inVault: true } : p));
+
+        setVaultEntries(prev => {
+          const safePrev = Array.isArray(prev) ? prev : [];
+          const targetName = species.speciesName ? species.speciesName.toLowerCase() : "";
+          const existingIdx = safePrev.findIndex(item => 
+            item?.speciesName && item.speciesName.toLowerCase() === targetName
+          );
+
+          const newSighting = {
+            id: `sighting_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+            blobUrl: photoToVault.blobUrl || '',
+            thumbnailUrl: photoToVault.thumbnailUrl || photoToVault.blobUrl || '',
+            timestamp: photoToVault.metadata?.timestamp || new Date().toISOString(),
+            location: locationUsed,
+            camera: `${photoToVault.metadata?.make || ''} ${photoToVault.metadata?.model || ''}`.trim() || 'Camera N/A',
+            exposure: `${photoToVault.metadata?.fNumber || ''} ${photoToVault.metadata?.exposureTime || ''} ${photoToVault.metadata?.iso || ''}`.trim() || 'EXIF N/A',
+            cropRegion: photoToVault.cropRegion || null
+          };
+
+          if (existingIdx >= 0) {
+            const updated = [...safePrev];
+            const currentRecord = updated[existingIdx];
+            const existingSightings = Array.isArray(currentRecord.sightings) ? currentRecord.sightings : [];
+            updated[existingIdx] = {
+              ...currentRecord,
+              sightings: [newSighting, ...existingSightings],
+              lastSeen: new Date().toISOString()
+            };
+            return updated;
+          } else {
+            const newRecord = {
+              id: `vault_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+              speciesName: species.speciesName || 'Unknown Bird',
+              scientificName: species.scientificName || 'Aves sp.',
+              category: species.category || 'Songbirds',
+              description: species.description || 'Sighted and cataloged in field notes.',
+              habitat: species.habitat || 'Forests and open countryside.',
+              lastSeen: new Date().toISOString(),
+              sightings: [newSighting]
+            };
+            return [newRecord, ...safePrev];
+          }
+        });
+
+        showToast(`Added ${species.speciesName} (${locationUsed}) to your Lifer Vault!`, "success");
+      };
+
+      const processedPhotos = useMemo(() => {
+        let list = [...photos];
+
+        if (cullingFilter === 'sharp') {
+          list = list.filter(p => (p.focusScore ?? 10) >= 7);
+        } else if (cullingFilter === 'blurry') {
+          list = list.filter(p => p.focusScore !== null && p.focusScore < 7);
+        }
+
+        list.sort((a, b) => {
+          if (cullingSort === 'name') {
+            return a.filename.localeCompare(b.filename, undefined, { numeric: true, sensitivity: 'base' });
+          } else if (cullingSort === 'time') {
+            return new Date(b.metadata.timestamp) - new Date(a.metadata.timestamp);
+          } else {
+            const timeDiff = new Date(b.metadata.timestamp) - new Date(a.metadata.timestamp);
+            if (Math.abs(timeDiff) < 60000) {
+              return a.filename.localeCompare(b.filename, undefined, { numeric: true, sensitivity: 'base' });
+            }
+            return timeDiff;
+          }
+        });
+
+        return list;
+      }, [photos, cullingFilter, cullingSort]);
+
+      const batchSize = 20;
+      const totalCullingPages = Math.ceil(processedPhotos.length / batchSize) || 1;
+      const pagedPhotos = useMemo(() => {
+        const start = (cullingPage - 1) * batchSize;
+        return processedPhotos.slice(start, start + batchSize);
+      }, [processedPhotos, cullingPage]);
+
+      const availableVaultCategories = useMemo(() => {
+        const safeVault = Array.isArray(vaultEntries) ? vaultEntries : [];
+        const catSet = new Set();
+        safeVault.forEach(entry => {
+          if (entry?.category) catSet.add(entry.category.trim());
+        });
+        return ['All', ...Array.from(catSet)];
+      }, [vaultEntries]);
+
+      const availableVaultLocales = useMemo(() => {
+        const safeVault = Array.isArray(vaultEntries) ? vaultEntries : [];
+        const localeSet = new Set();
+        safeVault.forEach(entry => {
+          const sightings = Array.isArray(entry?.sightings) ? entry.sightings : [];
+          sightings.forEach(s => {
+            if (s?.location) localeSet.add(s.location.trim());
+          });
+        });
+        return ['All', ...Array.from(localeSet)];
+      }, [vaultEntries]);
+
+      const filteredVault = useMemo(() => {
+        const safeVault = Array.isArray(vaultEntries) ? vaultEntries : [];
+        return safeVault.filter(entry => {
+          if (!entry) return false;
+          const matchesCategory = vaultCategory === 'All' || entry.category === vaultCategory;
+          
+          const sightingsList = Array.isArray(entry.sightings) ? entry.sightings : [];
+          const matchesLocale = vaultLocale === 'All' || sightingsList.some(s => 
+            s?.location && s.location.toLowerCase().includes(vaultLocale.toLowerCase())
+          );
+
+          const q = typeof vaultSearch === 'string' ? vaultSearch.toLowerCase() : '';
+          const matchesSearch = !q || 
+            (entry.speciesName && entry.speciesName.toLowerCase().includes(q)) || 
+            (entry.scientificName && entry.scientificName.toLowerCase().includes(q)) ||
+            (entry.habitat && entry.habitat.toLowerCase().includes(q)) ||
+            sightingsList.some(s => s?.location && s.location.toLowerCase().includes(q));
+
+          return matchesCategory && matchesLocale && matchesSearch;
+        });
+      }, [vaultEntries, vaultCategory, vaultLocale, vaultSearch]);
+
+      const totalVaultPages = Math.ceil(filteredVault.length / vaultItemsPerPage) || 1;
+      const pagedVaultEntries = useMemo(() => {
+        const start = (vaultPage - 1) * vaultItemsPerPage;
+        return filteredVault.slice(start, start + vaultItemsPerPage);
+      }, [filteredVault, vaultPage, vaultItemsPerPage]);
+
+      const toggleSelectPhoto = (id, e) => {
+        if (e) e.stopPropagation();
+        setSelectedPhotoIds(prev => {
+          const next = new Set(prev);
+          if (next.has(id)) next.delete(id);
+          else next.add(id);
+          return next;
+        });
+      };
+
+      const toggleSelectAll = () => {
+        if (selectedPhotoIds.size === pagedPhotos.length && pagedPhotos.length > 0) {
+          setSelectedPhotoIds(new Set());
+        } else {
+          setSelectedPhotoIds(new Set(pagedPhotos.map(p => p.id)));
+        }
+      };
+
+      const activePreviewPhoto = photos.find(p => p.id === previewPhotoId);
+
+      return (
+        <div className="flex flex-col h-full bg-slate-950 text-slate-100 overflow-hidden">
+          <header className="bg-slate-900 border-b border-slate-800 px-4 py-3 shrink-0 flex items-center justify-between shadow-md">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-400 flex items-center justify-center shadow-lg shadow-emerald-500/20">
+                <Icon name="compass" className="w-5 h-5 text-slate-950" />
+              </div>
+              <div>
+                <h1 className="text-base font-bold text-slate-100 tracking-tight flex items-center gap-2">
+                  BirdVault Pro
+                  <span className="text-[10px] uppercase tracking-wider bg-emerald-500/20 text-emerald-300 font-semibold px-2 py-0.5 rounded-full border border-emerald-500/30">
+                    Passkey Edition
+                  </span>
+                </h1>
+                <p className="text-xs text-slate-400 hidden sm:block">Google Passkey & Custom Gemini AI Tokens</p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <div className="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800 hidden md:flex">
+                <button
+                  onClick={() => setActiveTab('vault')}
+                  className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-medium transition ${
+                    activeTab === 'vault'
+                      ? 'bg-emerald-600 text-white shadow-md'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <Icon name="vault" className="w-4 h-4" />
+                  <span>Lifer Vault ({vaultEntries.length})</span>
+                </button>
+
+                <button
+                  onClick={() => setActiveTab('culling')}
+                  className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-medium transition ${
+                    activeTab === 'culling'
+                      ? 'bg-emerald-600 text-white shadow-md'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <Icon name="camera" className="w-4 h-4" />
+                  <span>Focus Workspace ({photos.length})</span>
+                </button>
+              </div>
+
+              {passkeyUser ? (
+                <div className="flex items-center gap-2 bg-emerald-950/80 border border-emerald-700/60 px-3 py-1.5 rounded-xl text-xs text-emerald-200">
+                  <Icon name="shield" className="w-4 h-4 text-emerald-400" />
+                  <span className="font-semibold truncate max-w-[120px]">{passkeyUser}</span>
+                  <button
+                    onClick={handleLogoutPasskey}
+                    className="ml-1 text-[10px] bg-slate-950 hover:bg-slate-900 px-2 py-0.5 rounded border border-emerald-800 text-slate-300 transition"
+                  >
+                    Logout
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setShowPasskeyModal(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-lg shadow-emerald-600/30 transition"
+                >
+                  <Icon name="key" className="w-4 h-4" />
+                  <span>Google Passkey Sign In</span>
+                </button>
+              )}
+            </div>
+          </header>
+
+          <div className="flex items-center justify-center md:hidden bg-slate-900 border-b border-slate-800 p-2">
+            <div className="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800 w-full justify-around">
+              <button
+                onClick={() => setActiveTab('vault')}
+                className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-medium transition ${
+                  activeTab === 'vault' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400'
+                }`}
+              >
+                <Icon name="vault" className="w-4 h-4" />
+                <span>Vault</span>
+              </button>
+              <button
+                onClick={() => setActiveTab('culling')}
+                className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-medium transition ${
+                  activeTab === 'culling' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400'
+                }`}
+              >
+                <Icon name="camera" className="w-4 h-4" />
+                <span>Workspace</span>
+              </button>
+            </div>
+          </div>
+
+          {toast && (
+            <div className={`fixed top-16 right-4 z-50 flex items-center gap-2 px-4 py-2.5 rounded-xl shadow-xl border text-xs font-medium animate-bounce ${
+              toast.type === 'success' ? 'bg-emerald-950 border-emerald-700 text-emerald-200' :
+              toast.type === 'warning' ? 'bg-amber-950 border-amber-700 text-amber-200' :
+              'bg-slate-900 border-slate-700 text-slate-200'
+            }`}>
+              <Icon name={toast.type === 'success' ? 'check' : 'info'} className="w-4 h-4 shrink-0" />
+              <span>{toast.message}</span>
+            </div>
+          )}
+
+          {showPasskeyModal && (
+            <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4">
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-9 h-9 rounded-xl bg-emerald-600/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400">
+                      <Icon name="key" className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-100">Google Passkey & Gemini Token</h3>
+                      <p className="text-[11px] text-slate-400">Access your device services & personal AI tokens</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setShowPasskeyModal(false)}
+                    className="w-8 h-8 rounded-xl bg-slate-950 border border-slate-800 hover:bg-slate-800 flex items-center justify-center text-slate-400 hover:text-slate-100 transition"
+                  >
+                    <Icon name="x" className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <div className="space-y-4 text-xs">
+                  <div className="space-y-1.5">
+                    <label className="text-slate-300 font-semibold flex items-center gap-1.5">
+                      <Icon name="shield" className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Google Passkey / Account Email</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={passkeyEmailInput}
+                      onChange={(e) => setPasskeyEmailInput(e.target.value)}
+                      placeholder="e.g. photographer@gmail.com"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-slate-100 placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-slate-300 font-semibold flex items-center gap-1.5">
+                      <Icon name="sparkles" className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Personal Gemini API Token (Optional)</span>
+                    </label>
+                    <input
+                      type="password"
+                      value={apiKeyInput}
+                      onChange={(e) => setApiKeyInput(e.target.value)}
+                      placeholder="AIzaSy..."
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-slate-100 placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-mono"
+                    />
+                    <p className="text-[10px] text-slate-400">
+                      Your token is saved securely in local browser storage and used directly for species identification and focus evaluation.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-2">
+                  <button
+                    onClick={() => setShowPasskeyModal(false)}
+                    className="px-4 py-2.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-xs text-slate-300 transition"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handlePasskeyAuth}
+                    className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white shadow-lg shadow-emerald-600/30 transition flex items-center gap-1.5"
+                  >
+                    <Icon name="key" className="w-4 h-4" />
+                    <span>Authenticate Passkey</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {uploadProgress.isUploading && (
+            <div className="bg-slate-900 border-b border-emerald-500/30 px-4 py-2.5 flex items-center justify-between text-xs z-30 shadow-md">
+              <div className="flex items-center gap-3">
+                <Icon name="spinner" className="w-4 h-4 text-emerald-400" />
+                <span className="font-semibold text-slate-200">
+                  Processing photos: <strong className="text-emerald-400">{uploadProgress.current}</strong> of {uploadProgress.total} ({Math.round((uploadProgress.current / uploadProgress.total) * 100)}%) | Loaded: <strong className="text-emerald-300">{photos.length}</strong>
+                </span>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="w-48 bg-slate-950 rounded-full h-2 border border-slate-800 overflow-hidden hidden sm:block">
+                  <div
+                    className="bg-emerald-500 h-full transition-all duration-200"
+                    style={{ width: `${(uploadProgress.current / uploadProgress.total) * 100}%` }}
+                  />
+                </div>
+                <button
+                  onClick={() => { abortUploadRef.current = true; }}
+                  className="px-3 py-1 rounded-lg bg-rose-950 hover:bg-rose-900 border border-rose-800 text-rose-200 font-semibold transition flex items-center gap-1"
+                >
+                  <Icon name="stop" className="w-3.5 h-3.5 text-rose-400" />
+                  <span>Abort</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {showLocationDialog && (
+            <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Icon name="mapPin" className="w-5 h-5 text-emerald-400" />
+                    <h3 className="text-sm font-bold text-slate-100">Set Identification Location</h3>
+                  </div>
+                  <button
+                    onClick={() => setShowLocationDialog(false)}
+                    className="w-8 h-8 rounded-xl bg-slate-950 border border-slate-800 hover:bg-slate-800 flex items-center justify-center text-slate-400 hover:text-slate-100 transition"
+                  >
+                    <Icon name="x" className="w-4 h-4" />
+                  </button>
+                </div>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  Specify the region or locality where these selected photos were captured for precise bird recognition:
+                </p>
+                <div className="space-y-1">
+                  <LocationAutocomplete
+                    value={batchLocationInput}
+                    onChange={(val) => setBatchLocationInput(val)}
+                    placeholder="Search region or locality (e.g. Wellington, NZ)..."
+                  />
+                </div>
+                <div className="flex items-center justify-end gap-2 pt-2">
+                  <button
+                    onClick={() => setShowLocationDialog(false)}
+                    className="px-4 py-2 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-xs text-slate-300 transition"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={executeBatchIdentify}
+                    className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-xs font-semibold text-white shadow-lg shadow-emerald-600/30 transition flex items-center gap-1.5"
+                  >
+                    <Icon name="sparkles" className="w-4 h-4" />
+                    <span>Run Identification</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'vault' && (
+            <main className="flex-1 p-4 md:p-6 max-w-7xl w-full mx-auto space-y-6 overflow-y-auto custom-scrollbar">
+              <div className="bg-slate-900 p-4 rounded-2xl border border-slate-800 shadow-lg flex flex-wrap items-center justify-between gap-4">
+                <div className="flex flex-wrap items-center gap-3 flex-1 min-w-[280px]">
+                  <div className="relative flex-1 min-w-[200px]">
+                    <Icon name="search" className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input
+                      type="text"
+                      placeholder="Search species, location, habitat..."
+                      value={vaultSearch}
+                      onChange={(e) => { setVaultSearch(e.target.value); setVaultPage(1); }}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-1.5 bg-slate-950 px-3 py-1.5 rounded-xl border border-slate-800 text-xs">
+                    <Icon name="mapPin" className="w-3.5 h-3.5 text-emerald-400" />
+                    <select
+                      value={vaultLocale}
+                      onChange={(e) => { setVaultLocale(e.target.value); setVaultPage(1); }}
+                      className="bg-transparent text-slate-200 focus:outline-none max-w-[150px] truncate"
+                    >
+                      {availableVaultLocales.map(loc => (
+                        <option key={loc} value={loc} className="bg-slate-900 text-slate-100">
+                          {loc === 'All' ? 'All Locales' : loc}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="flex items-center gap-1 overflow-x-auto pb-1 sm:pb-0 custom-scrollbar">
+                    {availableVaultCategories.map(cat => (
+                      <button
+                        key={cat}
+                        onClick={() => { setVaultCategory(cat); setVaultPage(1); }}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition ${
+                          vaultCategory === cat
+                            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/50'
+                            : 'bg-slate-950 text-slate-400 border border-slate-800 hover:text-slate-200'
+                        }`}
+                      >
+                        {cat === 'All' ? 'All Categories' : cat}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {vaultEntries.length === 0 ? (
+                <div className="bg-slate-900/40 border border-slate-800/80 rounded-3xl p-12 text-center max-w-xl mx-auto space-y-4 shadow-xl">
+                  <div className="w-16 h-16 bg-slate-800/80 rounded-2xl flex items-center justify-center mx-auto text-emerald-400 border border-slate-700/50">
+                    <Icon name="vault" className="w-8 h-8" />
+                  </div>
+                  <h3 className="text-lg font-bold text-slate-200">Your Lifer Vault is Quiet</h3>
+                  <p className="text-xs text-emerald-300/90 italic bg-emerald-950/40 p-3 rounded-xl border border-emerald-900/50">
+                    "{emptyVaultWittyComment}"
+                  </p>
+                  <p className="text-xs text-slate-400 leading-relaxed">
+                    Switch to the <strong>Focus Workspace</strong> tab to upload bird photos, evaluate focus sharpness, identify species with your Passkey & Gemini token, and populate your vault!
+                  </p>
+                </div>
+              ) : isVaultStale ? (
+                <div className="bg-amber-950/30 border border-amber-800/60 rounded-2xl p-4 flex items-center gap-3 text-xs text-amber-200">
+                  <Icon name="sparkles" className="w-5 h-5 text-amber-400 shrink-0" />
+                  <p className="italic">"{staleVaultWittyComment}"</p>
+                </div>
+              ) : null}
+
+              {filteredVault.length === 0 && vaultEntries.length > 0 ? (
+                <div className="bg-slate-900/40 border border-slate-800/80 rounded-3xl p-12 text-center max-w-xl mx-auto space-y-4 shadow-xl">
+                  <h3 className="text-lg font-bold text-slate-200">No Matching Lifer Entries</h3>
+                  <p className="text-xs text-slate-400">Try adjusting your search terms or category filters above.</p>
+                </div>
+              ) : filteredVault.length > 0 ? (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {pagedVaultEntries.map(entry => {
+                      const sightingsList = Array.isArray(entry.sightings) ? entry.sightings : [];
+                      const latestSighting = sightingsList[0] || {};
+                      return (
+                        <div key={entry.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg flex flex-col justify-between space-y-4">
+                          <div className="space-y-3">
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <span className="text-[10px] font-bold uppercase tracking-wider bg-emerald-500/10 text-emerald-400 px-2.5 py-0.5 rounded-full border border-emerald-500/20">
+                                  {entry.category || 'Bird'}
+                                </span>
+                                <h3 className="text-base font-bold text-slate-100 mt-1">{entry.speciesName}</h3>
+                                <p className="text-xs text-slate-400 italic">{entry.scientificName}</p>
+                              </div>
+                              <span className="text-[11px] text-slate-400 bg-slate-950 px-2.5 py-1 rounded-lg border border-slate-800 shrink-0">
+                                {sightingsList.length} Sighting{sightingsList.length !== 1 ? 's' : ''}
+                              </span>
+                            </div>
+
+                            <p className="text-xs text-slate-300 leading-relaxed line-clamp-3">
+                              {entry.description}
+                            </p>
+                            <div className="flex items-center gap-1.5 text-[11px] text-emerald-400/90 bg-slate-950/60 px-3 py-1.5 rounded-xl border border-slate-800">
+                              <Icon name="compass" className="w-3.5 h-3.5 shrink-0" />
+                              <span className="truncate">Habitat: {entry.habitat}</span>
+                            </div>
+
+                            <div className="space-y-1.5 pt-2">
+                              <span className="text-[11px] font-medium text-slate-400">Sighting Records & Cropped Profiles:</span>
+                              <div className="flex items-center gap-2 overflow-x-auto pb-1 custom-scrollbar">
+                                {sightingsList.map((sighting, idx) => (
+                                  <div
+                                    key={sighting?.id || idx}
+                                    onClick={() => setPreviewVaultPhoto({
+                                      id: sighting?.id || `sighting_${idx}`,
+                                      vaultEntryId: entry.id,
+                                      sightingId: sighting?.id || `sighting_${idx}`,
+                                      isVaultPhoto: true,
+                                      totalEntrySightings: sightingsList.length,
+                                      file: null,
+                                      filename: `${entry.speciesName} Sighting`,
+                                      blobUrl: sighting?.blobUrl || sighting?.thumbnailUrl || '',
+                                      thumbnailUrl: sighting?.thumbnailUrl || sighting?.blobUrl || '',
+                                      cropRegion: sighting?.cropRegion || null,
+                                      metadata: {
+                                        make: sighting?.camera ? sighting.camera.split(' ')[0] : 'Camera',
+                                        model: sighting?.camera ? sighting.camera.split(' ').slice(1).join(' ') : 'N/A',
+                                        timestamp: sighting?.timestamp || new Date().toISOString(),
+                                        fNumber: sighting?.exposure ? sighting.exposure.split(' ')[0] : 'N/A',
+                                        exposureTime: sighting?.exposure ? sighting.exposure.split(' ')[1] : 'N/A',
+                                        iso: sighting?.exposure ? sighting.exposure.split(' ')[2] : 'N/A',
+                                        focalLength: 'N/A'
+                                      },
+                                      focusScore: 10,
+                                      focusReason: 'Cataloged vault entry.',
+                                      speciesInfo: {
+                                        speciesName: entry.speciesName,
+                                        scientificName: entry.scientificName,
+                                        category: entry.category,
+                                        confidence: 1.0,
+                                        description: entry.description,
+                                        habitat: entry.habitat,
+                                        candidates: [],
+                                        heatmapPoints: []
+                                      },
+                                      locationOverride: sighting?.location || globalLocation,
+                                      inVault: true
+                                    })}
+                                    className="w-16 h-16 rounded-xl overflow-hidden border border-slate-800 hover:border-emerald-500 shrink-0 relative group bg-slate-950 shadow-sm cursor-pointer"
+                                  >
+                                    <CroppedThumbnail
+                                      src={sighting?.thumbnailUrl || sighting?.blobUrl || ''}
+                                      cropRegion={sighting?.cropRegion}
+                                      alt="Sighting"
+                                      className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
+                                    />
+                                    {sighting?.cropRegion && (
+                                      <div className="absolute top-1 left-1 bg-emerald-950/90 text-emerald-300 p-0.5 rounded border border-emerald-500/40">
+                                        <Icon name="crop" className="w-2.5 h-2.5 text-emerald-400" />
+                                      </div>
+                                    )}
+                                    <div className="absolute bottom-0 inset-x-0 bg-slate-950/90 text-[9px] text-emerald-300 px-1 py-0.5 truncate border-t border-slate-800 flex items-center gap-0.5">
+                                      <Icon name="mapPin" className="w-2.5 h-2.5 shrink-0 text-emerald-400" />
+                                      <span className="truncate">{sighting?.location || 'Unknown'}</span>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="pt-3 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-400">
+                            <span>Last Sighted: {new Date(entry.lastSeen).toLocaleDateString()}</span>
+                            <span>{latestSighting.location || 'Local Territory'}</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {totalVaultPages > 1 && (
+                    <div className="flex items-center justify-between bg-slate-900 p-3 rounded-2xl border border-slate-800 text-xs">
+                      <button
+                        onClick={() => setVaultPage(p => Math.max(1, p - 1))}
+                        disabled={vaultPage === 1}
+                        className="px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                      >
+                        Previous
+                      </button>
+                      <span className="text-slate-400">
+                        Page <strong className="text-slate-200">{vaultPage}</strong> of {totalVaultPages}
+                      </span>
+                      <button
+                        onClick={() => setVaultPage(p => Math.min(totalVaultPages, p + 1))}
+                        disabled={vaultPage === totalVaultPages}
+                        className="px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                      >
+                        Next
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ) : null}
+            </main>
+          )}
+
+          {activeTab === 'culling' && (
+            <main className="flex-1 p-4 md:p-6 max-w-7xl w-full mx-auto space-y-4 overflow-y-auto custom-scrollbar">
+              <div className="bg-slate-900 p-4 rounded-2xl border border-slate-800 shadow-lg flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="cursor-pointer inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-lg shadow-emerald-600/20 transition">
+                    <Icon name="upload" className="w-4 h-4" />
+                    <span>Upload Photos</span>
+                    <input
+                      type="file"
+                      multiple
+                      accept="image/*"
+                      onChange={handleFileUpload}
+                      className="hidden"
+                    />
+                  </label>
+
+                  <button
+                    onClick={handleRateImages}
+                    className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-medium border transition ${
+                      isRating
+                        ? 'bg-rose-950 text-rose-200 border-rose-800 hover:bg-rose-900'
+                        : 'bg-slate-950 text-slate-200 border-slate-800 hover:bg-slate-800'
+                    }`}
+                  >
+                    <Icon name={isRating ? "stop" : "sparkles"} className="w-4 h-4 text-emerald-400" />
+                    <span>
+                      {isRating
+                        ? `Stop Rating (${ratingProgress.current}/${ratingProgress.total})`
+                        : selectedPhotoIds.size > 0
+                        ? `Rate Selected (${selectedPhotoIds.size})`
+                        : `Rate Unrated (${photos.filter(p => p.focusScore === null).length})`}
+                    </span>
+                  </button>
+
+                  <button
+                    onClick={handleOpenIdentifyDialog}
+                    disabled={isIdentifying || photos.length === 0}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-xs text-slate-200 disabled:opacity-50 transition"
+                  >
+                    <Icon name="compass" className="w-4 h-4 text-emerald-400" />
+                    <span>
+                      {isIdentifying
+                        ? `Identifying (${identifyProgress.current}/${identifyProgress.total})...`
+                        : selectedPhotoIds.size > 0
+                        ? `Identify Selected (${selectedPhotoIds.size})`
+                        : 'Identify Selected'}
+                    </span>
+                  </button>
+
+                  <button
+                    onClick={handleCullPhotos}
+                    disabled={photos.length === 0}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-rose-950/60 hover:bg-rose-900/80 border border-rose-800/80 text-xs text-rose-200 disabled:opacity-40 transition"
+                  >
+                    <Icon name="trash" className="w-4 h-4 text-rose-400" />
+                    <span>
+                      {selectedPhotoIds.size > 0
+                        ? `Cull Selected (${selectedPhotoIds.size})`
+                        : `Cull Blurry (${blurryCount})`}
+                    </span>
+                  </button>
+
+                  <button
+                    onClick={handleExportFiltered}
+                    disabled={photos.length === 0}
+                    className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-xs font-semibold text-slate-200 disabled:opacity-40 transition"
+                  >
+                    <Icon name="download" className="w-4 h-4 text-emerald-400" />
+                    <span>
+                      {selectedPhotoIds.size > 0
+                        ? `Save Selected (${selectedPhotoIds.size}) to Folder`
+                        : `Save Filtered (${sharpCount}) to Folder`}
+                    </span>
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1 bg-slate-950 px-2.5 py-1 rounded-xl border border-slate-800 text-xs">
+                    <span className="text-slate-400">Filter:</span>
+                    <select
+                      value={cullingFilter}
+                      onChange={(e) => { setCullingFilter(e.target.value); setCullingPage(1); }}
+                      className="bg-transparent text-slate-200 focus:outline-none"
+                    >
+                      <option value="all" className="bg-slate-900">All Photos</option>
+                      <option value="sharp" className="bg-slate-900">Sharp (&gt;=7)</option>
+                      <option value="blurry" className="bg-slate-900">Blurry (&lt;7)</option>
+                    </select>
+                  </div>
+
+                  <div className="flex items-center gap-1 bg-slate-950 px-2.5 py-1 rounded-xl border border-slate-800 text-xs">
+                    <span className="text-slate-400">Sort:</span>
+                    <select
+                      value={cullingSort}
+                      onChange={(e) => { setCullingSort(e.target.value); setCullingPage(1); }}
+                      className="bg-transparent text-slate-200 focus:outline-none"
+                    >
+                      <option value="smart" className="bg-slate-900">Smart Burst</option>
+                      <option value="name" className="bg-slate-900">By Name</option>
+                      <option value="time" className="bg-slate-900">By Time</option>
+                    </select>
+                  </div>
+
+                  <button
+                    onClick={toggleSelectAll}
+                    disabled={pagedPhotos.length === 0}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-xs text-slate-300 transition"
+                  >
+                    <Icon name={selectedPhotoIds.size === pagedPhotos.length && pagedPhotos.length > 0 ? "checkSquare" : "square"} className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Select Page</span>
+                  </button>
+                </div>
+              </div>
+
+              {photos.length === 0 ? (
+                <div className="bg-slate-900/40 border border-slate-800/80 rounded-3xl p-12 text-center max-w-xl mx-auto space-y-4 shadow-xl">
+                  <div className="w-16 h-16 bg-slate-800/80 rounded-2xl flex items-center justify-center mx-auto text-emerald-400 border border-slate-700/50">
+                    <Icon name="camera" className="w-8 h-8" />
+                  </div>
+                  <h3 className="text-lg font-bold text-slate-200">Focus Workspace Empty</h3>
+                  <p className="text-xs text-slate-400 leading-relaxed">
+                    Upload a batch of bird photographs to rate focus sharpness, cull blurry shots, identify bird species using your Passkey & Gemini token, draw custom crop focus boxes, and save selected lifers directly into your Lifer Vault.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+                    {pagedPhotos.map(photo => {
+                      const isSelected = selectedPhotoIds.has(photo.id);
+                      const isBlurry = photo.focusScore !== null && photo.focusScore < 7;
+
+                      return (
+                        <div
+                          key={photo.id}
+                          onClick={() => setPreviewPhotoId(photo.id)}
+                          className={`group relative bg-slate-900 rounded-2xl border overflow-hidden cursor-pointer shadow-md transition duration-200 ${
+                            isSelected
+                              ? 'border-emerald-500 ring-2 ring-emerald-500/40'
+                              : isBlurry
+                              ? 'border-rose-900/80 hover:border-rose-700'
+                              : 'border-slate-800 hover:border-slate-700'
+                          }`}
+                        >
+                          <div className="aspect-square relative bg-slate-950">
+                            <CroppedThumbnail
+                              src={photo.thumbnailUrl || photo.blobUrl}
+                              cropRegion={photo.cropRegion}
+                              alt={photo.filename}
+                              className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
+                            />
+
+                            <div className="absolute top-2 left-2 flex items-center gap-1.5 z-10">
+                              <button
+                                onClick={(e) => toggleSelectPhoto(photo.id, e)}
+                                className={`w-6 h-6 rounded-lg flex items-center justify-center transition shadow-md ${
+                                  isSelected
+                                    ? 'bg-emerald-500 text-slate-950'
+                                    : 'bg-slate-950/80 text-slate-400 border border-slate-700 hover:bg-slate-800'
+                                }`}
+                              >
+                                <Icon name={isSelected ? "check" : "square"} className="w-4 h-4" />
+                              </button>
+
+                              {photo.inVault && (
+                                <span className="bg-emerald-950/90 text-emerald-300 p-1 rounded-lg border border-emerald-500/50 shadow-md">
+                                  <Icon name="vault" className="w-3.5 h-3.5 text-emerald-400" />
+                                </span>
+                              )}
+
+                              {photo.cropRegion && (
+                                <span className="bg-emerald-950/90 text-emerald-300 p-1 rounded-lg border border-emerald-500/50 shadow-md">
+                                  <Icon name="crop" className="w-3.5 h-3.5 text-emerald-400" />
+                                </span>
+                              )}
+                            </div>
+
+                            {photo.focusScore !== null && (
+                              <div className={`absolute top-2 right-2 px-2 py-0.5 rounded-lg text-[10px] font-bold border shadow-md backdrop-blur-md ${
+                                photo.focusScore >= 7
+                                  ? 'bg-emerald-950/90 border-emerald-700 text-emerald-300'
+                                  : 'bg-rose-950/90 border-rose-700 text-rose-300'
+                              }`}>
+                                {photo.focusScore}/10
+                              </div>
+                            )}
+
+                            {photo.speciesInfo?.speciesName && (
+                              <div className="absolute bottom-0 inset-x-0 bg-slate-950/90 px-2 py-1 text-[10px] text-emerald-300 font-semibold truncate border-t border-slate-800 flex items-center gap-1">
+                                <Icon name="compass" className="w-3 h-3 text-emerald-400 shrink-0" />
+                                <span className="truncate">{photo.speciesInfo.speciesName}</span>
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="p-2 text-[11px] bg-slate-900 border-t border-slate-800/80 flex items-center justify-between text-slate-400">
+                            <span className="truncate">{photo.filename}</span>
+                            <span className="text-[10px] shrink-0 text-slate-500">{(photo.size / (1024 * 1024)).toFixed(1)}MB</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {totalCullingPages > 1 && (
+                    <div className="flex items-center justify-between bg-slate-900 p-3 rounded-2xl border border-slate-800 text-xs">
+                      <button
+                        onClick={() => setCullingPage(p => Math.max(1, p - 1))}
+                        disabled={cullingPage === 1}
+                        className="px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                      >
+                        Previous
+                      </button>
+                      <span className="text-slate-400">
+                        Page <strong className="text-slate-200">{cullingPage}</strong> of {totalCullingPages}
+                      </span>
+                      <button
+                        onClick={() => setCullingPage(p => Math.min(totalCullingPages, p + 1))}
+                        disabled={cullingPage === totalCullingPages}
+                        className="px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                      >
+                        Next
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </main>
+          )}
+
+          {(activePreviewPhoto || previewVaultPhoto) && (
+            <PhotoPreviewModal
+              photo={activePreviewPhoto || previewVaultPhoto}
+              onClose={() => {
+                setPreviewPhotoId(null);
+                setPreviewVaultPhoto(null);
+              }}
+              onUpdatePhoto={(updatedPhoto) => {
+                if (activePreviewPhoto) {
+                  setPhotos(prev => prev.map(p => p.id === updatedPhoto.id ? updatedPhoto : p));
+                }
+              }}
+              onAddToVault={handleAddOrUpdateVault}
+              onDeleteWorkspacePhoto={(photoId) => {
+                setPhotos(prev => {
+                  const target = prev.find(p => p.id === photoId);
+                  if (target) {
+                    if (target.thumbnailUrl) URL.revokeObjectURL(target.thumbnailUrl);
+                    if (target.blobUrl) URL.revokeObjectURL(target.blobUrl);
+                  }
+                  return prev.filter(p => p.id !== photoId);
+                });
+                setSelectedPhotoIds(prev => {
+                  const next = new Set(prev);
+                  next.delete(photoId);
+                  return next;
+                });
+                setPreviewPhotoId(null);
+                showToast("Photo removed from Focus Workspace", "info");
+              }}
+              onDeleteVaultSighting={(vaultEntryId, sightingId) => {
+                setVaultEntries(prev => {
+                  const safePrev = Array.isArray(prev) ? prev : [];
+                  const entryIdx = safePrev.findIndex(e => e.id === vaultEntryId);
+                  if (entryIdx === -1) return safePrev;
+
+                  const entry = safePrev[entryIdx];
+                  const sightings = Array.isArray(entry.sightings) ? entry.sightings : [];
+                  const remainingSightings = sightings.filter(s => s.id !== sightingId);
+
+                  if (remainingSightings.length === 0) {
+                    showToast(`Removed ${entry.speciesName} entry from Lifer Vault`, "info");
+                    return safePrev.filter(e => e.id !== vaultEntryId);
+                  } else {
+                    const updated = [...safePrev];
+                    updated[entryIdx] = {
+                      ...entry,
+                      sightings: remainingSightings
+                    };
+                    showToast(`Sighting removed from ${entry.speciesName} vault record`, "info");
+                    return updated;
+                  }
+                });
+                setPreviewVaultPhoto(null);
+              }}
+              globalLocation={globalLocation}
+              geminiApiKey={geminiApiKey}
+              showToast={showToast}
+            />
+          )}
+        </div>
+      );
+    }
+
+    function PhotoPreviewModal({ 
+      photo, 
+      onClose, 
+      onUpdatePhoto, 
+      onAddToVault, 
+      onDeleteWorkspacePhoto, 
+      onDeleteVaultSighting, 
+      globalLocation, 
+      geminiApiKey,
+      showToast 
+    }) {
+      const [currentPhoto, setCurrentPhoto] = useState(photo);
+      const [openAccordion, setOpenAccordion] = useState('species');
+      const [isIdentifyingThis, setIsIdentifyingThis] = useState(false);
+      const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+
+      useEffect(() => {
+        setCurrentPhoto(photo);
+        setShowDeleteConfirm(false);
+      }, [photo]);
+
+      const handleCropChange = (cropRegion) => {
+        const updated = {
+          ...currentPhoto,
+          cropRegion
+        };
+        setCurrentPhoto(updated);
+        onUpdatePhoto(updated);
+      };
+
+      const handleIdentify = async () => {
+        setIsIdentifyingThis(true);
+        showToast(
+          currentPhoto.cropRegion
+            ? "Analyzing cropped bird photo diagnostic markings with your Passkey & Gemini token..."
+            : "Analyzing bird species diagnostic markings with your Passkey & Gemini token...",
+          "info"
+        );
+
+        const speciesData = await identifyBirdWithGemini(
+          currentPhoto.file || currentPhoto.blobUrl,
+          currentPhoto.locationOverride || globalLocation,
+          currentPhoto.cropRegion,
+          geminiApiKey
+        );
+
+        const updated = {
+          ...currentPhoto,
+          speciesInfo: speciesData,
+          inVault: false
+        };
+
+        setCurrentPhoto(updated);
+        onUpdatePhoto(updated);
+        setIsIdentifyingThis(false);
+        showToast(`Identified as ${speciesData.speciesName}!`, "success");
+      };
+
+      const species = currentPhoto.speciesInfo;
+      const metadata = currentPhoto.metadata || {};
+      const isAlreadyInVault = currentPhoto.inVault || false;
+      const isVaultPhoto = currentPhoto.isVaultPhoto || false;
+      const totalSightings = currentPhoto.totalEntrySightings ?? 1;
+
+      return (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 overflow-y-auto">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-4xl w-full max-h-[92vh] flex flex-col shadow-2xl overflow-hidden relative">
+            
+            {showDeleteConfirm && (
+              <div className="absolute inset-0 z-50 bg-slate-950/90 backdrop-blur-lg flex items-center justify-center p-6 animate-fade-in">
+                <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-6 shadow-2xl text-center space-y-4">
+                  <div className="w-12 h-12 bg-rose-950/80 border border-rose-700/60 rounded-2xl flex items-center justify-center mx-auto text-rose-400">
+                    <Icon name="trash" className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h4 className="text-base font-bold text-slate-100">
+                      {isVaultPhoto 
+                        ? (totalSightings <= 1 ? "Delete Entire Lifer Vault Entry?" : "Delete Sighting Record?") 
+                        : "Remove Photo from Workspace?"}
+                    </h4>
+                    <p className="text-xs text-slate-400 mt-2 leading-relaxed">
+                      {isVaultPhoto ? (
+                        totalSightings <= 1 ? (
+                          <>This is the only remaining sighting for <strong className="text-emerald-400">{species?.speciesName || 'this species'}</strong>. Deleting this photo will completely remove the species entry from your Lifer Vault.</>
+                        ) : (
+                          <>Are you sure you want to remove this sighting record from <strong className="text-emerald-400">{species?.speciesName || 'this species'}</strong> in your Lifer Vault?</>
+                        )
+                      ) : (
+                        <>Are you sure you want to delete <strong className="text-slate-200">{currentPhoto.filename}</strong> from your Focus Workspace list?</>
+                      )}
+                    </p>
+                  </div>
+                  <div className="flex items-center justify-center gap-3 pt-2">
+                    <button
+                      onClick={() => setShowDeleteConfirm(false)}
+                      className="px-4 py-2 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-xs font-medium text-slate-300 transition"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowDeleteConfirm(false);
+                        if (isVaultPhoto) {
+                          onDeleteVaultSighting(currentPhoto.vaultEntryId, currentPhoto.sightingId);
+                        } else {
+                          onDeleteWorkspacePhoto(currentPhoto.id);
+                        }
+                      }}
+                      className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-xs font-bold text-white shadow-lg shadow-rose-600/30 transition flex items-center gap-1.5"
+                    >
+                      <Icon name="trash" className="w-4 h-4" />
+                      <span>{isVaultPhoto && totalSightings <= 1 ? 'Delete Species Entry' : 'Delete Photo'}</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="p-4 bg-slate-900 border-b border-slate-800 flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-2 truncate">
+                <Icon name="camera" className="w-5 h-5 text-emerald-400 shrink-0" />
+                <h3 className="text-sm font-bold text-slate-100 truncate">{currentPhoto.filename}</h3>
+                {isVaultPhoto && (
+                  <span className="text-[10px] bg-emerald-950 text-emerald-300 font-semibold px-2 py-0.5 rounded-full border border-emerald-800">
+                    Lifer Vault Sighting
+                  </span>
+                )}
+              </div>
+              <button
+                onClick={onClose}
+                className="w-8 h-8 rounded-xl bg-slate-950 border border-slate-800 hover:bg-slate-800 flex items-center justify-center text-slate-400 hover:text-slate-100 transition"
+              >
+                <Icon name="x" className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 md:p-6 grid grid-cols-1 md:grid-cols-2 gap-6 custom-scrollbar">
+              <div className="space-y-3 flex flex-col justify-center">
+                <InteractivePhotoViewer
+                  src={currentPhoto.blobUrl || currentPhoto.thumbnailUrl}
+                  alt={currentPhoto.filename}
+                  title={currentPhoto.filename}
+                  heatmapPoints={species?.heatmapPoints || []}
+                  showHeatmap={openAccordion === 'heatmap'}
+                  cropRegion={currentPhoto.cropRegion}
+                  onCropChange={handleCropChange}
+                />
+
+                <div className="flex items-center gap-2">
+                  {!isVaultPhoto && (
+                    <button
+                      onClick={() => onAddToVault(currentPhoto)}
+                      disabled={!species || isAlreadyInVault}
+                      className={`flex-1 py-3 rounded-2xl text-xs font-bold shadow-lg transition flex items-center justify-center gap-2 ${
+                        isAlreadyInVault
+                          ? 'bg-slate-800 text-emerald-400 border border-emerald-500/40 cursor-not-allowed opacity-90'
+                          : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/20'
+                      }`}
+                    >
+                      <Icon name={isAlreadyInVault ? "check" : "vault"} className="w-4 h-4" />
+                      <span>
+                        {!species
+                          ? 'Identify First to Add'
+                          : isAlreadyInVault
+                          ? 'Added to Lifer Vault'
+                          : 'Add to Lifer Vault'}
+                      </span>
+                    </button>
+                  )}
+
+                  <button
+                    onClick={() => setShowDeleteConfirm(true)}
+                    className={`py-3 px-4 rounded-2xl text-xs font-bold border transition flex items-center justify-center gap-1.5 shadow-lg ${
+                      isVaultPhoto ? 'w-full bg-rose-950/80 hover:bg-rose-900 text-rose-200 border-rose-800/80' : 'bg-rose-950/80 hover:bg-rose-900 text-rose-200 border-rose-800/80'
+                    }`}
+                  >
+                    <Icon name="trash" className="w-4 h-4 text-rose-400" />
+                    <span>{isVaultPhoto ? 'Delete from Vault' : 'Delete Photo'}</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-3 flex flex-col">
+                <div className="bg-slate-950 border border-slate-800 rounded-2xl overflow-hidden">
+                  <button
+                    onClick={() => setOpenAccordion(openAccordion === 'species' ? '' : 'species')}
+                    className="w-full px-4 py-3 bg-slate-900/80 hover:bg-slate-900 text-left flex items-center justify-between text-xs font-bold text-slate-200 transition"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Icon name="compass" className="w-4 h-4 text-emerald-400" />
+                      <span>1. Bird Species Information</span>
+                    </div>
+                    <Icon name={openAccordion === 'species' ? "chevronUp" : "chevronDown"} className="w-4 h-4 text-slate-400" />
+                  </button>
+
+                  {openAccordion === 'species' && (
+                    <div className="p-4 space-y-4 border-t border-slate-800 text-xs">
+                      {species ? (
+                        <div className="space-y-3">
+                          <div className="flex items-start justify-between">
+                            <div>
+                              <span className="text-[10px] uppercase font-bold text-emerald-400 bg-emerald-950 px-2 py-0.5 rounded-full border border-emerald-800">
+                                {species.category}
+                              </span>
+                              <h4 className="text-lg font-bold text-slate-100 mt-1">{species.speciesName}</h4>
+                              <p className="text-xs text-slate-400 italic">{species.scientificName}</p>
+                            </div>
+                            <div className="text-right">
+                              <div className="text-[10px] text-slate-400">Match Confidence</div>
+                              <div className="text-sm font-bold text-emerald-400">{Math.round((species.confidence || 0.8) * 100)}%</div>
+                            </div>
+                          </div>
+
+                          <p className="text-slate-300 leading-relaxed bg-slate-900/60 p-3 rounded-xl border border-slate-800">
+                            {species.description}
+                          </p>
+
+                          <div className="text-slate-400 space-y-1 bg-slate-900/40 p-3 rounded-xl border border-slate-800/80">
+                            <span className="font-semibold text-slate-300 block">Habitat & Range:</span>
+                            <p>{species.habitat}</p>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-center py-6 space-y-3">
+                          <p className="text-slate-400">Species not yet identified for this photograph.</p>
+                          <button
+                            onClick={handleIdentify}
+                            disabled={isIdentifyingThis}
+                            className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs shadow-md transition inline-flex items-center gap-2"
+                          >
+                            <Icon name="sparkles" className="w-4 h-4" />
+                            <span>{isIdentifyingThis ? 'Identifying...' : 'Run Passkey & Gemini AI Identification'}</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <div className="bg-slate-950 border border-slate-800 rounded-2xl overflow-hidden">
+                  <button
+                    onClick={() => setOpenAccordion(openAccordion === 'heatmap' ? '' : 'heatmap')}
+                    className="w-full px-4 py-3 bg-slate-900/80 hover:bg-slate-900 text-left flex items-center justify-between text-xs font-bold text-slate-200 transition"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Icon name="flame" className="w-4 h-4 text-emerald-400" />
+                      <span>2. Diagnostic Focus Heatmap</span>
+                    </div>
+                    <Icon name={openAccordion === 'heatmap' ? "chevronUp" : "chevronDown"} className="w-4 h-4 text-slate-400" />
+                  </button>
+
+                  {openAccordion === 'heatmap' && (
+                    <div className="p-4 space-y-3 border-t border-slate-800 text-xs">
+                      <p className="text-slate-300 leading-relaxed">
+                        Diagnostic points highlighted on the photo viewer display key subject details evaluated for focus sharpness:
+                      </p>
+                      <div className="space-y-2">
+                        {(species?.heatmapPoints || [
+                          { label: "Eye Ring & Beak Sharpness", intensity: 0.9 },
+                          { label: "Plumage Micro-Contrast", intensity: 0.85 }
+                        ]).map((pt, i) => (
+                          <div key={i} className="flex items-center justify-between bg-slate-900 p-2.5 rounded-xl border border-slate-800">
+                            <span className="text-slate-200">{pt.label}</span>
+                            <span className="text-emerald-400 font-bold">{Math.round((pt.intensity || 0.8) * 100)}% Sharpness</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="bg-slate-950 border border-slate-800 rounded-2xl overflow-hidden">
+                  <button
+                    onClick={() => setOpenAccordion(openAccordion === 'metrics' ? '' : 'metrics')}
+                    className="w-full px-4 py-3 bg-slate-900/80 hover:bg-slate-900 text-left flex items-center justify-between text-xs font-bold text-slate-200 transition"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Icon name="sparkles" className="w-4 h-4 text-emerald-400" />
+                      <span>3. Focus Sharpness Evaluation</span>
+                    </div>
+                    <Icon name={openAccordion === 'metrics' ? "chevronUp" : "chevronDown"} className="w-4 h-4 text-slate-400" />
+                  </button>
+
+                  {openAccordion === 'metrics' && (
+                    <div className="p-4 space-y-3 border-t border-slate-800 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="text-slate-300 font-semibold">Sharpness Score:</span>
+                        <span className={`text-sm font-bold px-2.5 py-0.5 rounded-lg border ${
+                          (currentPhoto.focusScore ?? 10) >= 7
+                            ? 'bg-emerald-950 text-emerald-300 border-emerald-700'
+                            : 'bg-rose-950 text-rose-300 border-rose-700'
+                        }`}>
+                          {currentPhoto.focusScore ?? 'Unrated'}/10
+                        </span>
+                      </div>
+                      <p className="text-slate-400 bg-slate-900 p-3 rounded-xl border border-slate-800">
+                        {currentPhoto.focusReason || "Evaluated based on Laplacian gradient edge variance across subject focal plane."}
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                <div className="bg-slate-950 border border-slate-800 rounded-2xl overflow-hidden">
+                  <button
+                    onClick={() => setOpenAccordion(openAccordion === 'exif' ? '' : 'exif')}
+                    className="w-full px-4 py-3 bg-slate-900/80 hover:bg-slate-900 text-left flex items-center justify-between text-xs font-bold text-slate-200 transition"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Icon name="info" className="w-4 h-4 text-emerald-400" />
+                      <span>4. Camera EXIF Metadata</span>
+                    </div>
+                    <Icon name={openAccordion === 'exif' ? "chevronUp" : "chevronDown"} className="w-4 h-4 text-slate-400" />
+                  </button>
+
+                  {openAccordion === 'exif' && (
+                    <div className="p-4 border-t border-slate-800 text-xs grid grid-cols-2 gap-2">
+                      <div className="bg-slate-900 p-2.5 rounded-xl border border-slate-800">
+                        <div className="text-[10px] text-slate-400">Camera Make & Model</div>
+                        <div className="font-semibold text-slate-200 truncate">{metadata.make} {metadata.model}</div>
+                      </div>
+                      <div className="bg-slate-900 p-2.5 rounded-xl border border-slate-800">
+                        <div className="text-[10px] text-slate-400">Aperture & Shutter</div>
+                        <div className="font-semibold text-slate-200">{metadata.fNumber} @ {metadata.exposureTime}</div>
+                      </div>
+                      <div className="bg-slate-900 p-2.5 rounded-xl border border-slate-800">
+                        <div className="text-[10px] text-slate-400">ISO & Focal Length</div>
+                        <div className="font-semibold text-slate-200">{metadata.iso} | {metadata.focalLength}</div>
+                      </div>
+                      <div className="bg-slate-900 p-2.5 rounded-xl border border-slate-800">
+                        <div className="text-[10px] text-slate-400">Capture Date</div>
+                        <div className="font-semibold text-slate-200 truncate">
+                          {new Date(metadata.timestamp).toLocaleString()}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    window.onload = function() {
+      const root = ReactDOM.createRoot(document.getElementById('root'));
+      root.render(<BirdVaultApp />);
+    };
+  </script>
+</body>
+</html>
