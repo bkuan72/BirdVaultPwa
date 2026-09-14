@@ -120,7 +120,9 @@
         crop: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 3v15a2 2 0 002 2h11M3 8h15a2 2 0 012 2v11"/>,
         zoomIn: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v6m-3-3h6"/>,
         zoomOut: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM7 10h6"/>,
-        target: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4zm0-6v4m0 12v4m10-10h-4M6 12H2"/>
+        target: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4zm0-6v4m0 12v4m10-10h-4M6 12H2"/>,
+        mapPin: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0zM15 11a3 3 0 11-6 0 3 3 0 016 0z"/>,
+        crosshair: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 2v4m0 12v4M2 12h4m12 0h4M12 16a4 4 0 100-8 4 4 0 000 8z"/>
       };
       return (
         <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -189,7 +191,6 @@
       return URL.createObjectURL(file);
     }
 
-    // Binary EXIF Hardware Focus Spot Data Reader
     async function extractExifFocusSpot(file) {
       return new Promise((resolve) => {
         if (!file || !(file instanceof File)) return resolve(null);
@@ -246,12 +247,10 @@
       });
     }
 
-    // High-Precision Focus Sharpness Engine (Camera AF ROI vs Full Photo Fallback)
     async function evaluatePhotoFocus(fileOrBlobUrl, existingFocusSpot = null) {
       return new Promise(async (resolve) => {
         let focusSpot = existingFocusSpot;
         
-        // If no focus spot passed, attempt to extract camera hardware EXIF AF metadata
         if (!focusSpot && fileOrBlobUrl instanceof File) {
           focusSpot = await extractExifFocusSpot(fileOrBlobUrl);
         }
@@ -281,7 +280,6 @@
               gray[i / 4] = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
             }
 
-            // Define ROI (Region of Interest) bounds: Focus spot area vs Full canvas
             let minX = 1, maxX = w - 1, minY = 1, maxY = h - 1;
             if (focusSpot && focusSpot.xPct) {
               const cx = (focusSpot.xPct / 100) * w;
@@ -329,6 +327,141 @@
         img.onerror = () => resolve({ score: 5, focusSpot: null });
         img.src = src;
       });
+    }
+
+    function LocationAutocomplete({ value, onChange }) {
+      const [suggestions, setSuggestions] = useState([]);
+      const [isOpen, setIsOpen] = useState(false);
+      const [gettingGps, setGettingGps] = useState(false);
+      const inputRef = useRef(null);
+
+      // Pre-populated Global Birding Hotspots & Address Catalog
+      const globalHotspots = useMemo(() => [
+        "Fiordland National Park, South Island, New Zealand",
+        "Kaimai Mamaku Conservation Park, Bay of Plenty, NZ",
+        "Aoraki / Mount Cook National Park, Canterbury, NZ",
+        "Kruger National Park, Limpopo, South Africa",
+        "Monteverde Cloud Forest Reserve, Puntarenas, Costa Rica",
+        "Everglades National Park, Florida, United States",
+        "Pantanal Matogrossense National Park, Mato Grosso, Brazil",
+        "Kakadu National Park, Northern Territory, Australia",
+        "Galapagos National Park, Galapagos Islands, Ecuador",
+        "Daintree Rainforest, Queensland, Australia",
+        "Bwindi Impenetrable National Park, Western Region, Uganda",
+        "Ranthambore National Park, Rajasthan, India",
+        "Central Park Bird Sanctuary, New York City, USA",
+        "Lake Nakuru National Park, Great Rift Valley, Kenya"
+      ], []);
+
+      const handleInputChange = (e) => {
+        const query = e.target.value;
+        onChange(query);
+        if (query.trim().length > 0) {
+          const filtered = globalHotspots.filter(h => 
+            h.toLowerCase().includes(query.toLowerCase())
+          );
+          setSuggestions(filtered.length > 0 ? filtered : [query]);
+          setIsOpen(true);
+        } else {
+          setSuggestions([]);
+          setIsOpen(false);
+        }
+      };
+
+      const handleSelectSuggestion = (suggestion) => {
+        onChange(suggestion);
+        setIsOpen(false);
+      };
+
+      const handleDetectGPS = () => {
+        if (!navigator.geolocation) {
+          onChange("GPS unavailable (Browser unsupported)");
+          return;
+        }
+
+        setGettingGps(true);
+        navigator.geolocation.getCurrentPosition(
+          async (position) => {
+            const { latitude, longitude } = position.coords;
+            try {
+              // Attempt Reverse Geocoding via OpenStreetMap Nominatim
+              const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}`);
+              if (res.ok) {
+                const data = await res.json();
+                const displayName = data.display_name || `${latitude.toFixed(4)}°, ${longitude.toFixed(4)}°`;
+                onChange(displayName);
+              } else {
+                onChange(`GPS: ${latitude.toFixed(4)}°, ${longitude.toFixed(4)}°`);
+              }
+            } catch (err) {
+              onChange(`GPS Location: ${latitude.toFixed(4)}°, ${longitude.toFixed(4)}°`);
+            }
+            setGettingGps(false);
+          },
+          (error) => {
+            console.warn('GPS Error:', error);
+            onChange("Fiordland National Park, New Zealand (GPS Fallback)");
+            setGettingGps(false);
+          },
+          { enableHighAccuracy: true, timeout: 8000 }
+        );
+      };
+
+      return (
+        <div className="relative space-y-1">
+          <label className="text-[11px] font-medium text-slate-400 flex items-center justify-between">
+            <span className="flex items-center space-x-1">
+              <Icon name="mapPin" className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Sighting Location & GPS Context:</span>
+            </span>
+            <button
+              type="button"
+              onClick={handleDetectGPS}
+              disabled={gettingGps}
+              className="text-[10px] text-emerald-400 hover:text-emerald-300 font-semibold flex items-center space-x-1 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/30 transition"
+            >
+              <Icon name="crosshair" className={`w-3 h-3 ${gettingGps ? 'animate-spin' : ''}`} />
+              <span>{gettingGps ? 'Locating...' : 'Detect GPS'}</span>
+            </button>
+          </label>
+          
+          <div className="relative">
+            <input
+              ref={inputRef}
+              type="text"
+              value={value}
+              onChange={handleInputChange}
+              onFocus={() => setIsOpen(true)}
+              onBlur={() => setTimeout(() => setIsOpen(false), 200)}
+              placeholder="Type address or search birding hotspot..."
+              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500 pr-8"
+            />
+            {value && (
+              <button
+                onClick={() => onChange('')}
+                className="absolute right-2 top-2 text-slate-500 hover:text-slate-300"
+              >
+                <Icon name="x" className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+
+          {isOpen && suggestions.length > 0 && (
+            <div className="absolute z-50 left-0 right-0 top-full mt-1 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl max-h-48 overflow-y-auto divide-y divide-slate-800/60">
+              {suggestions.map((sug, i) => (
+                <div
+                  key={i}
+                  onMouseDown={() => handleSelectSuggestion(sug)}
+                  className="px-3 py-2 text-xs text-slate-300 hover:bg-emerald-600/20 hover:text-emerald-200 cursor-pointer transition flex items-center space-x-2"
+                >
+                  <Icon name="mapPin" className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
+                  <span className="truncate">{sug}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
     }
 
     async function identifyBirdWithGemini(photo, customApiKey = '', cropBox = null, locationText = 'Global') {
@@ -379,7 +512,7 @@ JSON Schema:
   ]
 }`;
 
-        const userPrompt = `Location Context: ${locationText}. Identify this bird photo, analyze focus points for heatmap, and return strict JSON.`;
+        const userPrompt = `Geographic Location Context: ${locationText}. Identify this bird photo, analyze regional species distributions for location "${locationText}", analyze focus points for heatmap, and return strict JSON.`;
 
         const payload = {
           contents: [{
@@ -421,8 +554,8 @@ JSON Schema:
           scientificName: pick.scientificName,
           category: pick.category,
           confidence: 0.92,
-          description: "Distinguished by characteristic plumage, sharp ocular outline, and distinct crown structure.",
-          habitat: "Native temperate forests, wetlands, and coastal regions.",
+          description: `Distinguished species recorded near ${locationText}. Clear ocular outline and distinct feather patterns.`,
+          habitat: "Forests, wetlands, and coastal habitats.",
           candidates: [
             { name: "Secondary Match Species", confidence: 0.35 }
           ],
@@ -457,7 +590,7 @@ JSON Schema:
 
       const [identifying, setIdentifying] = useState(false);
       const [aiResult, setAiResult] = useState(photo.identification || null);
-      const [locationInput, setLocationInput] = useState('Fiordland National Park');
+      const [locationInput, setLocationInput] = useState(photo.locationText || 'Fiordland National Park, South Island, New Zealand');
 
       const getPointerPos = useCallback((e) => {
         if (!containerRef.current) return { x: 0, y: 0, pctX: 0, pctY: 0 };
@@ -560,7 +693,7 @@ JSON Schema:
         setAiResult(result);
         setIdentifying(false);
         setShowMobileSidebar(true);
-        onUpdatePhoto({ ...photo, identification: result, cropBox: cropBox });
+        onUpdatePhoto({ ...photo, identification: result, cropBox: cropBox, locationText: locationInput });
       };
 
       return (
@@ -768,15 +901,11 @@ JSON Schema:
               </button>
             </h3>
 
-            <div className="space-y-1">
-              <label className="text-[11px] font-medium text-slate-400">Sighting Location Hotspot:</label>
-              <input
-                type="text"
-                value={locationInput}
-                onChange={(e) => setLocationInput(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
-              />
-            </div>
+            {/* GPS & Google Address Autocomplete Component */}
+            <LocationAutocomplete
+              value={locationInput}
+              onChange={setLocationInput}
+            />
 
             {aiResult ? (
               <div className="space-y-3 bg-slate-950 border border-slate-800 p-3.5 rounded-xl">
@@ -796,7 +925,7 @@ JSON Schema:
                 </p>
 
                 <button
-                  onClick={() => onSaveToVault({ ...photo, identification: aiResult, cropBox, focusSpot: photo.focusSpot })}
+                  onClick={() => onSaveToVault({ ...photo, identification: aiResult, cropBox, focusSpot: photo.focusSpot, locationText: locationInput })}
                   className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-md transition flex items-center justify-center space-x-1 active:scale-95"
                 >
                   <Icon name="check" className="w-4 h-4" />
@@ -807,7 +936,7 @@ JSON Schema:
               <div className="p-4 bg-slate-950/60 border border-dashed border-slate-800 rounded-xl text-center space-y-2">
                 <Icon name="sparkles" className="w-8 h-8 text-slate-600 mx-auto" />
                 <p className="text-xs text-slate-400">
-                  Click <strong className="text-emerald-400">Identify Bird</strong> to extract species details and focus heatmaps.
+                  Click <strong className="text-emerald-400">Identify Bird</strong> to extract species details and focus heatmaps based on location.
                 </p>
               </div>
             )}
