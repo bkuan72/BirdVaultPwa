@@ -2,7 +2,7 @@
 <html lang="en" class="dark">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes, viewport-fit=cover">
   <title>BirdVault Pro - Wildlife Photography Assistant</title>
   
   <!-- Mobile & PWA Standalone Support -->
@@ -10,6 +10,9 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="theme-color" content="#090d16">
+
+  <!-- Web Manifest Data URI -->
+  <link rel="manifest" href="data:application/manifest+json;utf8,{\"name\":\"BirdVault Pro\",\"short_name\":\"BirdVault\",\"start_url\":\".\",\"display\":\"standalone\",\"background_color\":\"#040711\",\"theme_color\":\"#090d16\"}">
 
   <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
@@ -122,7 +125,8 @@
         zoomOut: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM7 10h6"/>,
         target: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4zm0-6v4m0 12v4m10-10h-4M6 12H2"/>,
         mapPin: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0zM15 11a3 3 0 11-6 0 3 3 0 016 0z"/>,
-        crosshair: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 2v4m0 12v4M2 12h4m12 0h4M12 16a4 4 0 100-8 4 4 0 000 8z"/>
+        crosshair: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 2v4m0 12v4M2 12h4m12 0h4M12 16a4 4 0 100-8 4 4 0 000 8z"/>,
+        shield: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
       };
       return (
         <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -335,7 +339,6 @@
       const [gettingGps, setGettingGps] = useState(false);
       const inputRef = useRef(null);
 
-      // Pre-populated Global Birding Hotspots & Address Catalog
       const globalHotspots = useMemo(() => [
         "Fiordland National Park, South Island, New Zealand",
         "Kaimai Mamaku Conservation Park, Bay of Plenty, NZ",
@@ -384,7 +387,6 @@
           async (position) => {
             const { latitude, longitude } = position.coords;
             try {
-              // Attempt Reverse Geocoding via OpenStreetMap Nominatim
               const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}`);
               if (res.ok) {
                 const data = await res.json();
@@ -475,24 +477,31 @@
           img.onload = () => {
             const canvas = document.createElement('canvas');
             let sx = 0, sy = 0, sw = img.width, sh = img.height;
-            if (cropBox) {
+            if (cropBox && cropBox.width > 0 && cropBox.height > 0) {
               sx = (cropBox.x / 100) * img.width;
               sy = (cropBox.y / 100) * img.height;
               sw = (cropBox.width / 100) * img.width;
               sh = (cropBox.height / 100) * img.height;
             }
-            canvas.width = sw;
-            canvas.height = sh;
+            // Use 1:1 full native pixel resolution of the cropped area without downscaling
+            canvas.width = Math.round(sw);
+            canvas.height = Math.round(sh);
             const ctx = canvas.getContext('2d');
-            ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
-            const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+            ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
             resolve(dataUrl.split(',')[1]);
           };
           img.onerror = reject;
           img.src = photo.blobUrl;
         });
 
-        const systemPrompt = `You are a world-class ornithologist and computer vision expert. Identify the bird species in the image. Return STRICT JSON ONLY without markdown fences.
+        const systemPrompt = `You are a world-class ornithologist and computer vision expert. Identify the bird species in the full-resolution cropped image provided.
+GEOGRAPHIC CONTEXT: The photo was taken in or near "${locationText}".
+CRITICAL: Restrict your identification and candidates strictly to species native, introduced, or vagrant to "${locationText}". Do NOT identify species from incorrect continents or incompatible biomes.
+
+Return STRICT JSON ONLY without markdown fences.
 JSON Schema:
 {
   "speciesName": "Common Name",
@@ -537,8 +546,7 @@ JSON Schema:
         const result = await response.json();
         const jsonText = result.candidates?.[0]?.content?.parts?.[0]?.text || '';
         const cleanJson = jsonText.replace(/```json/g, '').replace(/```/g, '').trim();
-        const parsed = JSON.parse(cleanJson);
-        return parsed;
+        return JSON.parse(cleanJson);
       } catch (e) {
         console.warn('Gemini AI identification fallback:', e);
         const mockSpecies = [
@@ -560,28 +568,27 @@ JSON Schema:
             { name: "Secondary Match Species", confidence: 0.35 }
           ],
           heatmapPoints: [
-            { x: 48, y: 32, intensity: 0.9, label: "Eye Focus Center" },
-            { x: 55, y: 45, intensity: 0.85, label: "Beak Edges" },
-            { x: 62, y: 60, intensity: 0.75, label: "Feather Detail" }
+            { x: 45, y: 30, intensity: 0.9, label: "Eye Contrast" },
+            { x: 52, y: 42, intensity: 0.8, label: "Beak Target" },
+            { x: 60, y: 65, intensity: 0.7, label: "Plumage Feature" }
           ]
         };
       }
     }
 
-    function InteractivePhotoViewer({ photo, onClose, onUpdatePhoto, onSaveToVault, userApiKey }) {
+    function InteractivePhotoViewer({ photo, onClose, onUpdatePhoto, onSaveToVault, userApiKey, initialLocation = '' }) {
       const [viewMode, setViewMode] = useState('loupe'); // 'loupe' | 'lightbox' | 'crop'
       const [loupePos, setLoupePos] = useState({ x: 50, y: 50, pxX: 0, pxY: 0 });
       const [showLoupe, setShowLoupe] = useState(false);
       const [zoomLevel, setZoomLevel] = useState(4);
       const [showMobileSidebar, setShowMobileSidebar] = useState(false);
+      const [showMobileLocationEdit, setShowMobileLocationEdit] = useState(false);
 
-      // Lightbox Pan & Pinch-to-Zoom State
       const [panZoom, setPanZoom] = useState({ scale: 1, x: 0, y: 0 });
       const [isDraggingPan, setIsDraggingPan] = useState(false);
       const dragStartRef = useRef({ x: 0, y: 0 });
       const initialTouchDistanceRef = useRef(null);
 
-      // Crop Metadata Box
       const [cropBox, setCropBox] = useState(photo.cropBox || null);
       const [showCroppedPreview, setShowCroppedPreview] = useState(!!(photo.cropBox && photo.cropBox.width > 0));
       const [isDrawingCrop, setIsDrawingCrop] = useState(false);
@@ -590,7 +597,31 @@ JSON Schema:
 
       const [identifying, setIdentifying] = useState(false);
       const [aiResult, setAiResult] = useState(photo.identification || null);
-      const [locationInput, setLocationInput] = useState(photo.locationText || 'Fiordland National Park, South Island, New Zealand');
+      const [locationInput, setLocationInput] = useState(photo.locationText || initialLocation || 'Auckland, New Zealand');
+
+      const [evaluatingFocus, setEvaluatingFocus] = useState(false);
+
+      // Focus Rating Before AI Identification logic
+      useEffect(() => {
+        if (photo.sharpness === null && !evaluatingFocus) {
+          setEvaluatingFocus(true);
+          evaluatePhotoFocus(photo.file || photo.blobUrl, photo.focusSpot).then((res) => {
+            onUpdatePhoto({
+              ...photo,
+              sharpness: res.score,
+              focusSpot: res.focusSpot
+            });
+            setEvaluatingFocus(false);
+          });
+        }
+      }, [photo]);
+
+      const handleLocationChange = (newLoc) => {
+        setLocationInput(newLoc);
+        if (newLoc) {
+          localStorage.setItem('birdvault_user_location', newLoc);
+        }
+      };
 
       const getPointerPos = useCallback((e) => {
         if (!containerRef.current) return { x: 0, y: 0, pctX: 0, pctY: 0 };
@@ -688,12 +719,22 @@ JSON Schema:
       };
 
       const handleRunAiIdentification = async () => {
+        // Guarantee focus evaluation finishes before running AI ID
+        let currentPhoto = photo;
+        if (currentPhoto.sharpness === null) {
+          setEvaluatingFocus(true);
+          const evalRes = await evaluatePhotoFocus(photo.file || photo.blobUrl, photo.focusSpot);
+          currentPhoto = { ...photo, sharpness: evalRes.score, focusSpot: evalRes.focusSpot };
+          onUpdatePhoto(currentPhoto);
+          setEvaluatingFocus(false);
+        }
+
         setIdentifying(true);
-        const result = await identifyBirdWithGemini(photo, userApiKey, cropBox, locationInput);
+        const result = await identifyBirdWithGemini(currentPhoto, userApiKey, cropBox, locationInput);
         setAiResult(result);
         setIdentifying(false);
         setShowMobileSidebar(true);
-        onUpdatePhoto({ ...photo, identification: result, cropBox: cropBox, locationText: locationInput });
+        onUpdatePhoto({ ...currentPhoto, identification: result, cropBox: cropBox, locationText: locationInput });
       };
 
       return (
@@ -702,9 +743,16 @@ JSON Schema:
             <div className="h-14 px-3 sm:px-4 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between z-20 gap-2">
               <div className="flex items-center space-x-2 truncate min-w-0">
                 <span className="text-xs font-semibold text-slate-300 truncate max-w-[100px] sm:max-w-[180px]">{photo.name}</span>
-                <span className={`text-[10px] sm:text-[11px] px-1.5 sm:px-2 py-0.5 rounded-full font-bold flex-shrink-0 ${photo.sharpness >= 7 ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'}`}>
-                  {photo.sharpness}/10
-                </span>
+                {evaluatingFocus ? (
+                  <span className="text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded-full flex items-center space-x-1">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+                    <span>Rating Focus...</span>
+                  </span>
+                ) : (
+                  <span className={`text-[10px] sm:text-[11px] px-1.5 sm:px-2 py-0.5 rounded-full font-bold flex-shrink-0 ${photo.sharpness >= 7 ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'}`}>
+                    Focus: {photo.sharpness !== null ? `${photo.sharpness}/10` : 'Unrated'}
+                  </span>
+                )}
                 {photo.focusSpot && (
                   <span className="text-[9px] bg-sky-500/20 text-sky-400 border border-sky-500/30 px-1.5 py-0.5 rounded-full font-semibold flex items-center space-x-1">
                     <Icon name="target" className="w-3 h-3" />
@@ -789,7 +837,6 @@ JSON Schema:
                 />
               )}
 
-              {/* Camera Hardware AF Target Focus Indicator Overlay */}
               {photo.focusSpot && viewMode !== 'crop' && !showCroppedPreview && (
                 <div
                   className="absolute w-12 h-12 -ml-6 -mt-6 border-2 border-sky-400/80 bg-sky-500/10 rounded-full pointer-events-none flex items-center justify-center shadow-lg animate-pulse"
@@ -799,7 +846,6 @@ JSON Schema:
                 </div>
               )}
 
-              {/* 2x–20x Interactive Loupe Lens */}
               {viewMode === 'loupe' && showLoupe && !showCroppedPreview && (
                 <div
                   className="loupe-lens absolute w-36 h-36 sm:w-48 sm:h-48 rounded-full pointer-events-none border-2 border-emerald-400 bg-no-repeat z-30"
@@ -813,7 +859,6 @@ JSON Schema:
                 />
               )}
 
-              {/* Crop Box Overlay */}
               {cropBox && cropBox.width > 0 && viewMode === 'crop' && (
                 <div
                   className="absolute border-2 border-dashed border-emerald-400 bg-emerald-500/10 pointer-events-none"
@@ -830,7 +875,6 @@ JSON Schema:
                 </div>
               )}
 
-              {/* AI Heatmap Overlay Points */}
               {aiResult && aiResult.heatmapPoints && (
                 <div className="absolute inset-0 pointer-events-none">
                   {aiResult.heatmapPoints.map((pt, i) => (
@@ -879,15 +923,35 @@ JSON Schema:
                 </div>
               )}
 
-              <button
-                onClick={handleRunAiIdentification}
-                disabled={identifying}
-                className="px-3 sm:px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs rounded-xl shadow-lg transition flex items-center space-x-1.5 flex-shrink-0"
-              >
-                <Icon name="sparkles" className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-                <span>{identifying ? 'Analyzing...' : 'Identify Bird'}</span>
-              </button>
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={() => setShowMobileLocationEdit(!showMobileLocationEdit)}
+                  className="md:hidden px-2.5 py-2 bg-slate-800 text-emerald-400 font-semibold text-xs rounded-xl border border-slate-700 flex items-center space-x-1"
+                  title="Edit Location"
+                >
+                  <Icon name="mapPin" className="w-3.5 h-3.5" />
+                  <span className="max-w-[80px] truncate text-[10px]">{locationInput.split(',')[0] || 'Location'}</span>
+                </button>
+
+                <button
+                  onClick={handleRunAiIdentification}
+                  disabled={identifying || evaluatingFocus}
+                  className="px-3 sm:px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-semibold text-xs rounded-xl shadow-lg transition flex items-center space-x-1.5 flex-shrink-0"
+                >
+                  <Icon name="sparkles" className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                  <span>{identifying ? 'Analyzing...' : evaluatingFocus ? 'Rating Focus...' : 'Identify Bird'}</span>
+                </button>
+              </div>
             </div>
+
+            {showMobileLocationEdit && (
+              <div className="md:hidden bg-slate-900 border-t border-slate-800 p-3 z-30">
+                <LocationAutocomplete
+                  value={locationInput}
+                  onChange={handleLocationChange}
+                />
+              </div>
+            )}
           </div>
 
           <div className={`w-full md:w-80 bg-slate-900 border-l border-slate-800 p-4 overflow-y-auto space-y-4 transition-all duration-300 ${showMobileSidebar ? 'block max-h-[50vh] md:max-h-full border-t md:border-t-0' : 'hidden md:block'}`}>
@@ -901,10 +965,43 @@ JSON Schema:
               </button>
             </h3>
 
-            {/* GPS & Google Address Autocomplete Component */}
+            {/* Prominent Focus Quality & Assessment Card (Focus Rating before AI ID) */}
+            <div className="bg-slate-950 border border-slate-800 p-3.5 rounded-xl space-y-2">
+              <div className="flex items-center justify-between border-b border-slate-800/80 pb-2">
+                <div className="flex items-center space-x-1.5">
+                  <Icon name="camera" className="w-4 h-4 text-emerald-400" />
+                  <span className="text-xs font-bold text-slate-200">Focus Rating & Quality</span>
+                </div>
+                {photo.sharpness !== null ? (
+                  <span className={`text-xs font-extrabold px-2 py-0.5 rounded-full ${photo.sharpness >= 7 ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : photo.sharpness >= 5 ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' : 'bg-red-500/20 text-red-400 border border-red-500/30'}`}>
+                    {photo.sharpness}/10
+                  </span>
+                ) : (
+                  <span className="text-[10px] text-slate-500 italic">Evaluating...</span>
+                )}
+              </div>
+
+              {photo.sharpness !== null && (
+                <div className="space-y-1 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400 text-[11px]">Optical Quality:</span>
+                    <span className={`font-semibold text-[11px] ${photo.sharpness >= 7 ? 'text-emerald-400' : photo.sharpness >= 5 ? 'text-amber-400' : 'text-red-400'}`}>
+                      {photo.sharpness >= 8 ? 'Tack Sharp — Ideal for AI' : photo.sharpness >= 7 ? 'Sharp Detail — Good for AI' : photo.sharpness >= 5 ? 'Moderate Detail' : 'Blurry / Soft Focus'}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="text-slate-400">Focus Target:</span>
+                    <span className="text-sky-400 font-mono text-[10px]">
+                      {photo.focusSpot ? (photo.focusSpot.source || 'Hardware AF Spot') : 'Full Canvas ROI'}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+
             <LocationAutocomplete
               value={locationInput}
-              onChange={setLocationInput}
+              onChange={handleLocationChange}
             />
 
             {aiResult ? (
@@ -936,7 +1033,7 @@ JSON Schema:
               <div className="p-4 bg-slate-950/60 border border-dashed border-slate-800 rounded-xl text-center space-y-2">
                 <Icon name="sparkles" className="w-8 h-8 text-slate-600 mx-auto" />
                 <p className="text-xs text-slate-400">
-                  Click <strong className="text-emerald-400">Identify Bird</strong> to extract species details and focus heatmaps based on location.
+                  Review the focus rating above, then click <strong className="text-emerald-400">Identify Bird</strong> to run species identification.
                 </p>
               </div>
             )}
@@ -946,7 +1043,7 @@ JSON Schema:
               <div className="grid grid-cols-2 gap-2 text-[11px]">
                 <div><span className="text-slate-500">File:</span> <p className="text-slate-300 truncate font-mono">{photo.name}</p></div>
                 <div><span className="text-slate-500">Size:</span> <p className="text-slate-300 font-mono">{(photo.size / (1024*1024)).toFixed(1)} MB</p></div>
-                <div><span className="text-slate-500">Focus Score:</span> <p className="text-emerald-400 font-bold">{photo.sharpness}/10</p></div>
+                <div><span className="text-slate-500">Focus Score:</span> <p className="text-emerald-400 font-bold">{photo.sharpness !== null ? `${photo.sharpness}/10` : 'Unrated'}</p></div>
                 <div><span className="text-slate-500">Focus Target:</span> <p className="text-sky-400 font-semibold">{photo.focusSpot ? (photo.focusSpot.source || 'Camera AF Spot') : 'Full Canvas'}</p></div>
                 {photo.focusSpot && (
                   <div className="col-span-2 pt-1.5 border-t border-slate-800/60">
@@ -1408,6 +1505,7 @@ JSON Schema:
       const [showInstallBanner, setShowInstallBanner] = useState(false);
       const [userAccount, setUserAccount] = useState(null);
       const [userApiKey, setUserApiKey] = useState(localStorage.getItem('birdvault_gemini_token') || '');
+      const [userLocation, setUserLocation] = useState(localStorage.getItem('birdvault_user_location') || '');
       const [showAuthModal, setShowAuthModal] = useState(false);
       const [customEmailInput, setCustomEmailInput] = useState('');
 
@@ -1416,6 +1514,29 @@ JSON Schema:
         const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
         if (isMobile && !checkStandalone) {
           setShowInstallBanner(true);
+        }
+
+        if (!localStorage.getItem('birdvault_user_location') && navigator.geolocation) {
+          navigator.geolocation.getCurrentPosition(
+            async (position) => {
+              const { latitude, longitude } = position.coords;
+              try {
+                const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}`);
+                if (res.ok) {
+                  const data = await res.json();
+                  const placeName = data.display_name || `${latitude.toFixed(4)}°, ${longitude.toFixed(4)}°`;
+                  setUserLocation(placeName);
+                  localStorage.setItem('birdvault_user_location', placeName);
+                }
+              } catch (err) {
+                const fallback = `GPS: ${latitude.toFixed(4)}°, ${longitude.toFixed(4)}°`;
+                setUserLocation(fallback);
+                localStorage.setItem('birdvault_user_location', fallback);
+              }
+            },
+            (err) => console.warn('Startup GPS auto-detect fallback:', err),
+            { enableHighAccuracy: false, timeout: 5000 }
+          );
         }
       }, []);
 
@@ -1639,6 +1760,7 @@ JSON Schema:
               }}
               onSaveToVault={handleSaveToVault}
               userApiKey={userApiKey}
+              initialLocation={userLocation}
             />
           )}
 
