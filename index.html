@@ -76,7 +76,7 @@
       scrollbar-width: none;
     }
     .loupe-lens {
-      box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.8), 0 10px 25px -5px rgba(0, 0, 0, 0.7);
+      box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.9), 0 12px 30px -5px rgba(0, 0, 0, 0.85);
       cursor: crosshair;
     }
     .touch-canvas {
@@ -98,7 +98,6 @@
       ESTIMATED_TOKENS_PER_IMG: 258 // Est. vision tokens per cropped ROI image
     };
 
-    // Helper: Converts 0-10 focus score to 1-5 star rating
     function scoreToStars(score) {
       if (score === null || score === undefined) return 0;
       return Math.max(1, Math.min(5, Math.ceil(score / 2)));
@@ -172,7 +171,8 @@
         shield: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>,
         clock: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>,
         bolt: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>,
-        refresh: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+        download: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>,
+        folder: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
       };
       return (
         <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -342,15 +342,6 @@
               </div>
             </div>
 
-            <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 text-[11px] text-slate-400 space-y-1">
-              <p className="font-semibold text-slate-200">💡 How Token Renewal Works:</p>
-              <ul className="list-disc list-inside space-y-0.5 text-slate-400">
-                <li><strong>Minute Limits (RPM):</strong> Automatically refresh every 60 seconds.</li>
-                <li><strong>Daily Quota (RPD):</strong> Resets automatically at 00:00 UTC every day.</li>
-                <li>To avoid hitting limits during batch culling, Gemini API keys can be upgraded at Google AI Studio.</li>
-              </ul>
-            </div>
-
             <div className="flex justify-end pt-2 border-t border-slate-800">
               <button
                 onClick={onClose}
@@ -364,51 +355,30 @@
       );
     }
 
-    function CroppedImage({ src, alt, cropBox, className = "", imgClassName = "" }) {
-      const [imgDims, setImgDims] = useState({ w: 0, h: 0 });
-
-      useEffect(() => {
-        if (!src) return;
-        const img = new Image();
-        img.onload = () => setImgDims({ w: img.naturalWidth, h: img.naturalHeight });
-        img.src = src;
-      }, [src]);
-
+    function CroppedImage({ src, alt, cropBox, className = "", imgClassName = "", innerRef = null }) {
       if (cropBox && cropBox.width > 0 && cropBox.height > 0) {
         const scaleX = 100 / cropBox.width;
         const scaleY = 100 / cropBox.height;
-        const aspect = (imgDims.w && imgDims.h) 
-          ? (cropBox.width * imgDims.w) / (cropBox.height * imgDims.h)
-          : cropBox.width / cropBox.height;
-
         return (
           <div className={`relative overflow-hidden flex items-center justify-center bg-slate-950 ${className}`}>
-            <div 
-              className="relative overflow-hidden w-full h-full flex items-center justify-center"
-              style={{ aspectRatio: `${aspect}` }}
-            >
-              <img
-                src={src}
-                alt={alt}
-                className={`absolute max-w-none ${imgClassName}`}
-                style={{
-                  width: `${scaleX * 100}%`,
-                  height: `${scaleY * 100}%`,
-                  left: `${-cropBox.x * scaleX}%`,
-                  top: `${-cropBox.y * scaleY}%`,
-                  objectFit: 'contain'
-                }}
-              />
-            </div>
-            <span className="absolute bottom-1 right-1 bg-slate-950/80 text-emerald-400 text-[9px] px-1 py-0.2 rounded border border-emerald-500/30 font-mono pointer-events-none z-10">
-              Cropped
-            </span>
+            <img
+              ref={innerRef}
+              src={src}
+              alt={alt}
+              className={`absolute max-w-none object-contain ${imgClassName}`}
+              style={{
+                width: `${scaleX * 100}%`,
+                height: `${scaleY * 100}%`,
+                left: `${-cropBox.x * scaleX}%`,
+                top: `${-cropBox.y * scaleY}%`
+              }}
+            />
           </div>
         );
       }
       return (
         <div className={`relative overflow-hidden flex items-center justify-center bg-slate-950 ${className}`}>
-          <img src={src} alt={alt} className={`max-w-full max-h-full object-contain ${imgClassName}`} />
+          <img ref={innerRef} src={src} alt={alt} className={`max-w-full max-h-full object-contain ${imgClassName}`} />
         </div>
       );
     }
@@ -532,60 +502,48 @@
               gray[i / 4] = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
             }
 
-            // Spatial Grid Analysis for Peak Focus Hotspot if EXIF AF tag is absent
-            let bestGridSpot = null;
-            let maxTileVariance = -1;
+            // Spatial 5x5 Laplacian grid analysis if focusSpot is null
+            if (!focusSpot) {
+              let maxVar = -1;
+              let bestX = 50, bestY = 50;
+              const gridCols = 5, gridRows = 5;
+              const tileW = Math.floor(w / gridCols);
+              const tileH = Math.floor(h / gridRows);
 
-            const gridCols = 5;
-            const gridRows = 5;
-            const cellW = Math.floor(w / gridCols);
-            const cellH = Math.floor(h / gridRows);
+              for (let gy = 0; gy < gridRows; gy++) {
+                for (let gx = 0; gx < gridCols; gx++) {
+                  let lSum = 0, lSqSum = 0, count = 0;
+                  const startX = Math.max(1, gx * tileW);
+                  const endX = Math.min(w - 1, (gx + 1) * tileW);
+                  const startY = Math.max(1, gy * tileH);
+                  const endY = Math.min(h - 1, (gy + 1) * tileH);
 
-            for (let gr = 0; gr < gridRows; gr++) {
-              for (let gc = 0; gc < gridCols; gc++) {
-                let cellLapSum = 0;
-                let cellLapSqSum = 0;
-                let cellCount = 0;
-
-                const startY = Math.max(1, gr * cellH);
-                const endY = Math.min(h - 1, (gr + 1) * cellH);
-                const startX = Math.max(1, gc * cellW);
-                const endX = Math.min(w - 1, (gc + 1) * cellW);
-
-                for (let y = startY; y < endY; y++) {
-                  for (let x = startX; x < endX; x++) {
-                    const idx = y * w + x;
-                    const lap = (
-                      -4 * gray[idx] +
-                      gray[idx - 1] + gray[idx + 1] +
-                      gray[idx - w] + gray[idx + w]
-                    );
-                    cellLapSum += lap;
-                    cellLapSqSum += lap * lap;
-                    cellCount++;
+                  for (let y = startY; y < endY; y++) {
+                    for (let x = startX; x < endX; x++) {
+                      const idx = y * w + x;
+                      const lap = (-4 * gray[idx] + gray[idx - 1] + gray[idx + 1] + gray[idx - w] + gray[idx + w]);
+                      lSum += lap;
+                      lSqSum += lap * lap;
+                      count++;
+                    }
+                  }
+                  const mean = count > 0 ? lSum / count : 0;
+                  const v = count > 0 ? (lSqSum / count) - (mean * mean) : 0;
+                  if (v > maxVar) {
+                    maxVar = v;
+                    bestX = Math.round(((gx + 0.5) / gridCols) * 100);
+                    bestY = Math.round(((gy + 0.5) / gridRows) * 100);
                   }
                 }
-
-                const cellMean = cellCount > 0 ? cellLapSum / cellCount : 0;
-                const cellVar = cellCount > 0 ? (cellLapSqSum / cellCount) - (cellMean * cellMean) : 0;
-
-                if (cellVar > maxTileVariance) {
-                  maxTileVariance = cellVar;
-                  const centerX = startX + (endX - startX) / 2;
-                  const centerY = startY + (endY - startY) / 2;
-                  bestGridSpot = {
-                    xPct: Math.round((centerX / w) * 100),
-                    yPct: Math.round((centerY / h) * 100),
-                    widthPct: 20,
-                    heightPct: 20,
-                    source: 'Spatial Micro-Contrast Hotspot'
-                  };
-                }
               }
-            }
 
-            if (!focusSpot) {
-              focusSpot = bestGridSpot || { xPct: 50, yPct: 50, widthPct: 20, heightPct: 20, source: 'Center Fallback' };
+              focusSpot = {
+                xPct: bestX,
+                yPct: bestY,
+                widthPct: 20,
+                heightPct: 20,
+                source: 'Spatial Laplacian Micro-Contrast Peak'
+              };
             }
 
             let minX = 1, maxX = w - 1, minY = 1, maxY = h - 1;
@@ -630,11 +588,11 @@
             if (typeof fileOrBlobUrl !== 'string') URL.revokeObjectURL(src);
             resolve({ score, stars, focusSpot });
           } catch (err) {
-            resolve({ score: 5, stars: 3, focusSpot: { xPct: 50, yPct: 50, widthPct: 20, heightPct: 20, source: 'Fallback' } });
+            resolve({ score: 5, stars: 3, focusSpot: null });
           }
         };
 
-        img.onerror = () => resolve({ score: 5, stars: 3, focusSpot: { xPct: 50, yPct: 50, widthPct: 20, heightPct: 20, source: 'Fallback' } });
+        img.onerror = () => resolve({ score: 5, stars: 3, focusSpot: null });
         img.src = src;
       });
     }
@@ -798,13 +756,24 @@
               sw = (cropBox.width / 100) * img.width;
               sh = (cropBox.height / 100) * img.height;
             }
-            canvas.width = Math.max(10, Math.round(sw));
-            canvas.height = Math.max(10, Math.round(sh));
+            
+            // Mobile WebKit memory safety bound (max 2048px dimension)
+            const maxDim = 2048;
+            let targetW = sw;
+            let targetH = sh;
+            if (targetW > maxDim || targetH > maxDim) {
+              const r = Math.min(maxDim / targetW, maxDim / targetH);
+              targetW *= r;
+              targetH *= r;
+            }
+
+            canvas.width = Math.max(10, Math.round(targetW));
+            canvas.height = Math.max(10, Math.round(targetH));
             const ctx = canvas.getContext('2d');
             ctx.imageSmoothingEnabled = true;
             ctx.imageSmoothingQuality = 'high';
             ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
-            const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
             resolve(dataUrl.split(',')[1]);
           };
           img.onerror = reject;
@@ -927,10 +896,10 @@ JSON Schema:
       }
     }
 
-    function InteractivePhotoViewer({ photo, onClose, onUpdatePhoto, onSaveToVault, userApiKey, initialLocation = '' }) {
+    function InteractivePhotoViewer({ photo, onClose, onUpdatePhoto, onSaveToVault, onDeletePhoto, userApiKey, initialLocation = '' }) {
       const [viewMode, setViewMode] = useState('lightbox');
-      const [loupePos, setLoupePos] = useState({ x: 50, y: 50, pxX: 0, pxY: 0, clientX: 0, clientY: 0 });
-      const [zoomLevel, setZoomLevel] = useState(1);
+      const [loupePos, setLoupePos] = useState({ x: 50, y: 50 });
+      const [zoomLevel, setZoomLevel] = useState(1.0);
       const [showMobileSidebar, setShowMobileSidebar] = useState(false);
       const [showMobileLocationEdit, setShowMobileLocationEdit] = useState(false);
 
@@ -953,13 +922,11 @@ JSON Schema:
       const [evaluatingFocus, setEvaluatingFocus] = useState(false);
 
       const activeStars = photo.userStars || photo.stars || scoreToStars(photo.sharpness);
-
-      // Condition checking whether photo is zoomed or cropped in
       const isZoomedOrCropped = showCroppedPreview || (viewMode === 'lightbox' && panZoom.scale > 1) || (viewMode === 'loupe' && zoomLevel > 1);
 
-      // Trigger focus evaluation & focusSpot generation if focusSpot is missing
+      // Re-evaluate focus or spot on photo change
       useEffect(() => {
-        if ((photo.sharpness === null || !photo.focusSpot) && !evaluatingFocus) {
+        if (photo.sharpness === null && !evaluatingFocus) {
           setEvaluatingFocus(true);
           evaluatePhotoFocus(photo.file || photo.blobUrl, photo.focusSpot).then((res) => {
             onUpdatePhoto({
@@ -972,45 +939,6 @@ JSON Schema:
           });
         }
       }, [photo]);
-
-      // Persistent Loupe auto-centering
-      useEffect(() => {
-        if (viewMode === 'loupe' && containerRef.current) {
-          const rect = containerRef.current.getBoundingClientRect();
-          if (rect.width && rect.height) {
-            const centerX = rect.left + rect.width / 2;
-            const centerY = rect.top + rect.height / 2;
-            setLoupePos({
-              x: 50,
-              y: 50,
-              pxX: rect.width / 2,
-              pxY: rect.height / 2,
-              clientX: centerX,
-              clientY: centerY
-            });
-          }
-        }
-      }, [viewMode, photo, showCroppedPreview]);
-
-      // Native non-passive wheel listener for Lightbox zoom
-      useEffect(() => {
-        const container = containerRef.current;
-        if (!container) return;
-
-        const onWheel = (e) => {
-          if (viewMode !== 'lightbox') return;
-          e.preventDefault();
-          const zoomDelta = e.deltaY < 0 ? 0.25 : -0.25;
-          setPanZoom(p => {
-            const newScale = Math.min(10, Math.max(1, p.scale + zoomDelta));
-            if (newScale === 1) return { scale: 1, x: 0, y: 0 };
-            return { ...p, scale: newScale };
-          });
-        };
-
-        container.addEventListener('wheel', onWheel, { passive: false });
-        return () => container.removeEventListener('wheel', onWheel);
-      }, [viewMode]);
 
       const handleLocationChange = (newLoc) => {
         setLocationInput(newLoc);
@@ -1029,7 +957,7 @@ JSON Schema:
       };
 
       const getPointerPos = useCallback((e) => {
-        if (!containerRef.current) return { x: 0, y: 0, pctX: 0, pctY: 0, clientX: 0, clientY: 0 };
+        if (!containerRef.current) return { x: 0, y: 0, pctX: 50, pctY: 50 };
         const rect = containerRef.current.getBoundingClientRect();
         const clientX = e.touches ? e.touches[0].clientX : e.clientX;
         const clientY = e.touches ? e.touches[0].clientY : e.clientY;
@@ -1053,7 +981,7 @@ JSON Schema:
           if (newDist && initialTouchDistanceRef.current) {
             const factor = newDist / initialTouchDistanceRef.current;
             setPanZoom((p) => {
-              const newScale = Math.min(10, Math.max(1, p.scale * factor));
+              const newScale = Math.min(8, Math.max(1, p.scale * factor));
               return { ...p, scale: newScale };
             });
             initialTouchDistanceRef.current = newDist;
@@ -1062,14 +990,13 @@ JSON Schema:
         }
 
         const pos = getPointerPos(e);
-        setLoupePos({
-          x: pos.pctX,
-          y: pos.pctY,
-          pxX: pos.x,
-          pxY: pos.y,
-          clientX: pos.clientX,
-          clientY: pos.clientY
-        });
+
+        if (viewMode === 'loupe') {
+          // If active click/touch or moving within container, update anchored loupe spot
+          if (e.buttons > 0 || (e.touches && e.touches.length > 0)) {
+            setLoupePos({ x: pos.pctX, y: pos.pctY });
+          }
+        }
 
         if (isDrawingCrop && cropStartRef.current) {
           const startX = cropStartRef.current.x;
@@ -1097,7 +1024,10 @@ JSON Schema:
         }
 
         const pos = getPointerPos(e);
-        if (viewMode === 'crop') {
+
+        if (viewMode === 'loupe') {
+          setLoupePos({ x: pos.pctX, y: pos.pctY });
+        } else if (viewMode === 'crop') {
           cropStartRef.current = { x: pos.pctX, y: pos.pctY };
           setCropBox({ x: pos.pctX, y: pos.pctY, width: 0, height: 0 });
           setIsDrawingCrop(true);
@@ -1119,15 +1049,14 @@ JSON Schema:
         setIsDraggingPan(false);
       };
 
-      const handleDoubleClick = (e) => {
+      const handleWheelZoom = (e) => {
         if (viewMode !== 'lightbox') return;
-        setPanZoom(p => {
-          if (p.scale > 1.2) {
-            return { scale: 1, x: 0, y: 0 };
-          } else {
-            return { scale: 2.5, x: 0, y: 0 };
-          }
-        });
+        e.preventDefault();
+        const zoomDelta = e.deltaY < 0 ? 0.3 : -0.3;
+        setPanZoom(p => ({
+          ...p,
+          scale: Math.min(8, Math.max(1, p.scale + zoomDelta))
+        }));
       };
 
       const handleRunAiIdentification = async () => {
@@ -1148,92 +1077,65 @@ JSON Schema:
         onUpdatePhoto({ ...currentPhoto, identification: result, cropBox: cropBox, locationText: locationInput });
       };
 
-      // Mathematical Loupe Aspect-Ratio Calibration
       const getLoupeStyle = () => {
-        if (!imgRef.current || !containerRef.current) return {};
+        if (!containerRef.current || !imgRef.current) return {};
+        const containerRect = containerRef.current.getBoundingClientRect();
         const imgEl = imgRef.current;
-        const imgRect = imgEl.getBoundingClientRect();
-        if (!imgRect.width || !imgRect.height) return {};
+        const rect = imgEl.getBoundingClientRect();
+        if (!rect.width || !rect.height) return {};
 
         const radius = window.innerWidth < 640 ? 72 : 96;
-        const clientX = loupePos.clientX || (imgRect.left + imgRect.width / 2);
-        const clientY = loupePos.clientY || (imgRect.top + imgRect.height / 2);
-
         const naturalW = imgEl.naturalWidth || 1000;
         const naturalH = imgEl.naturalHeight || 750;
-        const naturalAR = naturalW / naturalH;
+        const aspect = naturalW / naturalH;
 
-        let dispW = 0;
-        let dispH = 0;
-        let dispLeft = 0;
-        let dispTop = 0;
-        let normX = 0.5;
-        let normY = 0.5;
+        // Position of loupe center on screen relative to container
+        const loupePxX = (loupePos.x / 100) * containerRect.width;
+        const loupePxY = (loupePos.y / 100) * containerRect.height;
+
+        // Exact client coordinates of the loupe lens center
+        const loupeClientX = containerRect.left + loupePxX;
+        const loupeClientY = containerRect.top + loupePxY;
+
+        // Exact relative percentage on the rendered image bounding box
+        const imgPctX = Math.max(0, Math.min(1, (loupeClientX - rect.left) / rect.width));
+        const imgPctY = Math.max(0, Math.min(1, (loupeClientY - rect.top) / rect.height));
+
+        let bgW = 0;
+        let bgH = 0;
+        let fullX_pct = imgPctX;
+        let fullY_pct = imgPctY;
 
         if (showCroppedPreview && cropBox && cropBox.width > 0 && cropBox.height > 0) {
-          const cropAR = (cropBox.width * naturalW) / (cropBox.height * naturalH);
-          const containerAR = imgRect.width / imgRect.height;
+          const cropW_pct = cropBox.width / 100;
+          const cropH_pct = cropBox.height / 100;
 
-          let cropDispW = 0;
-          let cropDispH = 0;
-          if (cropAR > containerAR) {
-            cropDispW = imgRect.width;
-            cropDispH = imgRect.width / cropAR;
-          } else {
-            cropDispH = imgRect.height;
-            cropDispW = imgRect.height * cropAR;
-          }
+          const dispW = rect.width;
+          bgW = (dispW * zoomLevel) / cropW_pct;
+          bgH = bgW / aspect;
 
-          dispLeft = imgRect.left + (imgRect.width - cropDispW) / 2;
-          dispTop = imgRect.top + (imgRect.height - cropDispH) / 2;
-
-          dispW = (cropDispW * 100) / cropBox.width;
-          dispH = (cropDispH * 100) / cropBox.height;
-
-          const relCropX = Math.max(0, Math.min(cropDispW, clientX - dispLeft));
-          const relCropY = Math.max(0, Math.min(cropDispH, clientY - dispTop));
-
-          const normCropX = cropDispW > 0 ? relCropX / cropDispW : 0.5;
-          const normCropY = cropDispH > 0 ? relCropY / cropDispH : 0.5;
-
-          normX = (cropBox.x + normCropX * cropBox.width) / 100;
-          normY = (cropBox.y + normCropY * cropBox.height) / 100;
+          fullX_pct = (cropBox.x / 100) + imgPctX * cropW_pct;
+          fullY_pct = (cropBox.y / 100) + imgPctY * cropH_pct;
         } else {
-          const containerAR = imgRect.width / imgRect.height;
-          if (naturalAR > containerAR) {
-            dispW = imgRect.width;
-            dispH = imgRect.width / naturalAR;
-          } else {
-            dispH = imgRect.height;
-            dispW = imgRect.height * naturalAR;
-          }
+          const dispW = rect.width;
+          bgW = dispW * zoomLevel;
+          bgH = bgW / aspect;
 
-          dispLeft = imgRect.left + (imgRect.width - dispW) / 2;
-          dispTop = imgRect.top + (imgRect.height - dispH) / 2;
-
-          const relX = Math.max(0, Math.min(dispW, clientX - dispLeft));
-          const relY = Math.max(0, Math.min(dispH, clientY - dispTop));
-
-          normX = dispW > 0 ? relX / dispW : 0.5;
-          normY = dispH > 0 ? relY / dispH : 0.5;
+          fullX_pct = imgPctX;
+          fullY_pct = imgPctY;
         }
 
-        const bgW = dispW * zoomLevel;
-        const bgH = dispH * zoomLevel;
-
-        const bgX = radius - (normX * bgW);
-        const bgY = radius - (normY * bgH);
+        const bgX = radius - fullX_pct * bgW;
+        const bgY = radius - fullY_pct * bgH;
 
         return {
-          left: `${loupePos.pxX - radius}px`,
-          top: `${loupePos.pxY - radius}px`,
+          left: `${loupePxX - radius}px`,
+          top: `${loupePxY - radius}px`,
           backgroundImage: `url(${photo.blobUrl})`,
           backgroundSize: `${bgW}px ${bgH}px`,
           backgroundPosition: `${bgX}px ${bgY}px`
         };
       };
-
-      const focusSpot = photo.focusSpot;
 
       return (
         <div className="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-md flex flex-col md:flex-row overflow-hidden">
@@ -1255,10 +1157,10 @@ JSON Schema:
                     />
                   </div>
                 )}
-                {focusSpot && (
-                  <span className="text-[9px] bg-sky-500/20 text-sky-400 border border-sky-500/30 px-1.5 py-0.5 rounded-full font-semibold flex items-center space-x-1" title={focusSpot.source}>
+                {photo.focusSpot && (
+                  <span className="text-[9px] bg-sky-500/20 text-sky-400 border border-sky-500/30 px-1.5 py-0.5 rounded-full font-semibold flex items-center space-x-1">
                     <Icon name="target" className="w-3 h-3" />
-                    <span className="hidden sm:inline">{focusSpot.source && focusSpot.source.includes('EXIF') ? 'AF Spot (EXIF)' : 'Focus Hotspot'}</span>
+                    <span className="hidden sm:inline">Focus Target</span>
                   </span>
                 )}
                 {cropBox && cropBox.width > 0 && (
@@ -1266,7 +1168,7 @@ JSON Schema:
                     onClick={() => setShowCroppedPreview(!showCroppedPreview)}
                     className={`text-[10px] px-2 py-0.5 rounded-full font-semibold border transition ${showCroppedPreview ? 'bg-emerald-600 text-white border-emerald-500' : 'bg-slate-800 text-slate-400 border-slate-700'}`}
                   >
-                    {showCroppedPreview ? 'Cropped' : 'Full'}
+                    {showCroppedPreview ? 'Cropped Framing' : 'Full Frame'}
                   </button>
                 )}
               </div>
@@ -1302,6 +1204,13 @@ JSON Schema:
                 >
                   <Icon name="feather" className="w-4 h-4 text-emerald-400" />
                 </button>
+                <button
+                  onClick={() => onDeletePhoto && onDeletePhoto(photo.id)}
+                  className="p-1.5 text-slate-400 hover:text-red-400 rounded-lg hover:bg-slate-800/80 transition"
+                  title="Delete photo"
+                >
+                  <Icon name="trash" className="w-5 h-5" />
+                </button>
                 <button onClick={onClose} className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800">
                   <Icon name="x" className="w-5 h-5" />
                 </button>
@@ -1313,19 +1222,19 @@ JSON Schema:
               onMouseMove={handlePointerMove}
               onMouseDown={handlePointerDown}
               onMouseUp={handlePointerUp}
-              onDoubleClick={handleDoubleClick}
+              onWheel={handleWheelZoom}
               onTouchStart={(e) => { handlePointerDown(e); handlePointerMove(e); }}
               onTouchMove={handlePointerMove}
               onTouchEnd={handlePointerUp}
-              className={`flex-1 relative flex items-center justify-center p-2 sm:p-4 overflow-hidden select-none touch-canvas ${viewMode === 'lightbox' ? (isDraggingPan ? 'cursor-grabbing' : 'cursor-grab') : 'cursor-crosshair'}`}
+              className="flex-1 relative flex items-center justify-center p-2 sm:p-4 overflow-hidden select-none cursor-crosshair touch-canvas"
             >
               {showCroppedPreview && cropBox && cropBox.width > 0 && viewMode !== 'crop' ? (
                 <div 
-                  ref={imgRef}
-                  className="w-full h-full flex items-center justify-center transition-transform duration-75"
+                  className="w-full h-full flex items-center justify-center"
                   style={viewMode === 'lightbox' ? { transform: `translate(${panZoom.x}px, ${panZoom.y}px) scale(${panZoom.scale})` } : {}}
                 >
                   <CroppedImage
+                    innerRef={imgRef}
                     src={photo.blobUrl}
                     alt={photo.name}
                     cropBox={cropBox}
@@ -1335,7 +1244,7 @@ JSON Schema:
               ) : (
                 <div 
                   className="relative flex items-center justify-center max-h-full max-w-full"
-                  style={viewMode === 'lightbox' ? { transform: `translate(${panZoom.x}px, ${panZoom.y}px) scale(${panZoom.scale})`, transition: 'transform 75ms' } : {}}
+                  style={viewMode === 'lightbox' ? { transform: `translate(${panZoom.x}px, ${panZoom.y}px) scale(${panZoom.scale})` } : {}}
                 >
                   <img
                     ref={imgRef}
@@ -1344,21 +1253,12 @@ JSON Schema:
                     className="max-h-[calc(100vh-8rem)] max-w-full object-contain pointer-events-none"
                   />
 
-                  {/* Focus Spot Target Overlay */}
-                  {focusSpot && viewMode !== 'crop' && !isZoomedOrCropped && (
+                  {photo.focusSpot && viewMode !== 'crop' && !isZoomedOrCropped && (
                     <div
-                      className="absolute border-2 border-sky-400 bg-sky-500/20 rounded-lg pointer-events-none flex flex-col items-center justify-center shadow-2xl animate-pulse z-20"
-                      style={{
-                        left: `${focusSpot.xPct - (focusSpot.widthPct || 20) / 2}%`,
-                        top: `${focusSpot.yPct - (focusSpot.heightPct || 20) / 2}%`,
-                        width: `${focusSpot.widthPct || 20}%`,
-                        height: `${focusSpot.heightPct || 20}%`
-                      }}
+                      className="absolute w-12 h-12 -ml-6 -mt-6 border-2 border-sky-400/80 bg-sky-500/10 rounded-full pointer-events-none flex items-center justify-center shadow-lg animate-pulse"
+                      style={{ left: `${photo.focusSpot.xPct}%`, top: `${photo.focusSpot.yPct}%` }}
                     >
-                      <span className="w-2.5 h-2.5 rounded-full bg-sky-300 shadow-md"></span>
-                      <span className="text-[8px] sm:text-[9px] font-extrabold text-sky-200 bg-slate-950/90 px-1 py-0.2 rounded mt-1 border border-sky-400/40 whitespace-nowrap shadow">
-                        {focusSpot.source && focusSpot.source.includes('EXIF') ? 'AF Target Spot' : 'Focus Hotspot'}
-                      </span>
+                      <span className="w-1.5 h-1.5 rounded-full bg-sky-300"></span>
                     </div>
                   )}
                 </div>
@@ -1404,8 +1304,8 @@ JSON Schema:
 
             <div className="h-14 bg-slate-900/90 border-t border-slate-800 px-3 sm:px-4 flex items-center justify-between z-20 gap-2">
               {viewMode === 'loupe' ? (
-                <div className="flex items-center space-x-2 w-48 sm:w-64">
-                  <span className="text-[11px] sm:text-xs font-semibold text-slate-400 flex-shrink-0">Screen Zoom:</span>
+                <div className="flex items-center space-x-2 w-52 sm:w-72">
+                  <span className="text-[11px] sm:text-xs font-semibold text-slate-300 flex-shrink-0">Loupe Magnification:</span>
                   <input
                     type="range"
                     min="1"
@@ -1420,47 +1320,17 @@ JSON Schema:
                   </span>
                 </div>
               ) : viewMode === 'lightbox' ? (
-                <div className="flex items-center space-x-2">
-                  <div className="flex items-center space-x-1 bg-slate-950 p-1 rounded-xl border border-slate-800">
-                    <button
-                      onClick={() => setPanZoom(p => {
-                        const newScale = Math.max(1, p.scale - 0.5);
-                        return { ...p, scale: newScale, x: newScale === 1 ? 0 : p.x, y: newScale === 1 ? 0 : p.y };
-                      })}
-                      className="p-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-300 transition"
-                      title="Zoom Out"
-                    >
-                      <Icon name="zoomOut" className="w-4 h-4" />
-                    </button>
-                    <span className="text-xs font-mono font-bold text-emerald-400 px-2 min-w-[45px] text-center">
-                      {(panZoom.scale * 100).toFixed(0)}%
-                    </span>
-                    <button
-                      onClick={() => setPanZoom(p => ({ ...p, scale: Math.min(10, p.scale + 0.5) }))}
-                      className="p-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-300 transition"
-                      title="Zoom In"
-                    >
-                      <Icon name="zoomIn" className="w-4 h-4" />
-                    </button>
-                  </div>
-
-                  <button
-                    onClick={() => setPanZoom({ scale: 2.5, x: 0, y: 0 })}
-                    className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl border border-slate-700 transition"
-                  >
-                    1:1
+                <div className="flex items-center space-x-1 sm:space-x-2">
+                  <button onClick={() => setPanZoom(p => ({ ...p, scale: Math.max(1, p.scale - 0.5) }))} className="p-1 bg-slate-800 rounded text-slate-300">
+                    <Icon name="zoomOut" className="w-4 h-4" />
                   </button>
-                  <button
-                    onClick={() => setPanZoom({ scale: 1, x: 0, y: 0 })}
-                    className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 text-xs font-medium rounded-xl border border-slate-700 transition flex items-center space-x-1"
-                  >
-                    <Icon name="refresh" className="w-3.5 h-3.5" />
-                    <span className="hidden sm:inline">Fit</span>
+                  <span className="text-xs font-semibold text-slate-300 px-1">{(panZoom.scale * 100).toFixed(0)}%</span>
+                  <button onClick={() => setPanZoom(p => ({ ...p, scale: Math.min(8, p.scale + 0.5) }))} className="p-1 bg-slate-800 rounded text-slate-300">
+                    <Icon name="zoomIn" className="w-4 h-4" />
                   </button>
-
-                  <span className="hidden lg:inline-block text-[10px] text-slate-400 italic ml-2">
-                    Double-click to toggle zoom • Drag to pan
-                  </span>
+                  <button onClick={() => setPanZoom({ scale: 1, x: 0, y: 0 })} className="text-[10px] sm:text-[11px] bg-slate-800 px-2 py-1 rounded text-slate-400 ml-1">
+                    Reset
+                  </button>
                 </div>
               ) : (
                 <div className="text-[11px] text-slate-400 truncate max-w-[180px] sm:max-w-none">
@@ -1514,7 +1384,7 @@ JSON Schema:
               <div className="flex items-center justify-between border-b border-slate-800/80 pb-2">
                 <div className="flex items-center space-x-1.5">
                   <Icon name="camera" className="w-4 h-4 text-emerald-400" />
-                  <span className="text-xs font-bold text-slate-200">Focus & Sharpness Rating</span>
+                  <span className="text-xs font-bold text-slate-200">Focus & Star Rating</span>
                 </div>
                 {photo.sharpness !== null && (
                   <span className="text-[10px] text-slate-400 font-mono">
@@ -1525,7 +1395,7 @@ JSON Schema:
 
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-medium text-slate-400">User Star Rating:</span>
+                  <span className="text-[11px] font-medium text-slate-400">User Rating:</span>
                   <span className="text-xs font-bold text-amber-400">{activeStars} / 5 Stars</span>
                 </div>
                 <div className="bg-slate-900 p-2.5 rounded-xl border border-slate-800/80 flex items-center justify-center">
@@ -1535,7 +1405,6 @@ JSON Schema:
                     size="w-6 h-6"
                   />
                 </div>
-                <p className="text-[10px] text-slate-500 text-center">Tap stars above to manually override photo rating</p>
               </div>
 
               <p className="text-[11px] text-slate-300 leading-relaxed pt-1 border-t border-slate-800/80">
@@ -1799,12 +1668,44 @@ JSON Schema:
     }) {
       const pageSize = 20;
 
+      const [selectedIds, setSelectedIds] = useState(new Set());
       const [uploading, setUploading] = useState(false);
       const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0 });
       const [rating, setRating] = useState(false);
       const [ratingProgress, setRatingProgress] = useState({ current: 0, total: 0 });
+      const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
       const abortUploadRef = useRef(false);
       const abortRatingRef = useRef(false);
+      const fileInputRef = useRef(null);
+
+      const toggleSelectPhoto = (photoId, e) => {
+        if (e) e.stopPropagation();
+        setSelectedIds(prev => {
+          const next = new Set(prev);
+          if (next.has(photoId)) {
+            next.delete(photoId);
+          } else {
+            next.add(photoId);
+          }
+          return next;
+        });
+      };
+
+      const handleDeleteSinglePhoto = (photoId, e) => {
+        if (e) e.stopPropagation();
+        const photo = photos.find(p => p.id === photoId);
+        if (photo) {
+          try { if (photo.fileHandle && typeof photo.fileHandle.remove === 'function') photo.fileHandle.remove(); } catch (err) {}
+          try { if (photo.blobUrl) URL.revokeObjectURL(photo.blobUrl); } catch (err) {}
+          try { if (photo.thumbnailUrl) URL.revokeObjectURL(photo.thumbnailUrl); } catch (err) {}
+        }
+        setPhotos(prev => prev.filter(p => p.id !== photoId));
+        setSelectedIds(prev => {
+          const next = new Set(prev);
+          next.delete(photoId);
+          return next;
+        });
+      };
 
       const handleFileUpload = async (e) => {
         const files = Array.from(e.target.files || []);
@@ -1822,6 +1723,7 @@ JSON Schema:
           const photoObj = {
             id: 'photo_' + Math.random().toString(36).substring(2, 9),
             file: file,
+            fileHandle: file.handle || null,
             name: file.name,
             size: file.size,
             lastModified: file.lastModified,
@@ -1840,6 +1742,7 @@ JSON Schema:
         }
 
         setUploading(false);
+        if (fileInputRef.current) fileInputRef.current.value = '';
       };
 
       const handleBatchRateFocus = async () => {
@@ -1907,11 +1810,113 @@ JSON Schema:
         return list;
       }, [photos, filterSharpness, sortBy]);
 
+      const confirmAndDeleteFiltered = async () => {
+        setShowDeleteConfirmModal(false);
+
+        if (selectedIds.size > 0) {
+          const toDelete = photos.filter(p => selectedIds.has(p.id));
+          for (const photo of toDelete) {
+            if (photo.fileHandle && typeof photo.fileHandle.remove === 'function') {
+              try { await photo.fileHandle.remove(); } catch (e) {}
+            }
+            try { if (photo.blobUrl) URL.revokeObjectURL(photo.blobUrl); } catch (e) {}
+            try { if (photo.thumbnailUrl) URL.revokeObjectURL(photo.thumbnailUrl); } catch (e) {}
+          }
+          setPhotos(prev => prev.filter(p => !selectedIds.has(p.id)));
+          setSelectedIds(new Set());
+        } else {
+          if (!processedPhotos.length) return;
+          const idsToRemove = new Set(processedPhotos.map(p => p.id));
+          
+          for (const photo of processedPhotos) {
+            if (photo.fileHandle && typeof photo.fileHandle.remove === 'function') {
+              try { await photo.fileHandle.remove(); } catch (e) {}
+            }
+            try { if (photo.blobUrl) URL.revokeObjectURL(photo.blobUrl); } catch (e) {}
+            try { if (photo.thumbnailUrl) URL.revokeObjectURL(photo.thumbnailUrl); } catch (e) {}
+          }
+
+          setPhotos(prev => prev.filter(p => !idsToRemove.has(p.id)));
+        }
+        setCurrentPage(1);
+      };
+
+      const handleExportFiltered = async () => {
+        const listToExport = selectedIds.size > 0 ? photos.filter(p => selectedIds.has(p.id)) : processedPhotos;
+        if (!listToExport.length) return;
+
+        let exportedIds = new Set();
+
+        if ('showDirectoryPicker' in window) {
+          try {
+            // Force readwrite mode to ensure system dialog allows saving
+            const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+            let exportedCount = 0;
+            
+            for (const photo of listToExport) {
+              if (photo.file) {
+                const newFileHandle = await dirHandle.getFileHandle(photo.name, { create: true });
+                const writable = await newFileHandle.createWritable();
+                await writable.write(photo.file);
+                await writable.close();
+                exportedCount++;
+                exportedIds.add(photo.id);
+              }
+            }
+            
+            // Clean up and remove exported photos from the main list
+            if (exportedIds.size > 0) {
+              setPhotos(prev => prev.filter(p => !exportedIds.has(p.id)));
+              setSelectedIds(prev => {
+                const next = new Set(prev);
+                exportedIds.forEach(id => next.delete(id));
+                return next;
+              });
+            }
+            
+            alert(`Successfully exported ${exportedCount} photo(s) to your selected folder and removed them from the workspace!`);
+            setCurrentPage(1);
+            return;
+          } catch (err) {
+            if (err.name === 'AbortError') return; // User cancelled the dialog
+            console.warn('showDirectoryPicker export fallback:', err);
+          }
+        }
+
+        // Fallback if browser doesn't support system directory picker
+        listToExport.forEach((photo, i) => {
+          setTimeout(() => {
+            const a = document.createElement('a');
+            a.href = photo.blobUrl;
+            a.download = photo.name;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+          }, i * 200);
+          exportedIds.add(photo.id);
+        });
+
+        // Remove from list on fallback
+        setPhotos(prev => prev.filter(p => !exportedIds.has(p.id)));
+        setSelectedIds(prev => {
+          const next = new Set(prev);
+          exportedIds.forEach(id => next.delete(id));
+          return next;
+        });
+        setCurrentPage(1);
+        alert(`Exporting ${listToExport.length} photo(s). They have been removed from the workspace.`);
+      };
+
       const totalPages = Math.ceil(processedPhotos.length / pageSize) || 1;
       const paginatedPhotos = useMemo(() => {
         const start = (currentPage - 1) * pageSize;
         return processedPhotos.slice(start, start + pageSize);
       }, [processedPhotos, currentPage]);
+
+      const isSelectionActive = selectedIds.size > 0;
+      const deleteButtonText = isSelectionActive 
+        ? `Delete Selected (${selectedIds.size})` 
+        : `Delete Filtered (${processedPhotos.length})`;
 
       return (
         <div className="flex-1 overflow-y-auto p-3 sm:p-4 md:p-6 space-y-4 sm:space-y-6 pb-20 md:pb-6">
@@ -1929,7 +1934,14 @@ JSON Schema:
                 <label className="cursor-pointer bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs px-3.5 py-2.5 rounded-xl shadow-lg transition flex items-center justify-center space-x-1.5 active:scale-95">
                   <Icon name="upload" className="w-4 h-4" />
                   <span>Upload Photos</span>
-                  <input type="file" multiple accept="image/*" onChange={handleFileUpload} className="hidden" />
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    accept="image/*"
+                    onChange={handleFileUpload}
+                    className="hidden"
+                  />
                 </label>
 
                 <button
@@ -1977,13 +1989,13 @@ JSON Schema:
               </div>
             )}
 
-            <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center sm:justify-between pt-2 border-t border-slate-800 text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 pt-2 border-t border-slate-800 text-xs items-center">
               <div className="flex items-center space-x-1.5">
-                <span className="text-slate-400 font-medium text-[11px] sm:text-xs">Filter Stars:</span>
+                <span className="text-slate-400 font-medium text-[11px] sm:text-xs">Filter:</span>
                 <select
                   value={filterSharpness}
                   onChange={(e) => { setFilterSharpness(e.target.value); setCurrentPage(1); }}
-                  className="bg-slate-950 border border-slate-800 text-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-emerald-500 text-[11px] sm:text-xs w-full sm:w-auto"
+                  className="bg-slate-950 border border-slate-800 text-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-emerald-500 text-[11px] sm:text-xs w-full"
                 >
                   <option value="all">All Photos ({photos.length})</option>
                   <option value="5star">5 Stars (Tack Sharp)</option>
@@ -1998,12 +2010,34 @@ JSON Schema:
                 <select
                   value={sortBy}
                   onChange={(e) => setSortBy(e.target.value)}
-                  className="bg-slate-950 border border-slate-800 text-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-emerald-500 text-[11px] sm:text-xs w-full sm:w-auto"
+                  className="bg-slate-950 border border-slate-800 text-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-emerald-500 text-[11px] sm:text-xs w-full"
                 >
                   <option value="name">File Name</option>
                   <option value="date">Date Captured</option>
                   <option value="sharpness">Star Rating</option>
                 </select>
+              </div>
+
+              <div className="flex justify-end space-x-2 sm:col-span-2">
+                <button
+                  onClick={handleExportFiltered}
+                  disabled={!isSelectionActive && !processedPhotos.length}
+                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-semibold rounded-lg transition flex items-center space-x-1 disabled:opacity-50 text-[11px] sm:text-xs"
+                  title="Export photos to directory"
+                >
+                  <Icon name="download" className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Export ({isSelectionActive ? selectedIds.size : processedPhotos.length})</span>
+                </button>
+
+                <button
+                  onClick={() => setShowDeleteConfirmModal(true)}
+                  disabled={!isSelectionActive && !processedPhotos.length}
+                  className="px-3 py-1.5 bg-red-600/20 hover:bg-red-600/30 text-red-400 border border-red-500/30 font-semibold rounded-lg transition flex items-center space-x-1 disabled:opacity-50 text-[11px] sm:text-xs"
+                  title={isSelectionActive ? "Delete checked photos" : "Delete filtered photos"}
+                >
+                  <Icon name="trash" className="w-3.5 h-3.5" />
+                  <span>{deleteButtonText}</span>
+                </button>
               </div>
             </div>
           </div>
@@ -2012,11 +2046,12 @@ JSON Schema:
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
               {paginatedPhotos.map(photo => {
                 const currentStars = photo.userStars || photo.stars || scoreToStars(photo.sharpness);
+                const isChecked = selectedIds.has(photo.id);
                 return (
                   <div
                     key={photo.id}
                     onClick={() => onSelectPhoto(photo)}
-                    className="group relative aspect-square bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-lg cursor-pointer hover:border-emerald-500 transition flex items-center justify-center p-1"
+                    className={`group relative aspect-square bg-slate-900 border rounded-2xl overflow-hidden shadow-lg cursor-pointer hover:border-emerald-500 transition flex items-center justify-center p-1 ${isChecked ? 'border-emerald-500 ring-2 ring-emerald-500/50' : 'border-slate-800'}`}
                   >
                     <CroppedImage
                       src={photo.thumbnailUrl}
@@ -2026,12 +2061,34 @@ JSON Schema:
                       imgClassName="group-hover:scale-105 transition-transform duration-300"
                     />
 
-                    <div className="absolute top-2 right-2 z-10 flex items-center space-x-1">
+                    {/* Checkbox for individual selection */}
+                    <div 
+                      onClick={(e) => toggleSelectPhoto(photo.id, e)}
+                      className="absolute top-2 left-2 z-20 p-1 rounded-md bg-slate-950/80 border border-slate-700/80 hover:border-emerald-400 transition"
+                      title="Select photo"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={() => {}}
+                        className="w-4 h-4 accent-emerald-500 rounded cursor-pointer pointer-events-none block"
+                      />
+                    </div>
+
+                    {/* Quick Actions */}
+                    <div className="absolute top-2 right-2 z-20 flex items-center space-x-1">
                       {photo.focusSpot && (
                         <span className="bg-sky-600/90 text-white text-[9px] font-bold p-1 rounded-full shadow-md backdrop-blur-md" title={photo.focusSpot.source || "Focus Target Spot"}>
                           <Icon name="target" className="w-3 h-3" />
                         </span>
                       )}
+                      <button
+                        onClick={(e) => handleDeleteSinglePhoto(photo.id, e)}
+                        className="p-1 bg-slate-950/80 hover:bg-red-600 text-slate-300 hover:text-white rounded-full shadow-md backdrop-blur-md transition"
+                        title="Delete photo"
+                      >
+                        <Icon name="trash" className="w-3 h-3" />
+                      </button>
                     </div>
 
                     <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-950 via-slate-950/80 to-transparent p-2 flex flex-col justify-end space-y-1 z-10">
@@ -2081,6 +2138,44 @@ JSON Schema:
                 >
                   Next
                 </button>
+              </div>
+            </div>
+          )}
+
+          {showDeleteConfirmModal && (
+            <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4" onClick={(e) => e.stopPropagation()}>
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 sm:p-6 max-w-sm w-full shadow-2xl space-y-4">
+                <div className="flex items-center space-x-3 text-red-400">
+                  <div className="p-2 bg-red-500/10 border border-red-500/20 rounded-xl">
+                    <Icon name="trash" className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-white text-sm sm:text-base">
+                      {isSelectionActive ? "Delete Selected Photos" : "Delete Filtered Photos"}
+                    </h3>
+                    <p className="text-[11px] text-slate-400">Remove from workspace list</p>
+                  </div>
+                </div>
+                
+                <p className="text-xs text-slate-300 leading-relaxed bg-slate-950 p-3 rounded-xl border border-slate-800">
+                  Are you sure you want to delete <strong className="text-white font-mono">{isSelectionActive ? selectedIds.size : processedPhotos.length}</strong> photo(s) {isSelectionActive ? "currently checked" : "matching your filter"}?
+                </p>
+
+                <div className="flex items-center justify-end space-x-2 pt-2 border-t border-slate-800">
+                  <button
+                    onClick={() => setShowDeleteConfirmModal(false)}
+                    className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl transition"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={confirmAndDeleteFiltered}
+                    className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white text-xs font-semibold rounded-xl transition shadow-lg flex items-center space-x-1.5"
+                  >
+                    <Icon name="trash" className="w-3.5 h-3.5" />
+                    <span>Delete {isSelectionActive ? selectedIds.size : processedPhotos.length} Photo{(isSelectionActive ? selectedIds.size : processedPhotos.length) > 1 ? 's' : ''}</span>
+                  </button>
+                </div>
               </div>
             </div>
           )}
@@ -2255,6 +2350,27 @@ JSON Schema:
         saveVaultToStorage(updated);
       };
 
+      const handleDeletePhotoInViewer = (photoId) => {
+        const currentIndex = photos.findIndex(p => p.id === photoId);
+        const updatedPhotos = photos.filter(p => p.id !== photoId);
+
+        const photoToDelete = photos.find(p => p.id === photoId);
+        if (photoToDelete) {
+          try { if (photoToDelete.fileHandle && typeof photoToDelete.fileHandle.remove === 'function') photoToDelete.fileHandle.remove(); } catch (e) {}
+          try { if (photoToDelete.blobUrl) URL.revokeObjectURL(photoToDelete.blobUrl); } catch (e) {}
+          try { if (photoToDelete.thumbnailUrl) URL.revokeObjectURL(photoToDelete.thumbnailUrl); } catch (e) {}
+        }
+
+        setPhotos(updatedPhotos);
+
+        if (updatedPhotos.length > 0) {
+          const nextIndex = currentIndex < updatedPhotos.length ? currentIndex : updatedPhotos.length - 1;
+          setSelectedPhoto(updatedPhotos[nextIndex]);
+        } else {
+          setSelectedPhoto(null);
+        }
+      };
+
       const rpmUsedPct = Math.round((tokenUsageState.minuteRequests / GEMINI_QUOTAS.MAX_RPM) * 100);
 
       return (
@@ -2373,6 +2489,7 @@ JSON Schema:
 
           {selectedPhoto && (
             <InteractivePhotoViewer
+              key={selectedPhoto.id}
               photo={selectedPhoto}
               onClose={() => setSelectedPhoto(null)}
               onUpdatePhoto={(updated) => {
@@ -2380,6 +2497,7 @@ JSON Schema:
                 setSelectedPhoto(updated);
               }}
               onSaveToVault={handleSaveToVault}
+              onDeletePhoto={handleDeletePhotoInViewer}
               userApiKey={userApiKey}
               initialLocation={userLocation}
             />
