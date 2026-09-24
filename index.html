@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes, viewport-fit=cover">
   <title>BirdVault Pro - Wildlife Photography Assistant</title>
   
-  <!-- Mobile & PWA Standalone Support -->
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="mobile-web-app-capable" content="yes">
@@ -90,12 +89,11 @@
   <script type="text/babel">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
 
-    // Default Quotas for Gemini Flash Tier
     const GEMINI_QUOTAS = {
-      MAX_RPM: 15,           // Requests per minute
-      MAX_TPM: 1000000,      // Tokens per minute
-      MAX_RPD: 1500,         // Requests per day
-      ESTIMATED_TOKENS_PER_IMG: 258 // Est. vision tokens per cropped ROI image
+      MAX_RPM: 15,
+      MAX_TPM: 1000000,
+      MAX_RPD: 1500,
+      ESTIMATED_TOKENS_PER_IMG: 258
     };
 
     function scoreToStars(score) {
@@ -103,7 +101,6 @@
       return Math.max(1, Math.min(5, Math.ceil(score / 2)));
     }
 
-    // Token Tracker Utilities & Local Storage Management
     function getStoredTokenUsage() {
       try {
         const stored = localStorage.getItem('birdvault_gemini_usage');
@@ -355,30 +352,87 @@
       );
     }
 
-    function CroppedImage({ src, alt, cropBox, className = "", imgClassName = "", innerRef = null }) {
-      if (cropBox && cropBox.width > 0 && cropBox.height > 0) {
-        const scaleX = 100 / cropBox.width;
-        const scaleY = 100 / cropBox.height;
+    function CroppedImage({ src, alt, cropBox, className = "", imgClassName = "", innerRef = null, fitMode = "contain", children = null }) {
+      const [naturalSize, setNaturalSize] = useState(null);
+
+      useEffect(() => {
+        if (!src) return;
+        let isMounted = true;
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+          if (isMounted) {
+            setNaturalSize({ w: img.naturalWidth || 1000, h: img.naturalHeight || 1000 });
+          }
+        };
+        img.src = src;
+        return () => { isMounted = false; };
+      }, [src]);
+
+      // Calculate exact aspect ratio: (cropWidth% / cropHeight%) * (naturalW / naturalH)
+      const aspect = useMemo(() => {
+        if (!naturalSize) return null;
+        const naturalAspect = naturalSize.w / naturalSize.h;
+        if (cropBox && cropBox.width > 0 && cropBox.height > 0) {
+          return (cropBox.width / cropBox.height) * naturalAspect;
+        }
+        return naturalAspect;
+      }, [cropBox, naturalSize]);
+
+      // Dynamically lock container aspect ratio for distortion-free rendering
+      const frameStyle = useMemo(() => {
+        if (!aspect || fitMode !== "contain") return {};
+        return {
+          aspectRatio: `${aspect}`,
+          width: `min(100%, calc((100vh - 8rem) * ${aspect}))`,
+          maxHeight: 'calc(100vh - 8rem)'
+        };
+      }, [aspect, fitMode]);
+
+      const preserveAspect = fitMode === "cover" ? "xMidYMid slice" : "xMidYMid meet";
+
+      if (cropBox && cropBox.width > 0 && cropBox.height > 0 && naturalSize) {
+        const cropX = (cropBox.x / 100) * naturalSize.w;
+        const cropY = (cropBox.y / 100) * naturalSize.h;
+        const cropW = (cropBox.width / 100) * naturalSize.w;
+        const cropH = (cropBox.height / 100) * naturalSize.h;
+
         return (
-          <div className={`relative overflow-hidden flex items-center justify-center bg-slate-950 ${className}`}>
-            <img
+          <div 
+            className={`relative overflow-hidden flex items-center justify-center bg-slate-950 ${className}`}
+            style={frameStyle}
+          >
+            <svg
               ref={innerRef}
-              src={src}
-              alt={alt}
-              className={`absolute max-w-none object-contain ${imgClassName}`}
-              style={{
-                width: `${scaleX * 100}%`,
-                height: `${scaleY * 100}%`,
-                left: `${-cropBox.x * scaleX}%`,
-                top: `${-cropBox.y * scaleY}%`
-              }}
-            />
+              viewBox={`${cropX} ${cropY} ${cropW} ${cropH}`}
+              preserveAspectRatio={preserveAspect}
+              className={`w-full h-full block ${imgClassName}`}
+            >
+              <image
+                href={src}
+                x="0"
+                y="0"
+                width={naturalSize.w}
+                height={naturalSize.h}
+              />
+            </svg>
+            {children}
           </div>
         );
       }
+
       return (
-        <div className={`relative overflow-hidden flex items-center justify-center bg-slate-950 ${className}`}>
-          <img ref={innerRef} src={src} alt={alt} className={`max-w-full max-h-full object-contain ${imgClassName}`} />
+        <div 
+          className={`relative overflow-hidden flex items-center justify-center bg-slate-950 ${className}`}
+          style={frameStyle}
+        >
+          <img
+            ref={innerRef}
+            src={src}
+            alt={alt}
+            className={`${fitMode === 'cover' ? 'w-full h-full object-cover' : 'w-full h-full object-contain'} ${imgClassName}`}
+          />
+          {children}
         </div>
       );
     }
@@ -502,7 +556,6 @@
               gray[i / 4] = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
             }
 
-            // Spatial 5x5 Laplacian grid analysis if focusSpot is null
             if (!focusSpot) {
               let maxVar = -1;
               let bestX = 50, bestY = 50;
@@ -757,7 +810,6 @@
               sh = (cropBox.height / 100) * img.height;
             }
             
-            // Mobile WebKit memory safety bound (max 2048px dimension)
             const maxDim = 2048;
             let targetW = sw;
             let targetH = sh;
@@ -924,7 +976,6 @@ JSON Schema:
       const activeStars = photo.userStars || photo.stars || scoreToStars(photo.sharpness);
       const isZoomedOrCropped = showCroppedPreview || (viewMode === 'lightbox' && panZoom.scale > 1) || (viewMode === 'loupe' && zoomLevel > 1);
 
-      // Re-evaluate focus or spot on photo change
       useEffect(() => {
         if (photo.sharpness === null && !evaluatingFocus) {
           setEvaluatingFocus(true);
@@ -956,16 +1007,25 @@ JSON Schema:
         onUpdatePhoto(updatedPhoto);
       };
 
-      const getPointerPos = useCallback((e) => {
-        if (!containerRef.current) return { x: 0, y: 0, pctX: 50, pctY: 50 };
+      // Measure pointer position relative to the rendered photo element itself (0 to 100%)
+      const getImagePointerPos = useCallback((e) => {
+        if (!imgRef.current) return { pctX: 50, pctY: 50 };
+        const rect = imgRef.current.getBoundingClientRect();
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+        const pctX = Math.max(0, Math.min(100, ((clientX - rect.left) / rect.width) * 100));
+        const pctY = Math.max(0, Math.min(100, ((clientY - rect.top) / rect.height) * 100));
+        return { pctX, pctY, clientX, clientY };
+      }, []);
+
+      const getContainerPointerPos = useCallback((e) => {
+        if (!containerRef.current) return { pctX: 50, pctY: 50 };
         const rect = containerRef.current.getBoundingClientRect();
         const clientX = e.touches ? e.touches[0].clientX : e.clientX;
         const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-        const x = clientX - rect.left;
-        const y = clientY - rect.top;
-        const pctX = Math.max(0, Math.min(100, (x / rect.width) * 100));
-        const pctY = Math.max(0, Math.min(100, (y / rect.height) * 100));
-        return { x, y, pctX, pctY, clientX, clientY };
+        const pctX = Math.max(0, Math.min(100, ((clientX - rect.left) / rect.width) * 100));
+        const pctY = Math.max(0, Math.min(100, ((clientY - rect.top) / rect.height) * 100));
+        return { x: clientX - rect.left, y: clientY - rect.top, pctX, pctY, clientX, clientY };
       }, []);
 
       const getTouchDistance = (e) => {
@@ -989,30 +1049,30 @@ JSON Schema:
           return;
         }
 
-        const pos = getPointerPos(e);
+        const containerPos = getContainerPointerPos(e);
 
         if (viewMode === 'loupe') {
-          // If active click/touch or moving within container, update anchored loupe spot
           if (e.buttons > 0 || (e.touches && e.touches.length > 0)) {
-            setLoupePos({ x: pos.pctX, y: pos.pctY });
+            setLoupePos({ x: containerPos.pctX, y: containerPos.pctY });
           }
         }
 
         if (isDrawingCrop && cropStartRef.current) {
+          const imgPos = getImagePointerPos(e);
           const startX = cropStartRef.current.x;
           const startY = cropStartRef.current.y;
-          const left = Math.min(startX, pos.pctX);
-          const top = Math.min(startY, pos.pctY);
-          const width = Math.abs(pos.pctX - startX);
-          const height = Math.abs(pos.pctY - startY);
+          const left = Math.min(startX, imgPos.pctX);
+          const top = Math.min(startY, imgPos.pctY);
+          const width = Math.abs(imgPos.pctX - startX);
+          const height = Math.abs(imgPos.pctY - startY);
 
           const updatedCrop = { x: left, y: top, width, height };
           setCropBox(updatedCrop);
         } else if (isDraggingPan && viewMode === 'lightbox') {
           setPanZoom(p => ({
             ...p,
-            x: pos.clientX - dragStartRef.current.x,
-            y: pos.clientY - dragStartRef.current.y
+            x: containerPos.clientX - dragStartRef.current.x,
+            y: containerPos.clientY - dragStartRef.current.y
           }));
         }
       };
@@ -1023,17 +1083,18 @@ JSON Schema:
           return;
         }
 
-        const pos = getPointerPos(e);
+        const containerPos = getContainerPointerPos(e);
 
         if (viewMode === 'loupe') {
-          setLoupePos({ x: pos.pctX, y: pos.pctY });
+          setLoupePos({ x: containerPos.pctX, y: containerPos.pctY });
         } else if (viewMode === 'crop') {
-          cropStartRef.current = { x: pos.pctX, y: pos.pctY };
-          setCropBox({ x: pos.pctX, y: pos.pctY, width: 0, height: 0 });
+          const imgPos = getImagePointerPos(e);
+          cropStartRef.current = { x: imgPos.pctX, y: imgPos.pctY };
+          setCropBox({ x: imgPos.pctX, y: imgPos.pctY, width: 0, height: 0 });
           setIsDrawingCrop(true);
         } else if (viewMode === 'lightbox') {
           setIsDraggingPan(true);
-          dragStartRef.current = { x: pos.clientX - panZoom.x, y: pos.clientY - panZoom.y };
+          dragStartRef.current = { x: containerPos.clientX - panZoom.x, y: containerPos.clientY - panZoom.y };
         }
       };
 
@@ -1077,6 +1138,12 @@ JSON Schema:
         onUpdatePhoto({ ...currentPhoto, identification: result, cropBox: cropBox, locationText: locationInput });
       };
 
+      const handleClearCrop = () => {
+        setCropBox(null);
+        setShowCroppedPreview(false);
+        onUpdatePhoto({ ...photo, cropBox: null });
+      };
+
       const getLoupeStyle = () => {
         if (!containerRef.current || !imgRef.current) return {};
         const containerRect = containerRef.current.getBoundingClientRect();
@@ -1085,19 +1152,17 @@ JSON Schema:
         if (!rect.width || !rect.height) return {};
 
         const radius = window.innerWidth < 640 ? 72 : 96;
-        const naturalW = imgEl.naturalWidth || 1000;
-        const naturalH = imgEl.naturalHeight || 750;
+
+        const naturalW = imgEl.naturalWidth || (imgEl.viewBox && imgEl.viewBox.baseVal ? imgEl.viewBox.baseVal.width : 1000);
+        const naturalH = imgEl.naturalHeight || (imgEl.viewBox && imgEl.viewBox.baseVal ? imgEl.viewBox.baseVal.height : 750);
         const aspect = naturalW / naturalH;
 
-        // Position of loupe center on screen relative to container
         const loupePxX = (loupePos.x / 100) * containerRect.width;
         const loupePxY = (loupePos.y / 100) * containerRect.height;
 
-        // Exact client coordinates of the loupe lens center
         const loupeClientX = containerRect.left + loupePxX;
         const loupeClientY = containerRect.top + loupePxY;
 
-        // Exact relative percentage on the rendered image bounding box
         const imgPctX = Math.max(0, Math.min(1, (loupeClientX - rect.left) / rect.width));
         const imgPctY = Math.max(0, Math.min(1, (loupeClientY - rect.top) / rect.height));
 
@@ -1164,12 +1229,21 @@ JSON Schema:
                   </span>
                 )}
                 {cropBox && cropBox.width > 0 && (
-                  <button
-                    onClick={() => setShowCroppedPreview(!showCroppedPreview)}
-                    className={`text-[10px] px-2 py-0.5 rounded-full font-semibold border transition ${showCroppedPreview ? 'bg-emerald-600 text-white border-emerald-500' : 'bg-slate-800 text-slate-400 border-slate-700'}`}
-                  >
-                    {showCroppedPreview ? 'Cropped Framing' : 'Full Frame'}
-                  </button>
+                  <div className="flex items-center space-x-1">
+                    <button
+                      onClick={() => setShowCroppedPreview(!showCroppedPreview)}
+                      className={`text-[10px] px-2 py-0.5 rounded-full font-semibold border transition ${showCroppedPreview ? 'bg-emerald-600 text-white border-emerald-500' : 'bg-slate-800 text-slate-400 border-slate-700'}`}
+                    >
+                      {showCroppedPreview ? 'Cropped Framing' : 'Full Frame'}
+                    </button>
+                    <button
+                      onClick={handleClearCrop}
+                      className="text-[10px] px-1.5 py-0.5 rounded-full font-semibold border bg-red-950/40 text-red-400 border-red-500/30 hover:bg-red-600 hover:text-white transition"
+                      title="Delete / Clear Crop Box"
+                    >
+                      <Icon name="trash" className="w-3 h-3" />
+                    </button>
+                  </div>
                 )}
               </div>
 
@@ -1230,7 +1304,7 @@ JSON Schema:
             >
               {showCroppedPreview && cropBox && cropBox.width > 0 && viewMode !== 'crop' ? (
                 <div 
-                  className="w-full h-full flex items-center justify-center"
+                  className="relative flex items-center justify-center max-h-[calc(100vh-8rem)] max-w-full"
                   style={viewMode === 'lightbox' ? { transform: `translate(${panZoom.x}px, ${panZoom.y}px) scale(${panZoom.scale})` } : {}}
                 >
                   <CroppedImage
@@ -1238,7 +1312,8 @@ JSON Schema:
                     src={photo.blobUrl}
                     alt={photo.name}
                     cropBox={cropBox}
-                    className="w-full max-w-xl h-96 rounded-2xl border border-slate-700 shadow-2xl"
+                    fitMode="contain"
+                    className="rounded-2xl border border-slate-700 shadow-2xl overflow-hidden"
                   />
                 </div>
               ) : (
@@ -1246,12 +1321,30 @@ JSON Schema:
                   className="relative flex items-center justify-center max-h-full max-w-full"
                   style={viewMode === 'lightbox' ? { transform: `translate(${panZoom.x}px, ${panZoom.y}px) scale(${panZoom.scale})` } : {}}
                 >
-                  <img
-                    ref={imgRef}
+                  <CroppedImage
+                    innerRef={imgRef}
                     src={photo.blobUrl}
                     alt={photo.name}
-                    className="max-h-[calc(100vh-8rem)] max-w-full object-contain pointer-events-none"
-                  />
+                    cropBox={null}
+                    fitMode="contain"
+                    className="rounded-2xl border border-slate-800 shadow-2xl overflow-hidden"
+                  >
+                    {cropBox && cropBox.width > 0 && viewMode === 'crop' && (
+                      <div
+                        className="absolute border-2 border-dashed border-emerald-400 bg-emerald-500/20 pointer-events-none z-20"
+                        style={{
+                          left: `${cropBox.x}%`,
+                          top: `${cropBox.y}%`,
+                          width: `${cropBox.width}%`,
+                          height: `${cropBox.height}%`
+                        }}
+                      >
+                        <span className="absolute -top-6 left-0 bg-emerald-600 text-white text-[9px] sm:text-[10px] font-bold px-1.5 py-0.5 rounded whitespace-nowrap shadow">
+                          Crop Region ({cropBox.width.toFixed(0)}% × {cropBox.height.toFixed(0)}%)
+                        </span>
+                      </div>
+                    )}
+                  </CroppedImage>
 
                   {photo.focusSpot && viewMode !== 'crop' && !isZoomedOrCropped && (
                     <div
@@ -1269,22 +1362,6 @@ JSON Schema:
                   className="loupe-lens absolute w-36 h-36 sm:w-48 sm:h-48 rounded-full pointer-events-none border-2 border-emerald-400 bg-no-repeat z-30"
                   style={getLoupeStyle()}
                 />
-              )}
-
-              {cropBox && cropBox.width > 0 && viewMode === 'crop' && (
-                <div
-                  className="absolute border-2 border-dashed border-emerald-400 bg-emerald-500/10 pointer-events-none"
-                  style={{
-                    left: `${cropBox.x}%`,
-                    top: `${cropBox.y}%`,
-                    width: `${cropBox.width}%`,
-                    height: `${cropBox.height}%`
-                  }}
-                >
-                  <span className="absolute -top-6 left-0 bg-emerald-600 text-white text-[9px] sm:text-[10px] font-bold px-1.5 py-0.5 rounded whitespace-nowrap">
-                    Crop Region ({cropBox.width.toFixed(0)}% × {cropBox.height.toFixed(0)}%)
-                  </span>
-                </div>
               )}
 
               {aiResult && aiResult.heatmapPoints && (
@@ -1333,8 +1410,19 @@ JSON Schema:
                   </button>
                 </div>
               ) : (
-                <div className="text-[11px] text-slate-400 truncate max-w-[180px] sm:max-w-none">
-                  Drag box on photo to crop focal region & save metadata.
+                <div className="flex items-center justify-between w-full">
+                  <span className="text-[11px] text-slate-400 truncate max-w-[180px] sm:max-w-none">
+                    Drag box on photo to crop focal region & save metadata.
+                  </span>
+                  {cropBox && (
+                    <button
+                      onClick={handleClearCrop}
+                      className="px-2.5 py-1 bg-red-600/20 hover:bg-red-600/30 text-red-400 text-xs rounded-lg font-semibold flex items-center space-x-1"
+                    >
+                      <Icon name="trash" className="w-3.5 h-3.5" />
+                      <span>Clear Crop</span>
+                    </button>
+                  )}
                 </div>
               )}
 
@@ -1582,13 +1670,15 @@ JSON Schema:
               {filteredEntries.map(entry => {
                 const primarySighting = entry.sightings[0];
                 const photoObj = primarySighting.photo;
+                const activeSrc = (photoObj.cropBox && photoObj.cropBox.width > 0) ? photoObj.blobUrl : (photoObj.thumbnailUrl || photoObj.blobUrl);
                 return (
                   <div key={entry.speciesName} className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl hover:border-slate-700 transition">
-                    <div className="h-48 relative bg-slate-950 overflow-hidden cursor-pointer flex items-center justify-center" onClick={() => onSelectPhoto(photoObj)}>
+                    <div className="h-48 relative bg-slate-950 overflow-hidden cursor-pointer flex items-center justify-center p-1" onClick={() => onSelectPhoto(photoObj)}>
                       <CroppedImage
-                        src={photoObj.blobUrl}
+                        src={activeSrc}
                         alt={entry.speciesName}
                         cropBox={photoObj.cropBox}
+                        fitMode="contain"
                         className="w-full h-full"
                         imgClassName="transition-transform duration-500 hover:scale-105"
                       />
@@ -1849,7 +1939,6 @@ JSON Schema:
 
         if ('showDirectoryPicker' in window) {
           try {
-            // Force readwrite mode to ensure system dialog allows saving
             const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
             let exportedCount = 0;
             
@@ -1864,7 +1953,6 @@ JSON Schema:
               }
             }
             
-            // Clean up and remove exported photos from the main list
             if (exportedIds.size > 0) {
               setPhotos(prev => prev.filter(p => !exportedIds.has(p.id)));
               setSelectedIds(prev => {
@@ -1878,12 +1966,11 @@ JSON Schema:
             setCurrentPage(1);
             return;
           } catch (err) {
-            if (err.name === 'AbortError') return; // User cancelled the dialog
+            if (err.name === 'AbortError') return;
             console.warn('showDirectoryPicker export fallback:', err);
           }
         }
 
-        // Fallback if browser doesn't support system directory picker
         listToExport.forEach((photo, i) => {
           setTimeout(() => {
             const a = document.createElement('a');
@@ -1896,7 +1983,6 @@ JSON Schema:
           exportedIds.add(photo.id);
         });
 
-        // Remove from list on fallback
         setPhotos(prev => prev.filter(p => !exportedIds.has(p.id)));
         setSelectedIds(prev => {
           const next = new Set(prev);
@@ -2047,6 +2133,7 @@ JSON Schema:
               {paginatedPhotos.map(photo => {
                 const currentStars = photo.userStars || photo.stars || scoreToStars(photo.sharpness);
                 const isChecked = selectedIds.has(photo.id);
+                const activeSrc = (photo.cropBox && photo.cropBox.width > 0) ? photo.blobUrl : (photo.thumbnailUrl || photo.blobUrl);
                 return (
                   <div
                     key={photo.id}
@@ -2054,14 +2141,14 @@ JSON Schema:
                     className={`group relative aspect-square bg-slate-900 border rounded-2xl overflow-hidden shadow-lg cursor-pointer hover:border-emerald-500 transition flex items-center justify-center p-1 ${isChecked ? 'border-emerald-500 ring-2 ring-emerald-500/50' : 'border-slate-800'}`}
                   >
                     <CroppedImage
-                      src={photo.thumbnailUrl}
+                      src={activeSrc}
                       alt={photo.name}
                       cropBox={photo.cropBox}
+                      fitMode="contain"
                       className="w-full h-full"
                       imgClassName="group-hover:scale-105 transition-transform duration-300"
                     />
 
-                    {/* Checkbox for individual selection */}
                     <div 
                       onClick={(e) => toggleSelectPhoto(photo.id, e)}
                       className="absolute top-2 left-2 z-20 p-1 rounded-md bg-slate-950/80 border border-slate-700/80 hover:border-emerald-400 transition"
@@ -2075,7 +2162,6 @@ JSON Schema:
                       />
                     </div>
 
-                    {/* Quick Actions */}
                     <div className="absolute top-2 right-2 z-20 flex items-center space-x-1">
                       {photo.focusSpot && (
                         <span className="bg-sky-600/90 text-white text-[9px] font-bold p-1 rounded-full shadow-md backdrop-blur-md" title={photo.focusSpot.source || "Focus Target Spot"}>
