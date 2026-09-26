@@ -80,6 +80,7 @@
       background-color: #040711;
       color: #f1f5f9;
       overscroll-behavior: none;
+      -webkit-font-smoothing: antialiased;
     }
     ::-webkit-scrollbar {
       width: 6px;
@@ -109,6 +110,12 @@
     .touch-canvas {
       touch-action: none;
     }
+    .pb-safe {
+      padding-bottom: env(safe-area-inset-bottom, 20px);
+    }
+    button, input, select {
+      touch-action: manipulation;
+    }
   </style>
 </head>
 <body class="h-[100dvh] w-full overflow-hidden bg-slate-950 text-slate-100 flex flex-col">
@@ -120,8 +127,7 @@
     const GEMINI_QUOTAS = {
       MAX_RPM: 15,
       MAX_TPM: 1000000,
-      MAX_RPD: 1500,
-      ESTIMATED_TOKENS_PER_IMG: 258
+      MAX_RPD: 1500
     };
 
     function scoreToStars(score) {
@@ -156,8 +162,7 @@
         minuteTokens: 0,
         dailyRequests: 0,
         minuteWindowStart: now,
-        dailyWindowStart: now,
-        lastRenewalTimestamp: now + 60000
+        dailyWindowStart: now
       };
     }
 
@@ -190,14 +195,12 @@
         crop: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 3v15a2 2 0 002 2h11M3 8h15a2 2 0 012 2v11"/>,
         zoomIn: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v6m-3-3h6"/>,
         zoomOut: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM7 10h6"/>,
-        target: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4zm0-6v4m0 12v4m10-10h-4M6 12H2"/>,
         mapPin: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0zM15 11a3 3 0 11-6 0 3 3 0 016 0z"/>,
         crosshair: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 2v4m0 12v4M2 12h4m12 0h4M12 16a4 4 0 100-8 4 4 0 000 8z"/>,
         shield: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>,
         clock: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>,
         bolt: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>,
         download: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>,
-        folder: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>,
         chevronLeft: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7"/>,
         chevronRight: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7"/>,
         chevronDown: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"/>,
@@ -218,7 +221,7 @@
           <button
             type="button"
             onClick={() => setIsOpen(!isOpen)}
-            className="w-full px-3.5 py-3 flex items-center justify-between text-left hover:bg-slate-900/60 transition"
+            className="w-full px-3.5 py-3 flex items-center justify-between text-left hover:bg-slate-900/60 transition touch-manipulation"
           >
             <div className="flex items-center space-x-2.5 truncate">
               {icon && <Icon name={icon} className="w-4 h-4 text-emerald-400 flex-shrink-0" />}
@@ -261,7 +264,7 @@
                   if (!readOnly && onChange) onChange(starValue);
                 }}
                 onMouseEnter={() => !readOnly && setHoverRating(starValue)}
-                className={`${readOnly ? 'cursor-default' : 'cursor-pointer hover:scale-125'} transition-transform duration-150 p-0.5 focus:outline-none`}
+                className={`${readOnly ? 'cursor-default' : 'cursor-pointer hover:scale-125'} transition-transform duration-150 p-1 -m-1 focus:outline-none touch-manipulation`}
                 title={!readOnly ? `Set rating to ${starValue} star${starValue > 1 ? 's' : ''}` : `${rating} / ${maxStars} stars`}
               >
                 <svg
@@ -321,8 +324,6 @@
       const tpmPct = Math.min(100, Math.round((usage.minuteTokens / GEMINI_QUOTAS.MAX_TPM) * 100));
       const rpdPct = Math.min(100, Math.round((usage.dailyRequests / GEMINI_QUOTAS.MAX_RPD) * 100));
 
-      const isLowQuota = rpmPct > 80 || rpdPct > 80;
-
       return (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 sm:p-6 max-w-md w-full shadow-2xl space-y-4">
@@ -331,22 +332,10 @@
                 <Icon name="bolt" className="w-5 h-5 text-emerald-400" />
                 <h3 className="font-bold text-white text-sm sm:text-base">Gemini AI Token & Quota Monitor</h3>
               </div>
-              <button onClick={onClose} className="text-slate-400 hover:text-white">
+              <button onClick={onClose} className="text-slate-400 hover:text-white p-1 touch-manipulation">
                 <Icon name="x" className="w-5 h-5" />
               </button>
             </div>
-
-            {isLowQuota && (
-              <div className="bg-amber-950/40 border border-amber-500/40 p-3 rounded-xl text-xs text-amber-300 space-y-1">
-                <p className="font-bold flex items-center space-x-1">
-                  <Icon name="clock" className="w-3.5 h-3.5" />
-                  <span>Approaching Quota Rate Limits</span>
-                </p>
-                <p className="text-[11px] text-amber-200/80">
-                  You are close to your minute or daily quota threshold. Token allowance resets automatically on schedule.
-                </p>
-              </div>
-            )}
 
             <div className="space-y-3 bg-slate-950 p-4 rounded-xl border border-slate-800">
               <div>
@@ -403,7 +392,7 @@
             <div className="flex justify-end pt-2 border-t border-slate-800">
               <button
                 onClick={onClose}
-                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-xl transition shadow"
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-xl transition shadow touch-manipulation"
               >
                 Close Dashboard
               </button>
@@ -455,7 +444,7 @@
                   <p className="text-[11px] text-slate-400">Authentication & API Key Settings</p>
                 </div>
               </div>
-              <button onClick={onClose} className="text-slate-400 hover:text-white">
+              <button onClick={onClose} className="text-slate-400 hover:text-white p-1 touch-manipulation">
                 <Icon name="x" className="w-5 h-5" />
               </button>
             </div>
@@ -468,7 +457,7 @@
                     href="https://aistudio.google.com/app/apikey"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-[10px] text-emerald-400 hover:underline flex items-center space-x-1"
+                    className="text-[10px] text-emerald-400 hover:underline flex items-center space-x-1 touch-manipulation p-1 -m-1"
                   >
                     <span>Get free key at Google AI Studio</span>
                     <Icon name="sparkles" className="w-3 h-3" />
@@ -485,7 +474,7 @@
                   <button
                     type="button"
                     onClick={() => setShowKey(!showKey)}
-                    className="absolute right-2.5 top-2.5 text-slate-500 hover:text-slate-300"
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 p-2 touch-manipulation"
                   >
                     <Icon name="eye" className="w-4 h-4" />
                   </button>
@@ -506,11 +495,11 @@
                 <p>Your API key is stored locally in your browser and is only sent directly to Google Gemini Vision endpoints.</p>
               </div>
 
-              <div className="flex items-center justify-between pt-2 border-t border-slate-800">
+              <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between pt-2 border-t border-slate-800 gap-3">
                 <button
                   type="button"
                   onClick={handleClear}
-                  className="px-3 py-2 bg-slate-800 hover:bg-red-950/40 hover:text-red-400 text-slate-400 text-xs font-semibold rounded-xl transition"
+                  className="px-3 py-2 bg-slate-800 hover:bg-red-950/40 hover:text-red-400 text-slate-400 text-xs font-semibold rounded-xl transition touch-manipulation"
                 >
                   Clear Key
                 </button>
@@ -518,13 +507,13 @@
                   <button
                     type="button"
                     onClick={onClose}
-                    className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl transition"
+                    className="flex-1 sm:flex-none px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl transition touch-manipulation"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
-                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-xl transition shadow-lg flex items-center space-x-1"
+                    className="flex-1 sm:flex-none px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-xl transition shadow-lg flex items-center justify-center space-x-1 touch-manipulation"
                   >
                     <Icon name="check" className="w-3.5 h-3.5" />
                     <span>Save Key</span>
@@ -538,8 +527,25 @@
     }
 
     function CroppedImage({ src, alt, cropBox, photo = null, className = "", imgClassName = "", innerRef = null, fitMode = "contain", children = null }) {
-      const naturalW = photo?.naturalWidth || photo?.width || 1000;
-      const naturalH = photo?.naturalHeight || photo?.height || 750;
+      const [imgDims, setImgDims] = useState({
+        w: (photo?.naturalWidth && photo.naturalWidth > 300) ? photo.naturalWidth : 1000,
+        h: (photo?.naturalHeight && photo.naturalHeight > 300) ? photo.naturalHeight : 750
+      });
+
+      useEffect(() => {
+        if (src) {
+          const img = new Image();
+          img.onload = () => {
+            if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+              setImgDims({ w: img.naturalWidth, h: img.naturalHeight });
+            }
+          };
+          img.src = src;
+        }
+      }, [src]);
+
+      const naturalW = imgDims.w;
+      const naturalH = imgDims.h;
 
       const aspect = useMemo(() => {
         const baseAspect = naturalW / naturalH;
@@ -566,6 +572,8 @@
         const cropW = (cropBox.width / 100) * naturalW;
         const cropH = (cropBox.height / 100) * naturalH;
 
+        const finalSrc = photo?.blobUrl || src;
+
         return (
           <div 
             className={`relative overflow-hidden flex items-center justify-center bg-slate-950 ${className}`}
@@ -578,7 +586,7 @@
               className={`w-full h-full block ${imgClassName}`}
             >
               <image
-                href={src}
+                href={finalSrc}
                 x="0"
                 y="0"
                 width={naturalW}
@@ -619,7 +627,8 @@
           canvas.width = bitmap.width;
           canvas.height = bitmap.height;
           const ctx = canvas.getContext('2d', { alpha: false });
-          ctx.imageSmoothingEnabled = false;
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'medium';
           ctx.drawImage(bitmap, 0, 0);
           bitmap.close();
 
@@ -643,18 +652,18 @@
       return { thumbUrl: URL.createObjectURL(file), width: 1000, height: 750 };
     }
 
-    async function processThumbnailQueue(neededPhotos, updateBatchCallback, progressCallback) {
+    async function processThumbnailQueue(neededPhotos, updateBatchCallback, progressCallback, signal) {
       let index = 0;
       let completed = 0;
       const total = neededPhotos.length;
-      const concurrency = 2; // 2 background worker tasks max to maintain 60fps UI thread
+      const concurrency = 2;
 
       let pendingBatch = [];
       let lastFlush = Date.now();
 
       const flush = () => {
         if (pendingBatch.length > 0) {
-          updateBatchCallback([...pendingBatch]);
+          if (!signal?.aborted) updateBatchCallback([...pendingBatch]);
           pendingBatch = [];
           lastFlush = Date.now();
         }
@@ -665,28 +674,29 @@
 
         const worker = async () => {
           while (index < total) {
+            if (signal?.aborted) break;
             const currentPhoto = neededPhotos[index++];
+            let thumbUrl = null;
             try {
               const res = await generateFastThumbnail(currentPhoto.file, 240);
-              const bUrl = currentPhoto.blobUrl || URL.createObjectURL(currentPhoto.file);
+              thumbUrl = res.thumbUrl;
               pendingBatch.push({
                 id: currentPhoto.id,
                 thumbUrl: res.thumbUrl,
-                blobUrl: bUrl,
-                width: res.width,
-                height: res.height
+                thumbWidth: res.width,
+                thumbHeight: res.height
               });
 
-              // Micro-batch flush every 6 items or 100ms elapsed
               if (pendingBatch.length >= 6 || Date.now() - lastFlush > 100) {
                 flush();
-                await new Promise(r => setTimeout(r, 0)); // Yield thread to DOM/browser
+                await new Promise(r => setTimeout(r, 0));
               }
             } catch (err) {
               console.warn('Thumbnail generation error:', err);
+              if (thumbUrl) try { URL.revokeObjectURL(thumbUrl); } catch(e){}
             } finally {
               completed++;
-              progressCallback(completed, total);
+              if (!signal?.aborted) progressCallback(completed, total);
             }
           }
           flush();
@@ -715,29 +725,11 @@
               const marker = view.getUint16(offset, false);
               offset += 2;
               if (marker === 0xFFE1) {
-                if (view.getUint32(offset + 2, false) === 0x45786966) {
-                  const tiffOffset = offset + 8;
-                  const bigEndian = view.getUint16(tiffOffset, false) === 0x4D4D;
-                  const firstIFD = view.getUint32(tiffOffset + 4, bigEndian);
-                  if (firstIFD) {
-                    const entries = view.getUint16(tiffOffset + firstIFD, bigEndian);
-                    for (let i = 0; i < entries; i++) {
-                      const tagOffset = tiffOffset + firstIFD + 2 + (i * 12);
-                      const tag = view.getUint16(tagOffset, bigEndian);
-                      if (tag === 0x9214) {
-                        const valOffset = tiffOffset + view.getUint32(tagOffset + 8, bigEndian);
-                        const x = view.getUint16(valOffset, bigEndian);
-                        const y = view.getUint16(valOffset + 2, bigEndian);
-                        return resolve({
-                          xPct: Math.min(90, Math.max(10, (x / 4000) * 100)),
-                          yPct: Math.min(90, Math.max(10, (y / 3000) * 100)),
-                          widthPct: 20,
-                          heightPct: 20,
-                          source: 'EXIF SubjectArea AF Tag'
-                        });
-                      }
-                    }
-                  }
+                const length = view.getUint16(offset, false);
+                const exifHeader = view.getUint32(offset + 2, false);
+                if (exifHeader === 0x45786966) {
+                  // Found EXIF
+                  return resolve(null);
                 }
                 break;
               } else if ((marker & 0xFF00) !== 0xFF00) {
@@ -759,6 +751,7 @@
     async function evaluatePhotoFocus(fileOrBlobUrl, existingFocusSpot = null) {
       return new Promise(async (resolve) => {
         let focusSpot = existingFocusSpot;
+        let srcToRevoke = null;
         
         if (!focusSpot && fileOrBlobUrl instanceof File) {
           focusSpot = await extractExifFocusSpot(fileOrBlobUrl);
@@ -766,7 +759,15 @@
 
         const img = new Image();
         img.crossOrigin = 'anonymous';
-        let src = typeof fileOrBlobUrl === 'string' ? fileOrBlobUrl : URL.createObjectURL(fileOrBlobUrl);
+        
+        if (typeof fileOrBlobUrl === 'string') {
+          img.src = fileOrBlobUrl;
+        } else if (fileOrBlobUrl instanceof File || fileOrBlobUrl instanceof Blob) {
+          srcToRevoke = URL.createObjectURL(fileOrBlobUrl);
+          img.src = srcToRevoke;
+        } else {
+          return resolve({ score: 5, stars: 3, focusSpot: null });
+        }
         
         img.onload = () => {
           try {
@@ -871,15 +872,18 @@
 
             const stars = scoreToStars(score);
 
-            if (typeof fileOrBlobUrl !== 'string') URL.revokeObjectURL(src);
+            if (srcToRevoke) URL.revokeObjectURL(srcToRevoke);
             resolve({ score, stars, focusSpot });
           } catch (err) {
+            if (srcToRevoke) URL.revokeObjectURL(srcToRevoke);
             resolve({ score: 5, stars: 3, focusSpot: null });
           }
         };
 
-        img.onerror = () => resolve({ score: 5, stars: 3, focusSpot: null });
-        img.src = src;
+        img.onerror = () => {
+          if (srcToRevoke) URL.revokeObjectURL(srcToRevoke);
+          resolve({ score: 5, stars: 3, focusSpot: null });
+        };
       });
     }
 
@@ -971,7 +975,7 @@
               type="button"
               onClick={handleDetectGPS}
               disabled={gettingGps}
-              className="text-[10px] text-emerald-400 hover:text-emerald-300 font-semibold flex items-center space-x-1 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/30 transition"
+              className="text-[10px] text-emerald-400 hover:text-emerald-300 font-semibold flex items-center space-x-1 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/30 transition touch-manipulation"
             >
               <Icon name="crosshair" className={`w-3 h-3 ${gettingGps ? 'animate-spin' : ''}`} />
               <span>{gettingGps ? 'Locating...' : 'Detect GPS'}</span>
@@ -987,12 +991,12 @@
               onFocus={() => setIsOpen(true)}
               onBlur={() => setTimeout(() => setIsOpen(false), 200)}
               placeholder="Type address or search birding hotspot..."
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500 pr-8"
+              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500 pr-10"
             />
             {value && (
               <button
                 onClick={() => onChange('')}
-                className="absolute right-2 top-2 text-slate-500 hover:text-slate-300"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 p-2 touch-manipulation"
               >
                 <Icon name="x" className="w-3.5 h-3.5" />
               </button>
@@ -1005,7 +1009,7 @@
                 <div
                   key={i}
                   onMouseDown={() => handleSelectSuggestion(sug)}
-                  className="px-3 py-2 text-xs text-slate-300 hover:bg-emerald-600/20 hover:text-emerald-200 cursor-pointer transition flex items-center space-x-2"
+                  className="px-3 py-2 text-xs text-slate-300 hover:bg-emerald-600/20 hover:text-emerald-200 cursor-pointer transition flex items-center space-x-2 touch-manipulation"
                 >
                   <Icon name="mapPin" className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
                   <span className="truncate">{sug}</span>
@@ -1203,17 +1207,16 @@ JSON Schema:
 
       const activeBlobUrl = useMemo(() => {
         if (photo.blobUrl) return photo.blobUrl;
-        if (photo.thumbnailUrl) return photo.thumbnailUrl;
         if (photo.file) return URL.createObjectURL(photo.file);
+        if (photo.thumbnailUrl) return photo.thumbnailUrl;
         return null;
-      }, [photo.id, photo.blobUrl, photo.thumbnailUrl, photo.file]);
+      }, [photo.id, photo.blobUrl, photo.file, photo.thumbnailUrl]);
 
       useEffect(() => {
-        if (!photo.blobUrl && photo.file) {
-          const bUrl = URL.createObjectURL(photo.file);
-          onUpdatePhoto({ ...photo, blobUrl: bUrl });
+        if (!photo.blobUrl && photo.file && activeBlobUrl) {
+          onUpdatePhoto({ ...photo, blobUrl: activeBlobUrl });
         }
-      }, [photo.id]);
+      }, [photo.id, activeBlobUrl]);
 
       const [panZoom, setPanZoom] = useState({ scale: 1, x: 0, y: 0 });
       const [isDraggingPan, setIsDraggingPan] = useState(false);
@@ -1481,16 +1484,17 @@ JSON Schema:
       return (
         <div className="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-md flex flex-col md:flex-row overflow-hidden">
           <div className="flex-1 flex flex-col relative bg-black/80 overflow-hidden h-full">
-            <div className="h-14 px-3 sm:px-4 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between z-20 gap-2">
+            
+            <div className="h-14 sm:h-16 px-3 sm:px-4 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between z-20 gap-2">
               <div className="flex items-center space-x-2 truncate min-w-0">
-                <span className="text-xs font-semibold text-slate-300 truncate max-w-[100px] sm:max-w-[180px]">{photo.name}</span>
+                <span className="text-xs sm:text-sm font-semibold text-slate-300 truncate max-w-[120px] sm:max-w-[180px]">{photo.name}</span>
                 {evaluatingFocus ? (
                   <span className="text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded-full flex items-center space-x-1">
                     <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
-                    <span>Rating Focus...</span>
+                    <span>Rating...</span>
                   </span>
                 ) : (
-                  <div className="flex items-center space-x-1 bg-slate-950 px-2 py-0.5 rounded-full border border-slate-800">
+                  <div className="flex items-center space-x-1 bg-slate-950 px-2 py-1 sm:py-0.5 rounded-full border border-slate-800">
                     <StarRating
                       rating={activeStars}
                       onChange={handleRatingChange}
@@ -1499,62 +1503,45 @@ JSON Schema:
                   </div>
                 )}
                 {photo.sharpness !== null && (
-                  <span className="text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full">
+                  <span className="hidden sm:inline-flex text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full">
                     Sharpness: {photo.sharpness}/10
                   </span>
                 )}
-                {cropBox && cropBox.width > 0 && (
-                  <div className="flex items-center space-x-1">
-                    <button
-                      onClick={() => setShowCroppedPreview(!showCroppedPreview)}
-                      className={`text-[10px] px-2 py-0.5 rounded-full font-semibold border transition ${showCroppedPreview ? 'bg-emerald-600 text-white border-emerald-500' : 'bg-slate-800 text-slate-400 border-slate-700'}`}
-                    >
-                      {showCroppedPreview ? 'Cropped Framing' : 'Full Frame'}
-                    </button>
-                    <button
-                      onClick={handleClearCrop}
-                      className="text-[10px] px-1.5 py-0.5 rounded-full font-semibold border bg-red-950/40 text-red-400 border-red-500/30 hover:bg-red-600 hover:text-white transition"
-                      title="Delete / Clear Crop Box"
-                    >
-                      <Icon name="trash" className="w-3 h-3" />
-                    </button>
-                  </div>
-                )}
               </div>
 
-              <div className="flex items-center space-x-1 bg-slate-950 p-1 rounded-xl border border-slate-800 text-[11px] sm:text-xs">
+              <div className="hidden sm:flex items-center space-x-1 bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
                 <button
                   onClick={() => setViewMode('lightbox')}
-                  className={`px-2 sm:px-3 py-1 rounded-lg transition font-medium flex items-center space-x-1 ${viewMode === 'lightbox' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                  className={`px-3 py-1.5 rounded-lg transition font-medium flex items-center space-x-1.5 ${viewMode === 'lightbox' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}
                 >
                   <Icon name="zoomIn" className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Lightbox</span>
+                  <span>Lightbox</span>
                 </button>
                 <button
                   onClick={() => setViewMode('crop')}
-                  className={`px-2 sm:px-3 py-1 rounded-lg transition font-medium flex items-center space-x-1 ${viewMode === 'crop' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                  className={`px-3 py-1.5 rounded-lg transition font-medium flex items-center space-x-1.5 ${viewMode === 'crop' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}
                 >
                   <Icon name="crop" className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Crop AI</span>
+                  <span>Crop AI</span>
                 </button>
                 <button
                   onClick={() => setViewMode('loupe')}
-                  className={`px-2 sm:px-3 py-1 rounded-lg transition font-medium flex items-center space-x-1 ${viewMode === 'loupe' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                  className={`px-3 py-1.5 rounded-lg transition font-medium flex items-center space-x-1.5 ${viewMode === 'loupe' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}
                 >
                   <Icon name="search" className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Loupe</span>
+                  <span>Loupe</span>
                 </button>
               </div>
 
               <div className="flex items-center space-x-1">
                 <button
                   onClick={() => setShowMobileSidebar(!showMobileSidebar)}
-                  className="md:hidden p-1.5 text-slate-300 hover:text-white rounded-lg bg-slate-800 flex items-center justify-center"
+                  className="md:hidden p-2 text-slate-300 hover:text-white rounded-lg bg-slate-800 flex items-center justify-center touch-manipulation"
                 >
-                  <Icon name="info" className="w-4 h-4 text-emerald-400" />
+                  <Icon name="info" className="w-5 h-5 text-emerald-400" />
                 </button>
-                <button onClick={onClose} className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800">
-                  <Icon name="x" className="w-5 h-5" />
+                <button onClick={onClose} className="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 touch-manipulation">
+                  <Icon name="x" className="w-6 h-6" />
                 </button>
               </div>
             </div>
@@ -1570,13 +1557,13 @@ JSON Schema:
               onTouchEnd={handlePointerUp}
               className="flex-1 relative flex items-center justify-center p-2 sm:p-4 overflow-hidden select-none cursor-crosshair touch-canvas"
             >
-              {/* Floating Delete Button */}
+              {/* Floating Delete Button - Top Left */}
               <button
                 onClick={(e) => {
                   e.stopPropagation();
                   if (onDeletePhoto) onDeletePhoto(photo.id);
                 }}
-                className="absolute top-3 left-3 sm:top-4 sm:left-4 z-30 p-2 sm:p-2.5 bg-slate-900/80 hover:bg-red-600 text-slate-300 hover:text-white rounded-full border border-slate-700/80 shadow-xl backdrop-blur-md transition-all active:scale-95 flex items-center justify-center"
+                className="absolute top-3 left-3 sm:top-4 sm:left-4 z-30 p-2 sm:p-2.5 bg-slate-900/80 hover:bg-red-600 text-slate-300 hover:text-white rounded-full border border-slate-700/80 shadow-xl backdrop-blur-md transition-all active:scale-95 flex items-center justify-center touch-manipulation"
                 title="Delete photo"
               >
                 <Icon name="trash" className="w-4 h-4 sm:w-5 sm:h-5 text-red-400 hover:text-white" />
@@ -1589,7 +1576,7 @@ JSON Schema:
                   if (hasPrev && onPrevPhoto) onPrevPhoto();
                 }}
                 disabled={!hasPrev}
-                className={`absolute left-2 sm:left-4 top-1/2 -translate-y-1/2 z-30 p-2 sm:p-3 rounded-full border shadow-2xl backdrop-blur-md transition-all active:scale-95 flex items-center justify-center ${
+                className={`absolute left-2 sm:left-4 top-1/2 -translate-y-1/2 z-30 p-2 sm:p-3 rounded-full border shadow-2xl backdrop-blur-md transition-all active:scale-95 flex items-center justify-center touch-manipulation ${
                   hasPrev
                     ? 'bg-slate-900/80 hover:bg-emerald-600 text-slate-200 hover:text-white border-slate-700/80 cursor-pointer'
                     : 'bg-slate-900/40 text-slate-600 border-slate-800/40 cursor-not-allowed opacity-40'
@@ -1606,7 +1593,7 @@ JSON Schema:
                   if (hasNext && onNextPhoto) onNextPhoto();
                 }}
                 disabled={!hasNext}
-                className={`absolute right-2 sm:right-4 top-1/2 -translate-y-1/2 z-30 p-2 sm:p-3 rounded-full border shadow-2xl backdrop-blur-md transition-all active:scale-95 flex items-center justify-center ${
+                className={`absolute right-2 sm:right-4 top-1/2 -translate-y-1/2 z-30 p-2 sm:p-3 rounded-full border shadow-2xl backdrop-blur-md transition-all active:scale-95 flex items-center justify-center touch-manipulation ${
                   hasNext
                     ? 'bg-slate-900/80 hover:bg-emerald-600 text-slate-200 hover:text-white border-slate-700/80 cursor-pointer'
                     : 'bg-slate-900/40 text-slate-600 border-slate-800/40 cursor-not-allowed opacity-40'
@@ -1615,6 +1602,28 @@ JSON Schema:
               >
                 <Icon name="chevronRight" className="w-5 h-5 sm:w-6 sm:h-6" />
               </button>
+
+              {/* Mobile View Mode Floating Pill */}
+              <div className="sm:hidden absolute bottom-16 sm:bottom-6 left-1/2 -translate-x-1/2 z-40 flex items-center bg-slate-900/90 backdrop-blur-md p-1 rounded-full border border-slate-700 shadow-2xl">
+                <button
+                  onClick={(e) => { e.stopPropagation(); setViewMode('lightbox'); }}
+                  className={`px-3 py-2 rounded-full transition font-medium flex items-center justify-center touch-manipulation ${viewMode === 'lightbox' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                >
+                  <Icon name="zoomIn" className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); setViewMode('crop'); }}
+                  className={`px-3 py-2 rounded-full transition font-medium flex items-center justify-center touch-manipulation ${viewMode === 'crop' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                >
+                  <Icon name="crop" className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); setViewMode('loupe'); }}
+                  className={`px-3 py-2 rounded-full transition font-medium flex items-center justify-center touch-manipulation ${viewMode === 'loupe' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                >
+                  <Icon name="search" className="w-4 h-4" />
+                </button>
+              </div>
 
               {showCroppedPreview && cropBox && cropBox.width > 0 && viewMode !== 'crop' ? (
                 <div 
@@ -1696,7 +1705,7 @@ JSON Schema:
               )}
             </div>
 
-            <div className="h-14 bg-slate-900/90 border-t border-slate-800 px-3 sm:px-4 flex items-center justify-between z-20 gap-2">
+            <div className="h-14 bg-slate-900/90 border-t border-slate-800 px-3 sm:px-4 flex items-center justify-between z-20 gap-2 pb-safe sm:pb-0">
               {viewMode === 'loupe' ? (
                 <div className="flex items-center space-x-1.5 sm:space-x-2 flex-1 max-w-[220px] sm:max-w-xs">
                   <span className="text-[10px] sm:text-xs font-semibold text-slate-300 flex-shrink-0">
@@ -1718,29 +1727,35 @@ JSON Schema:
                 </div>
               ) : viewMode === 'lightbox' ? (
                 <div className="flex items-center space-x-1 sm:space-x-2">
-                  <button onClick={() => setPanZoom(p => ({ ...p, scale: Math.max(1, p.scale - 0.5) }))} className="p-1 bg-slate-800 rounded text-slate-300">
+                  <button onClick={() => setPanZoom(p => ({ ...p, scale: Math.max(1, p.scale - 0.5) }))} className="p-2 bg-slate-800 rounded text-slate-300 touch-manipulation">
                     <Icon name="zoomOut" className="w-4 h-4" />
                   </button>
                   <span className="text-xs font-semibold text-slate-300 px-1">{(panZoom.scale * 100).toFixed(0)}%</span>
-                  <button onClick={() => setPanZoom(p => ({ ...p, scale: Math.min(8, p.scale + 0.5) }))} className="p-1 bg-slate-800 rounded text-slate-300">
+                  <button onClick={() => setPanZoom(p => ({ ...p, scale: Math.min(8, p.scale + 0.5) }))} className="p-2 bg-slate-800 rounded text-slate-300 touch-manipulation">
                     <Icon name="zoomIn" className="w-4 h-4" />
                   </button>
-                  <button onClick={() => setPanZoom({ scale: 1, x: 0, y: 0 })} className="text-[10px] sm:text-[11px] bg-slate-800 px-2 py-1 rounded text-slate-400 ml-1">
+                  <button onClick={() => setPanZoom({ scale: 1, x: 0, y: 0 })} className="text-[10px] sm:text-[11px] bg-slate-800 px-3 py-2 rounded text-slate-400 ml-1 touch-manipulation">
                     Reset
                   </button>
                 </div>
               ) : (
                 <div className="flex items-center justify-between w-full">
-                  <span className="text-[11px] text-slate-400 truncate max-w-[180px] sm:max-w-none">
-                    Drag box on photo to crop focal region for AI analysis.
-                  </span>
-                  {cropBox && (
+                  <div className="flex items-center space-x-2">
+                    <button
+                      onClick={() => setShowCroppedPreview(!showCroppedPreview)}
+                      disabled={!cropBox || cropBox.width === 0}
+                      className={`text-[10px] px-3 py-2 rounded-lg font-semibold transition touch-manipulation ${showCroppedPreview ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 disabled:opacity-50 disabled:cursor-not-allowed'}`}
+                    >
+                      {showCroppedPreview ? 'Cropped Preview' : 'Show Crop'}
+                    </button>
+                  </div>
+                  {cropBox && cropBox.width > 0 && (
                     <button
                       onClick={handleClearCrop}
-                      className="px-2.5 py-1 bg-red-600/20 hover:bg-red-600/30 text-red-400 text-xs rounded-lg font-semibold flex items-center space-x-1"
+                      className="px-3 py-2 bg-red-600/20 hover:bg-red-600/30 text-red-400 text-[10px] rounded-lg font-semibold flex items-center space-x-1 touch-manipulation"
                     >
-                      <Icon name="trash" className="w-3.5 h-3.5" />
-                      <span>Clear Crop</span>
+                      <Icon name="trash" className="w-3 h-3" />
+                      <span>Clear Box</span>
                     </button>
                   )}
                 </div>
@@ -1750,24 +1765,23 @@ JSON Schema:
                 <button
                   onClick={handleRunAiIdentification}
                   disabled={identifying || evaluatingFocus}
-                  className="px-3 sm:px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-semibold text-xs rounded-xl shadow-lg transition flex items-center space-x-1.5 flex-shrink-0"
+                  className="px-3 sm:px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-semibold text-xs rounded-xl shadow-lg transition flex items-center space-x-1.5 flex-shrink-0 touch-manipulation"
                 >
                   <Icon name="sparkles" className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-                  <span>{identifying ? 'Analyzing...' : evaluatingFocus ? 'Rating Focus...' : 'Identify Bird'}</span>
+                  <span>{identifying ? 'Analyzing...' : evaluatingFocus ? 'Rating...' : 'Identify Bird'}</span>
                 </button>
               </div>
             </div>
           </div>
 
-          {/* Accordion Sidebar Inspection Deck */}
-          <div className={`w-full md:w-80 bg-slate-900 border-l border-slate-800 p-3 sm:p-4 overflow-y-auto space-y-3 transition-all duration-300 ${showMobileSidebar ? 'block max-h-[50vh] md:max-h-full border-t md:border-t-0' : 'hidden md:block'}`}>
+          <div className={`w-full md:w-80 lg:w-96 bg-slate-900 border-l border-slate-800 p-3 sm:p-4 overflow-y-auto space-y-3 transition-all duration-300 ${showMobileSidebar ? 'block absolute md:relative bottom-0 left-0 right-0 max-h-[60vh] md:max-h-full border-t md:border-t-0 z-50 pb-safe shadow-2xl md:shadow-none' : 'hidden md:block'}`}>
             <div className="flex items-center justify-between border-b border-slate-800 pb-2 mb-1">
               <h3 className="font-bold text-slate-100 text-sm flex items-center space-x-2">
                 <Icon name="feather" className="w-4 h-4 text-emerald-400" />
                 <span>Photo Inspection Deck</span>
               </h3>
-              <button onClick={() => setShowMobileSidebar(false)} className="md:hidden text-slate-400">
-                <Icon name="x" className="w-4 h-4" />
+              <button onClick={() => setShowMobileSidebar(false)} className="md:hidden text-slate-400 p-1 touch-manipulation">
+                <Icon name="x" className="w-5 h-5" />
               </button>
             </div>
 
@@ -1837,9 +1851,9 @@ JSON Schema:
                     <button
                       type="button"
                       onClick={() => setShowHeatmapOverlay(!showHeatmapOverlay)}
-                      className={`text-[10px] px-2 py-0.5 rounded font-semibold transition ${showHeatmapOverlay ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400'}`}
+                      className={`text-[10px] px-3 py-1.5 rounded-lg font-semibold transition touch-manipulation ${showHeatmapOverlay ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400'}`}
                     >
-                      {showHeatmapOverlay ? 'Heatmap Active' : 'Heatmap Hidden'}
+                      {showHeatmapOverlay ? 'Active' : 'Hidden'}
                     </button>
                   </div>
                 )}
@@ -1872,7 +1886,7 @@ JSON Schema:
                   <button
                     onClick={handleRunAiIdentification}
                     disabled={identifying}
-                    className="w-full py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow transition flex items-center justify-center space-x-1.5"
+                    className="w-full py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow transition flex items-center justify-center space-x-1.5 touch-manipulation"
                   >
                     <Icon name="sparkles" className="w-3.5 h-3.5" />
                     <span>Run AI Species Identification</span>
@@ -1889,7 +1903,7 @@ JSON Schema:
                 <button
                   disabled={!aiResult || !!aiResult.error}
                   onClick={() => onSaveToVault({ ...photo, identification: aiResult, cropBox, focusSpot: photo.focusSpot, locationText: locationInput, stars: activeStars })}
-                  className="w-full py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow transition flex items-center justify-center space-x-1"
+                  className="w-full py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow transition flex items-center justify-center space-x-1 touch-manipulation"
                 >
                   <Icon name="check" className="w-4 h-4" />
                   <span>Save to Lifer Vault</span>
@@ -1920,7 +1934,7 @@ JSON Schema:
       }, [vaultEntries, selectedCategory, searchQuery]);
 
       return (
-        <div className="flex-1 flex flex-col overflow-hidden min-h-0 p-3 sm:p-4 md:p-6 gap-3 sm:gap-4 pb-20 md:pb-4">
+        <div className="flex-1 flex flex-col overflow-hidden min-h-0 p-3 sm:p-4 md:p-6 gap-3 sm:gap-4 pb-[calc(5rem+env(safe-area-inset-bottom))] md:pb-4">
           <div className="flex-shrink-0 space-y-3">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 bg-slate-900 border border-slate-800 p-3.5 sm:p-4 rounded-2xl shadow-xl">
               <div>
@@ -1933,7 +1947,7 @@ JSON Schema:
 
               <div className="flex items-center space-x-3 w-full md:w-auto">
                 <div className="relative w-full md:w-64">
-                  <Icon name="search" className="w-4 h-4 absolute left-3 top-2.5 text-slate-500" />
+                  <Icon name="search" className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
                   <input
                     type="text"
                     placeholder="Search species or scientific name..."
@@ -1945,12 +1959,12 @@ JSON Schema:
               </div>
             </div>
 
-            <div className="flex items-center space-x-2 overflow-x-auto pb-1 no-scrollbar">
+            <div className="flex items-center space-x-2 overflow-x-auto pb-2 no-scrollbar">
               {categories.map(cat => (
                 <button
                   key={cat}
                   onClick={() => setSelectedCategory(cat)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition flex-shrink-0 ${selectedCategory === cat ? 'bg-emerald-600 text-white shadow-md' : 'bg-slate-900 text-slate-400 hover:bg-slate-800 border border-slate-800'}`}
+                  className={`px-4 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition flex-shrink-0 touch-manipulation ${selectedCategory === cat ? 'bg-emerald-600 text-white shadow-md' : 'bg-slate-900 text-slate-400 hover:bg-slate-800 border border-slate-800'}`}
                 >
                   {cat}
                 </button>
@@ -1958,16 +1972,16 @@ JSON Schema:
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto min-h-0 pr-1">
+          <div className="flex-1 overflow-y-auto min-h-0 pr-1 pb-4">
             {filteredEntries.length > 0 ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-5">
                 {filteredEntries.map(entry => {
                   const primarySighting = entry.sightings[0];
                   const photoObj = primarySighting.photo;
                   const activeSrc = photoObj.thumbnailUrl || photoObj.blobUrl;
                   return (
                     <div key={entry.speciesName} className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl hover:border-slate-700 transition">
-                      <div className="h-48 relative bg-slate-950 overflow-hidden cursor-pointer flex items-center justify-center p-1" onClick={() => onSelectPhoto(photoObj)}>
+                      <div className="h-48 relative bg-slate-950 overflow-hidden cursor-pointer flex items-center justify-center p-1 touch-manipulation" onClick={() => onSelectPhoto(photoObj)}>
                         <CroppedImage
                           src={activeSrc}
                           alt={entry.speciesName}
@@ -1994,7 +2008,7 @@ JSON Schema:
                           </div>
                           <button
                             onClick={() => onDeleteSpecies(entry.speciesName)}
-                            className="text-slate-500 hover:text-red-400 p-1"
+                            className="text-slate-500 hover:text-red-400 p-2 -m-2 touch-manipulation"
                           >
                             <Icon name="trash" className="w-4 h-4" />
                           </button>
@@ -2014,7 +2028,7 @@ JSON Schema:
                                   />
                                   <button
                                     onClick={() => onDeleteSighting(entry.speciesName, s.id)}
-                                    className="text-slate-500 hover:text-red-400 ml-1"
+                                    className="text-slate-500 hover:text-red-400 ml-1 p-1 touch-manipulation"
                                   >
                                     <Icon name="x" className="w-3.5 h-3.5" />
                                   </button>
@@ -2308,6 +2322,9 @@ JSON Schema:
           return;
         }
 
+        const abortController = new AbortController();
+        let isMounted = true;
+
         if (!bufferedPhotos.length) {
           setLoadingThumbnails(false);
           return;
@@ -2315,8 +2332,6 @@ JSON Schema:
 
         const bufferedIds = new Set(bufferedPhotos.map(p => p.id));
         const needed = bufferedPhotos.filter(p => !p.thumbnailUrl && p.file);
-
-        let isMounted = true;
 
         if (needed.length > 0) {
           setLoadingThumbnails(true);
@@ -2334,7 +2349,6 @@ JSON Schema:
                     return {
                       ...p,
                       thumbnailUrl: u.thumbUrl,
-                      blobUrl: u.blobUrl,
                       naturalWidth: u.width,
                       naturalHeight: u.height
                     };
@@ -2345,7 +2359,8 @@ JSON Schema:
             },
             (completed, total) => {
               if (isMounted) setThumbnailProgress({ current: completed, total });
-            }
+            },
+            abortController.signal
           ).then(() => {
             if (isMounted) setLoadingThumbnails(false);
           });
@@ -2353,22 +2368,34 @@ JSON Schema:
           setLoadingThumbnails(false);
         }
 
-        /* Garbage collect memory for photos outside the 100-image window buffer */
         setPhotos(prev => {
           let hasChanges = false;
           const updated = prev.map(p => {
-            if (!bufferedIds.has(p.id) && (p.thumbnailUrl || p.blobUrl)) {
-              hasChanges = true;
-              if (p.thumbnailUrl) try { URL.revokeObjectURL(p.thumbnailUrl); } catch(e){}
-              if (p.blobUrl) try { URL.revokeObjectURL(p.blobUrl); } catch(e){}
-              return { ...p, thumbnailUrl: null, blobUrl: null };
+            let updatedPhoto = p;
+            let changed = false;
+
+            if (!bufferedIds.has(p.id) && p.thumbnailUrl) {
+              try { URL.revokeObjectURL(p.thumbnailUrl); } catch(e){}
+              updatedPhoto = { ...updatedPhoto, thumbnailUrl: null };
+              changed = true;
             }
-            return p;
+
+            if (p.blobUrl) {
+              try { URL.revokeObjectURL(p.blobUrl); } catch(e){}
+              updatedPhoto = { ...updatedPhoto, blobUrl: null };
+              changed = true;
+            }
+
+            if (changed) hasChanges = true;
+            return updatedPhoto;
           });
           return hasChanges ? updated : prev;
         });
 
-        return () => { isMounted = false; };
+        return () => { 
+          isMounted = false; 
+          abortController.abort(); 
+        };
       }, [currentPage, processedPhotos.length, filterSharpness, sortBy, isPreviewOpen]);
 
       const isSelectionActive = selectedIds.size > 0;
@@ -2377,8 +2404,9 @@ JSON Schema:
         : `Delete Filtered (${processedPhotos.length})`;
 
       return (
-        <div className="flex-1 flex flex-col overflow-hidden min-h-0 p-3 sm:p-4 md:p-6 gap-3 sm:gap-4 pb-20 md:pb-4">
-          <div className="flex-shrink-0 bg-slate-900 border border-slate-800 p-3.5 sm:p-4 rounded-2xl shadow-xl space-y-3 sm:space-y-4">
+        <div className="flex-1 flex flex-col overflow-hidden min-h-0 p-3 sm:p-4 md:p-6 gap-3 sm:gap-4 pb-[calc(5rem+env(safe-area-inset-bottom))] md:pb-4">
+          <div className="flex-shrink-0 bg-slate-900 border border-slate-800 p-3 sm:p-4 rounded-2xl shadow-xl space-y-3">
+            
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
                 <h2 className="text-lg sm:text-xl font-extrabold text-white flex items-center space-x-2">
@@ -2389,7 +2417,7 @@ JSON Schema:
               </div>
 
               <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center sm:space-x-2">
-                <label className="cursor-pointer bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs px-3.5 py-2.5 rounded-xl shadow-lg transition flex items-center justify-center space-x-1.5 active:scale-95">
+                <label className="cursor-pointer bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs px-3.5 py-2.5 rounded-xl shadow-lg transition flex items-center justify-center space-x-1.5 active:scale-95 touch-manipulation">
                   <Icon name="upload" className="w-4 h-4" />
                   <span>Upload Photos</span>
                   <input
@@ -2405,21 +2433,21 @@ JSON Schema:
                 <button
                   onClick={handleBatchRateFocus}
                   disabled={rating || !photos.some(p => p.sharpness === null && p.userStars === null)}
-                  className="bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 font-semibold text-xs px-3.5 py-2.5 rounded-xl border border-slate-700 transition flex items-center justify-center space-x-1.5 active:scale-95"
+                  className="bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 font-semibold text-xs px-3.5 py-2.5 rounded-xl border border-slate-700 transition flex items-center justify-center space-x-1.5 active:scale-95 touch-manipulation"
                 >
                   <Icon name="sparkles" className="w-4 h-4 text-emerald-400" />
-                  <span>Cull Blurry Photos ({photos.filter(p => p.sharpness === null).length})</span>
+                  <span>Rate photos ({photos.filter(p => p.sharpness === null).length})</span>
                 </button>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 pt-2 border-t border-slate-800 text-xs items-center">
-              <div className="flex items-center space-x-1.5">
+            <div className="flex flex-nowrap items-center overflow-x-auto no-scrollbar gap-2 sm:gap-3 pt-2 border-t border-slate-800 text-xs pb-1">
+              <div className="flex items-center space-x-1.5 flex-shrink-0">
                 <span className="text-slate-400 font-medium text-[11px] sm:text-xs">Filter:</span>
                 <select
                   value={filterSharpness}
                   onChange={(e) => { setFilterSharpness(e.target.value); setCurrentPage(1); }}
-                  className="bg-slate-950 border border-slate-800 text-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-emerald-500 text-[11px] sm:text-xs w-full"
+                  className="bg-slate-950 border border-slate-800 text-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-emerald-500 text-[11px] sm:text-xs min-w-[120px] touch-manipulation"
                 >
                   <option value="all">All Photos ({photos.length})</option>
                   <option value="5star">5 Stars (Tack Sharp)</option>
@@ -2429,12 +2457,12 @@ JSON Schema:
                 </select>
               </div>
 
-              <div className="flex items-center space-x-1.5">
+              <div className="flex items-center space-x-1.5 flex-shrink-0">
                 <span className="text-slate-400 font-medium text-[11px] sm:text-xs">Sort:</span>
                 <select
                   value={sortBy}
                   onChange={(e) => setSortBy(e.target.value)}
-                  className="bg-slate-950 border border-slate-800 text-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-emerald-500 text-[11px] sm:text-xs w-full"
+                  className="bg-slate-950 border border-slate-800 text-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-emerald-500 text-[11px] sm:text-xs touch-manipulation"
                 >
                   <option value="name">File Name</option>
                   <option value="date">Date Captured</option>
@@ -2442,44 +2470,43 @@ JSON Schema:
                 </select>
               </div>
 
-              <div className="flex justify-end space-x-2 sm:col-span-2">
-                <button
-                  onClick={handleSelectAll}
-                  disabled={!processedPhotos.length}
-                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-semibold rounded-lg transition flex items-center space-x-1 disabled:opacity-50 text-[11px] sm:text-xs"
-                  title={selectedIds.size === processedPhotos.length ? "Deselect All" : "Select All Filtered"}
-                >
-                  <Icon name="check" className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>{selectedIds.size === processedPhotos.length && processedPhotos.length > 0 ? "Deselect All" : `Select All (${processedPhotos.length})`}</span>
-                </button>
+              <div className="w-px h-5 bg-slate-800 flex-shrink-0 mx-1 hidden sm:block"></div>
 
-                <button
-                  onClick={handleExportFiltered}
-                  disabled={!isSelectionActive && !processedPhotos.length}
-                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-semibold rounded-lg transition flex items-center space-x-1 disabled:opacity-50 text-[11px] sm:text-xs"
-                  title="Export photos to directory"
-                >
-                  <Icon name="download" className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Save Folder ({isSelectionActive ? selectedIds.size : processedPhotos.length})</span>
-                </button>
+              <button
+                onClick={handleSelectAll}
+                disabled={!processedPhotos.length}
+                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-semibold rounded-lg transition flex items-center space-x-1 disabled:opacity-50 text-[11px] sm:text-xs flex-shrink-0 touch-manipulation"
+                title={selectedIds.size === processedPhotos.length ? "Deselect All" : "Select All Filtered"}
+              >
+                <Icon name="check" className="w-3.5 h-3.5 text-emerald-400" />
+                <span>{selectedIds.size === processedPhotos.length && processedPhotos.length > 0 ? "Deselect All" : `Select All (${processedPhotos.length})`}</span>
+              </button>
 
-                <button
-                  onClick={() => setShowDeleteConfirmModal(true)}
-                  disabled={!isSelectionActive && !processedPhotos.length}
-                  className="px-3 py-1.5 bg-red-600/20 hover:bg-red-600/30 text-red-400 border border-red-500/30 font-semibold rounded-lg transition flex items-center space-x-1 disabled:opacity-50 text-[11px] sm:text-xs"
-                  title={isSelectionActive ? "Delete checked photos" : "Delete filtered photos"}
-                >
-                  <Icon name="trash" className="w-3.5 h-3.5" />
-                  <span>{deleteButtonText}</span>
-                </button>
-              </div>
+              <button
+                onClick={handleExportFiltered}
+                disabled={!isSelectionActive && !processedPhotos.length}
+                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-semibold rounded-lg transition flex items-center space-x-1 disabled:opacity-50 text-[11px] sm:text-xs flex-shrink-0 touch-manipulation"
+                title="Export photos to directory"
+              >
+                <Icon name="download" className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Save Folder ({isSelectionActive ? selectedIds.size : processedPhotos.length})</span>
+              </button>
+
+              <button
+                onClick={() => setShowDeleteConfirmModal(true)}
+                disabled={!isSelectionActive && !processedPhotos.length}
+                className="px-3 py-1.5 bg-red-600/20 hover:bg-red-600/30 text-red-400 border border-red-500/30 font-semibold rounded-lg transition flex items-center space-x-1 disabled:opacity-50 text-[11px] sm:text-xs flex-shrink-0 touch-manipulation"
+                title={isSelectionActive ? "Delete checked photos" : "Delete filtered photos"}
+              >
+                <Icon name="trash" className="w-3.5 h-3.5" />
+                <span>{deleteButtonText}</span>
+              </button>
             </div>
           </div>
 
-          {/* Grid Container */}
-          <div className="flex-1 overflow-y-auto min-h-0 pr-1">
+          <div className="flex-1 overflow-y-auto min-h-0 pr-1 pb-4">
             {paginatedPhotos.length > 0 ? (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-4">
                 {paginatedPhotos.map(photo => {
                   const currentStars = photo.userStars || photo.stars || scoreToStars(photo.sharpness);
                   const isChecked = selectedIds.has(photo.id);
@@ -2491,7 +2518,7 @@ JSON Schema:
                     <div
                       key={photo.id}
                       onClick={() => onSelectPhoto(photo)}
-                      className={`group relative aspect-square bg-slate-900 border rounded-2xl overflow-hidden shadow-lg cursor-pointer hover:border-emerald-500 transition flex items-center justify-center p-1 ${isChecked ? 'border-emerald-500 ring-2 ring-emerald-500/50' : 'border-slate-800'}`}
+                      className={`group relative aspect-square bg-slate-900 border rounded-2xl overflow-hidden shadow-lg cursor-pointer hover:border-emerald-500 transition flex items-center justify-center p-1 touch-manipulation ${isChecked ? 'border-emerald-500 ring-2 ring-emerald-500/50' : 'border-slate-800'}`}
                     >
                       <CroppedImage
                         src={activeSrc}
@@ -2505,42 +2532,42 @@ JSON Schema:
 
                       <div 
                         onClick={(e) => toggleSelectPhoto(photo.id, e)}
-                        className="absolute top-2 left-2 z-20 p-1 rounded-md bg-slate-950/80 border border-slate-700/80 hover:border-emerald-400 transition"
+                        className="absolute top-2 left-2 z-20 p-2 sm:p-1 rounded-md bg-slate-950/80 border border-slate-700/80 hover:border-emerald-400 transition touch-manipulation"
                         title="Select photo"
                       >
                         <input
                           type="checkbox"
                           checked={isChecked}
                           onChange={() => {}}
-                          className="w-4 h-4 accent-emerald-500 rounded cursor-pointer pointer-events-none block"
+                          className="w-5 h-5 sm:w-4 sm:h-4 accent-emerald-500 rounded cursor-pointer pointer-events-none block"
                         />
                       </div>
 
                       <div className="absolute top-2 right-2 z-20 flex items-center space-x-1">
                         {photo.sharpness !== null && (
-                          <span className="bg-emerald-950/90 border border-emerald-500/50 text-emerald-300 text-[10px] font-extrabold px-1.5 py-0.5 rounded-md shadow-md backdrop-blur-md">
+                          <span className="bg-emerald-950/90 border border-emerald-500/50 text-emerald-300 text-[10px] font-extrabold px-1.5 py-0.5 rounded-md shadow-md backdrop-blur-md hidden sm:inline-block">
                             {photo.sharpness}/10
                           </span>
                         )}
                         <button
                           onClick={(e) => handleDeleteSinglePhoto(photo.id, e)}
-                          className="p-1 bg-slate-950/80 hover:bg-red-600 text-slate-300 hover:text-white rounded-full shadow-md backdrop-blur-md transition"
+                          className="p-1.5 sm:p-1 bg-slate-950/80 hover:bg-red-600 text-slate-300 hover:text-white rounded-full shadow-md backdrop-blur-md transition touch-manipulation"
                           title="Delete photo"
                         >
-                          <Icon name="trash" className="w-3 h-3" />
+                          <Icon name="trash" className="w-3 h-3 sm:w-3 sm:h-3" />
                         </button>
                       </div>
 
-                      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-950 via-slate-950/80 to-transparent p-2 flex flex-col justify-end space-y-1 z-10">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[10px] text-slate-300 font-mono truncate max-w-[90px]">
+                      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-950 via-slate-950/80 to-transparent p-2 flex flex-col justify-end space-y-1 z-10 pointer-events-none">
+                        <div className="flex items-center justify-between pointer-events-auto">
+                          <span className="text-[9px] sm:text-[10px] text-slate-300 font-mono truncate max-w-[70px] sm:max-w-[90px]">
                             {photo.name}
                           </span>
                           <div onClick={(e) => e.stopPropagation()}>
                             <StarRating
                               rating={currentStars}
                               onChange={(newRating) => handleCardStarClick(photo.id, newRating)}
-                              size="w-3 h-3"
+                              size="w-2.5 h-2.5 sm:w-3 sm:h-3"
                             />
                           </div>
                         </div>
@@ -2550,27 +2577,25 @@ JSON Schema:
                 })}
               </div>
             ) : (
-              <div className="p-12 text-center bg-slate-900/40 border border-dashed border-slate-800 rounded-3xl space-y-3">
-                <Icon name="image" className="w-12 h-12 text-slate-600 mx-auto" />
-                <h3 className="text-base font-bold text-slate-300">No Photos Loaded in Workspace</h3>
-                <p className="text-xs text-slate-500 max-w-sm mx-auto">Click Upload Photos to ingest high-res wildlife photos and run focus sharpness culling.</p>
+              <div className="p-8 sm:p-12 text-center bg-slate-900/40 border border-dashed border-slate-800 rounded-3xl space-y-3">
+                <Icon name="image" className="w-10 h-10 sm:w-12 sm:h-12 text-slate-600 mx-auto" />
+                <h3 className="text-sm sm:text-base font-bold text-slate-300">No Photos Loaded in Workspace</h3>
+                <p className="text-[11px] sm:text-xs text-slate-500 max-w-sm mx-auto">Click Upload Photos to ingest high-res wildlife photos and run focus sharpness culling.</p>
               </div>
             )}
           </div>
 
-          {/* Unified Footer Toolbar: Integrates Loading Progress & Pagination in the SAME ROW */}
-          <div className="flex-shrink-0 flex flex-wrap items-center justify-between bg-slate-900 border border-slate-800 p-3 rounded-2xl text-xs gap-2 shadow-xl">
-            {/* Integrated Loading Progress & Page Summary */}
-            <div className="flex items-center space-x-3 min-w-0 flex-1">
+          <div className="flex-shrink-0 flex flex-col sm:flex-row sm:items-center justify-between bg-slate-900 border border-slate-800 p-2.5 sm:p-3 rounded-2xl text-[11px] sm:text-xs gap-2 shadow-xl">
+            <div className="flex items-center justify-center sm:justify-start space-x-3 min-w-0 flex-1 px-1">
               {uploading ? (
                 <div className="flex items-center space-x-2 truncate text-emerald-400 font-medium">
                   <div className="w-3.5 h-3.5 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin flex-shrink-0"></div>
                   <span className="truncate">
-                    Step 1: Reading files: <strong className="font-mono text-white">{uploadProgress.current}</strong>/{uploadProgress.total} ({(uploadProgress.total ? (uploadProgress.current / uploadProgress.total * 100) : 0).toFixed(0)}%)
+                    Step 1: Reading files: <strong className="font-mono text-white">{uploadProgress.current}</strong>/{uploadProgress.total}
                   </span>
                   <button
                     onClick={() => { abortUploadRef.current = true; }}
-                    className="px-2 py-0.5 bg-red-600/20 text-red-400 hover:bg-red-600/30 text-[10px] rounded font-semibold ml-2 flex-shrink-0"
+                    className="px-2 py-0.5 bg-red-600/20 text-red-400 hover:bg-red-600/30 text-[10px] rounded font-semibold ml-2 flex-shrink-0 touch-manipulation"
                   >
                     Abort
                   </button>
@@ -2590,31 +2615,30 @@ JSON Schema:
                   </span>
                   <button
                     onClick={() => { abortRatingRef.current = true; }}
-                    className="px-2 py-0.5 bg-red-600/20 text-red-400 hover:bg-red-600/30 text-[10px] rounded font-semibold ml-2 flex-shrink-0"
+                    className="px-2 py-0.5 bg-red-600/20 text-red-400 hover:bg-red-600/30 text-[10px] rounded font-semibold ml-2 flex-shrink-0 touch-manipulation"
                   >
                     Abort
                   </button>
                 </div>
               ) : (
-                <span className="text-slate-400 truncate">
+                <span className="text-slate-400 truncate text-center w-full sm:w-auto">
                   Page <strong>{currentPage}</strong> of {totalPages} ({processedPhotos.length} total)
                 </span>
               )}
             </div>
 
-            {/* Pagination Controls */}
-            <div className="flex items-center space-x-2 flex-shrink-0">
+            <div className="flex items-center justify-between sm:justify-end space-x-2 flex-shrink-0 w-full sm:w-auto mt-1 sm:mt-0">
               <button
                 onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
                 disabled={currentPage === 1}
-                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed text-slate-300 rounded-lg font-medium transition"
+                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed text-slate-300 rounded-lg font-medium transition touch-manipulation w-full sm:w-auto"
               >
                 Previous
               </button>
               <button
                 onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
                 disabled={currentPage === totalPages}
-                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed text-slate-300 rounded-lg font-medium transition"
+                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed text-slate-300 rounded-lg font-medium transition touch-manipulation w-full sm:w-auto"
               >
                 Next
               </button>
@@ -2622,7 +2646,7 @@ JSON Schema:
           </div>
 
           {showDeleteConfirmModal && (
-            <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4" onClick={(e) => e.stopPropagation()}>
+            <div className="fixed inset-0 z-[60] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4" onClick={(e) => e.stopPropagation()}>
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 sm:p-6 max-w-sm w-full shadow-2xl space-y-4">
                 <div className="flex items-center space-x-3 text-red-400">
                   <div className="p-2 bg-red-500/10 border border-red-500/20 rounded-xl">
@@ -2640,16 +2664,16 @@ JSON Schema:
                   Are you sure you want to delete <strong className="text-white font-mono">{isSelectionActive ? selectedIds.size : processedPhotos.length}</strong> photo(s) {isSelectionActive ? "currently checked" : "matching your filter"}?
                 </p>
 
-                <div className="flex items-center justify-end space-x-2 pt-2 border-t border-slate-800">
+                <div className="flex flex-col-reverse sm:flex-row items-center justify-end sm:space-x-2 pt-2 border-t border-slate-800 gap-2 sm:gap-0">
                   <button
                     onClick={() => setShowDeleteConfirmModal(false)}
-                    className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl transition"
+                    className="w-full sm:w-auto px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl transition touch-manipulation"
                   >
                     Cancel
                   </button>
                   <button
                     onClick={confirmAndDeleteFiltered}
-                    className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white text-xs font-semibold rounded-xl transition shadow-lg flex items-center space-x-1.5"
+                    className="w-full sm:w-auto px-4 py-2 bg-red-600 hover:bg-red-500 text-white text-xs font-semibold rounded-xl transition shadow-lg flex items-center justify-center space-x-1.5 touch-manipulation"
                   >
                     <Icon name="trash" className="w-3.5 h-3.5" />
                     <span>Delete {isSelectionActive ? selectedIds.size : processedPhotos.length} Photo{(isSelectionActive ? selectedIds.size : processedPhotos.length) > 1 ? 's' : ''}</span>
@@ -2735,7 +2759,6 @@ JSON Schema:
         }
       }, [selectedPhoto, processedPhotos]);
 
-      /* 10-Image Preview Memory Buffer: Keep 5 photos before & 5 photos after hydrated */
       useEffect(() => {
         if (!selectedPhoto) return;
         const index = processedPhotos.findIndex(p => p.id === selectedPhoto.id);
@@ -2756,12 +2779,25 @@ JSON Schema:
           windowIndices.push(i);
         }
 
-        windowIndices.forEach(i => {
-          const photo = processedPhotos[i];
-          if (!photo.blobUrl && photo.file) {
-            const bUrl = URL.createObjectURL(photo.file);
-            setPhotos(prev => prev.map(p => p.id === photo.id ? { ...p, blobUrl: bUrl } : p));
-          }
+        setPhotos(prev => {
+          let hasChanges = false;
+          const updated = prev.map(p => {
+            const inPreviewWindow = windowIndices.some(idx => processedPhotos[idx]?.id === p.id);
+            
+            if (inPreviewWindow && !p.blobUrl && p.file) {
+              hasChanges = true;
+              return { ...p, blobUrl: URL.createObjectURL(p.file) };
+            }
+            
+            if (!inPreviewWindow && p.blobUrl) {
+              try { URL.revokeObjectURL(p.blobUrl); } catch(e){}
+              hasChanges = true;
+              return { ...p, blobUrl: null };
+            }
+            
+            return p;
+          });
+          return hasChanges ? updated : prev;
         });
       }, [selectedPhoto, processedPhotos]);
 
@@ -2856,7 +2892,7 @@ JSON Schema:
 
       return (
         <div className="h-full w-full flex flex-col bg-slate-950 text-slate-100 overflow-hidden select-none">
-          <header className="h-14 sm:h-16 border-b border-slate-800 bg-slate-900/90 backdrop-blur-md px-3 sm:px-6 flex items-center justify-between z-30">
+          <header className="h-14 sm:h-16 border-b border-slate-800 bg-slate-900/90 backdrop-blur-md px-3 sm:px-6 flex items-center justify-between z-30 flex-shrink-0">
             <div className="flex items-center space-x-2.5">
               <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl sm:rounded-2xl bg-emerald-600/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shadow-lg flex-shrink-0">
                 <Icon name="feather" className="w-5 h-5 sm:w-6 sm:h-6" />
@@ -2887,25 +2923,25 @@ JSON Schema:
             <div className="flex items-center space-x-2">
               <button
                 onClick={() => setShowAuthModal(true)}
-                className={`px-2.5 py-1.5 rounded-xl border text-xs font-semibold flex items-center space-x-1.5 transition ${userApiKey ? 'bg-slate-950 text-slate-300 border-slate-800 hover:border-emerald-500/50' : 'bg-emerald-600/20 text-emerald-300 border-emerald-500/40 animate-pulse'}`}
+                className={`px-2.5 py-1.5 rounded-xl border text-xs font-semibold flex items-center space-x-1.5 transition touch-manipulation ${userApiKey ? 'bg-slate-950 text-slate-300 border-slate-800 hover:border-emerald-500/50' : 'bg-emerald-600/20 text-emerald-300 border-emerald-500/40 animate-pulse'}`}
                 title="Configure Google Gemini API Key"
               >
                 <Icon name="google" className="w-3.5 h-3.5 text-emerald-400" />
-                <span className="text-[11px] font-medium hidden sm:inline">{userApiKey ? 'Google AI Connected' : 'Connect Google AI'}</span>
+                <span className="text-[11px] font-medium hidden sm:inline">{userApiKey ? 'AI Connected' : 'Connect AI'}</span>
               </button>
 
               <button
                 onClick={() => setShowTokenModal(true)}
-                className={`px-2.5 py-1.5 rounded-xl border text-xs font-semibold flex items-center space-x-1.5 transition ${rpmUsedPct > 80 ? 'bg-amber-500/20 text-amber-400 border-amber-500/40 animate-pulse' : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-slate-700'}`}
+                className={`px-2.5 py-1.5 rounded-xl border text-xs font-semibold flex items-center space-x-1.5 transition touch-manipulation ${rpmUsedPct > 80 ? 'bg-amber-500/20 text-amber-400 border-amber-500/40 animate-pulse' : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-slate-700'}`}
                 title="View Gemini AI Token & Quota Status"
               >
                 <Icon name="bolt" className={`w-3.5 h-3.5 ${rpmUsedPct > 80 ? 'text-amber-400' : 'text-emerald-400'}`} />
-                <span className="text-[11px] font-mono">{100 - rpmUsedPct}% Quota</span>
+                <span className="text-[11px] font-mono hidden sm:inline">{100 - rpmUsedPct}% Quota</span>
               </button>
             </div>
           </header>
 
-          <main className="flex-1 overflow-hidden flex flex-col relative">
+          <main className="flex-1 overflow-hidden flex flex-col relative z-20">
             {activeTab === 'vault' ? (
               <LiferVaultView
                 vaultEntries={vaultEntries}
@@ -2931,17 +2967,18 @@ JSON Schema:
             )}
           </main>
 
-          <nav className="md:hidden fixed bottom-0 inset-x-0 h-16 bg-slate-900/95 border-t border-slate-800 backdrop-blur-lg flex items-center justify-around z-40 px-2">
+          <nav className="md:hidden fixed bottom-0 inset-x-0 bg-slate-900/95 border-t border-slate-800 backdrop-blur-lg flex items-center justify-around z-40 px-2 pb-safe shadow-[0_-4px_10px_rgba(0,0,0,0.3)] min-h-[4rem]">
             <button
               onClick={() => setActiveTab('vault')}
-              className={`flex flex-col items-center justify-center w-full h-full space-y-1 transition ${activeTab === 'vault' ? 'text-emerald-400 font-bold' : 'text-slate-400'}`}
+              className={`flex flex-col items-center justify-center w-full h-full py-2 space-y-1 transition touch-manipulation ${activeTab === 'vault' ? 'text-emerald-400 font-bold' : 'text-slate-400 hover:text-slate-300'}`}
             >
               <Icon name="feather" className="w-5 h-5" />
               <span className="text-[10px]">Lifer Vault</span>
             </button>
+            <div className="w-px h-8 bg-slate-800"></div>
             <button
               onClick={() => setActiveTab('culling')}
-              className={`flex flex-col items-center justify-center w-full h-full space-y-1 transition ${activeTab === 'culling' ? 'text-emerald-400 font-bold' : 'text-slate-400'}`}
+              className={`flex flex-col items-center justify-center w-full h-full py-2 space-y-1 transition touch-manipulation ${activeTab === 'culling' ? 'text-emerald-400 font-bold' : 'text-slate-400 hover:text-slate-300'}`}
             >
               <Icon name="camera" className="w-5 h-5" />
               <span className="text-[10px]">Focus Culling</span>
