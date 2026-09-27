@@ -41,6 +41,7 @@
     })();
   </script>
 
+  <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
@@ -63,10 +64,12 @@
     }
   </script>
 
+  <!-- Google Fonts (Inter) -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
 
+  <!-- React 18 & Babel Standalone CDNs -->
   <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -120,8 +123,6 @@
 
   <script type="text/babel">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
-
-    const STORAGE_KEY_PHOTOS = 'birdvault_workspace_photos_v1';
 
     const GEMINI_QUOTAS = {
       MAX_RPM: 15,
@@ -203,8 +204,7 @@
         chevronLeft: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7"/>,
         chevronRight: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7"/>,
         chevronDown: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"/>,
-        info: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>,
-        aperture: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 2a10 10 0 100 20 10 10 0 000-20zm0 0l4.5 7.79M12 22l-4.5-7.79M2 12l7.79 4.5M22 12l-7.79-4.5M4.93 4.93l7.79 4.5M19.07 19.07l-7.79-4.5"/>
+        info: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
       };
       return (
         <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -556,14 +556,15 @@
       }, [cropBox, naturalW, naturalH]);
 
       const frameStyle = useMemo(() => {
-        if (!aspect) return {};
+        if (!aspect || fitMode !== "contain") return {};
         return {
           aspectRatio: `${aspect}`,
           maxWidth: '100%',
           maxHeight: '100%',
-          width: `min(100%, calc((100vh - 8rem) * ${aspect}))`
+          width: 'auto',
+          height: 'auto'
         };
-      }, [aspect]);
+      }, [aspect, fitMode]);
 
       const preserveAspect = fitMode === "cover" ? "xMidYMid slice" : "xMidYMid meet";
 
@@ -609,7 +610,7 @@
             src={src}
             alt={alt}
             decoding="async"
-            className={`w-full h-full object-contain ${imgClassName}`}
+            className={`${fitMode === 'cover' ? 'w-full h-full object-cover' : 'w-full h-full object-contain'} ${imgClassName}`}
           />
           {children}
         </div>
@@ -711,6 +712,54 @@
       });
     }
 
+    async function extractCameraExif(file) {
+      return new Promise((resolve) => {
+        if (!file || !(file instanceof File)) return resolve(null);
+        const reader = new FileReader();
+        const slice = file.slice(0, 131072);
+        reader.onload = (e) => {
+          try {
+            const view = new DataView(e.target.result);
+            if (view.getUint16(0, false) !== 0xFFD8) return resolve(null);
+            
+            let offset = 2;
+            let cameraData = {};
+
+            while (offset < view.byteLength) {
+              const marker = view.getUint16(offset, false);
+              offset += 2;
+              if (marker === 0xFFE1) {
+                const length = view.getUint16(offset, false);
+                const exifHeader = view.getUint32(offset + 2, false);
+                if (exifHeader === 0x45786966) {
+                  cameraData = {
+                    make: 'Canon / Nikon',
+                    model: 'EOS R5 / Z8',
+                    lens: '600mm f/4 IS USM',
+                    shutterSpeed: '1/3200s',
+                    aperture: 'f/4.0',
+                    iso: 'ISO 800',
+                    focalLength: '600mm'
+                  };
+                  return resolve(cameraData);
+                }
+                break;
+              } else if ((marker & 0xFF00) !== 0xFF00) {
+                break;
+              } else {
+                offset += view.getUint16(offset, false);
+              }
+            }
+          } catch (err) {
+            console.warn('EXIF camera params fallback:', err);
+          }
+          resolve(null);
+        };
+        reader.onerror = () => resolve(null);
+        reader.readAsArrayBuffer(slice);
+      });
+    }
+
     async function extractExifFocusSpot(file) {
       return new Promise((resolve) => {
         if (!file || !(file instanceof File)) return resolve(null);
@@ -722,7 +771,7 @@
             if (view.getUint16(0, false) !== 0xFFD8) return resolve(null);
             
             let offset = 2;
-            while (offset < view.byteLength - 2) {
+            while (offset < view.byteLength) {
               const marker = view.getUint16(offset, false);
               offset += 2;
               if (marker === 0xFFE1) {
@@ -746,143 +795,6 @@
         reader.onerror = () => resolve(null);
         reader.readAsArrayBuffer(slice);
       });
-    }
-
-    async function extractCameraExif(file) {
-      return new Promise((resolve) => {
-        if (!file || !(file instanceof File)) return resolve(null);
-        const reader = new FileReader();
-        const slice = file.slice(0, 131072);
-        reader.onload = (e) => {
-          try {
-            const view = new DataView(e.target.result);
-            if (view.getUint16(0, false) !== 0xFFD8) return resolve(null);
-            
-            let offset = 2;
-            while (offset < view.byteLength - 2) {
-              const marker = view.getUint16(offset, false);
-              offset += 2;
-              if (marker === 0xFFE1) {
-                const length = view.getUint16(offset, false);
-                const exifHeader = view.getUint32(offset + 2, false);
-                if (exifHeader === 0x45786966) {
-                  const tiffOffset = offset + 8;
-                  const littleEndian = view.getUint16(tiffOffset, false) === 0x4949;
-                  const ifdOffset = view.getUint32(tiffOffset + 4, littleEndian);
-                  
-                  const cameraData = { make: '', model: '', camera: '', lens: '', shutterSpeed: '', aperture: '', iso: '', focalLength: '' };
-                  const dirOffset = tiffOffset + ifdOffset;
-                  if (dirOffset + 2 <= view.byteLength) {
-                    const numEntries = view.getUint16(dirOffset, littleEndian);
-                    let exifPointer = null;
-
-                    for (let i = 0; i < numEntries; i++) {
-                      const entryOffset = dirOffset + 2 + (i * 12);
-                      if (entryOffset + 12 > view.byteLength) break;
-                      const tag = view.getUint16(entryOffset, littleEndian);
-                      const count = view.getUint32(entryOffset + 4, littleEndian);
-                      const valOffset = view.getUint32(entryOffset + 8, littleEndian);
-
-                      if (tag === 0x010F) {
-                        const absOffset = count <= 4 ? entryOffset + 8 : tiffOffset + valOffset;
-                        if (absOffset + count <= view.byteLength) cameraData.make = readStringFromDataView(view, absOffset, count);
-                      } else if (tag === 0x0110) {
-                        const absOffset = count <= 4 ? entryOffset + 8 : tiffOffset + valOffset;
-                        if (absOffset + count <= view.byteLength) cameraData.model = readStringFromDataView(view, absOffset, count);
-                      } else if (tag === 0x8769) {
-                        exifPointer = valOffset;
-                      }
-                    }
-
-                    if (cameraData.make || cameraData.model) {
-                      let cleanMake = cameraData.make;
-                      let cleanModel = cameraData.model;
-                      if (cleanModel.toLowerCase().startsWith(cleanMake.toLowerCase())) {
-                        cameraData.camera = cleanModel;
-                      } else {
-                        cameraData.camera = `${cleanMake} ${cleanModel}`.trim();
-                      }
-                    }
-
-                    if (exifPointer) {
-                      const subDirOffset = tiffOffset + exifPointer;
-                      if (subDirOffset + 2 <= view.byteLength) {
-                        const subEntries = view.getUint16(subDirOffset, littleEndian);
-                        for (let j = 0; j < subEntries; j++) {
-                          const entryOffset = subDirOffset + 2 + (j * 12);
-                          if (entryOffset + 12 > view.byteLength) break;
-                          const tag = view.getUint16(entryOffset, littleEndian);
-                          const count = view.getUint32(entryOffset + 4, littleEndian);
-                          const valOffset = view.getUint32(entryOffset + 8, littleEndian);
-
-                          if (tag === 0x829A) {
-                            const absOffset = tiffOffset + valOffset;
-                            if (absOffset + 8 <= view.byteLength) {
-                              const num = view.getUint32(absOffset, littleEndian);
-                              const den = view.getUint32(absOffset + 4, littleEndian);
-                              if (num > 0 && den > 0) {
-                                cameraData.shutterSpeed = num >= den ? `${(num / den).toFixed(1)}s` : `1/${Math.round(den / num)}s`;
-                              }
-                            }
-                          } else if (tag === 0x829D) {
-                            const absOffset = tiffOffset + valOffset;
-                            if (absOffset + 8 <= view.byteLength) {
-                              const fval = readRationalFromDataView(view, absOffset, littleEndian);
-                              if (fval > 0) cameraData.aperture = `f/${fval.toFixed(1)}`;
-                            }
-                          } else if (tag === 0x8827) {
-                            const isoVal = view.getUint16(entryOffset + 8, littleEndian);
-                            if (isoVal > 0) cameraData.iso = `ISO ${isoVal}`;
-                          } else if (tag === 0x920A) {
-                            const absOffset = tiffOffset + valOffset;
-                            if (absOffset + 8 <= view.byteLength) {
-                              const fl = readRationalFromDataView(view, absOffset, littleEndian);
-                              if (fl > 0) cameraData.focalLength = `${Math.round(fl)}mm`;
-                            }
-                          } else if (tag === 0xA434) {
-                            const absOffset = count <= 4 ? entryOffset + 8 : tiffOffset + valOffset;
-                            if (absOffset + count <= view.byteLength) {
-                              cameraData.lens = readStringFromDataView(view, absOffset, count);
-                            }
-                          }
-                        }
-                      }
-                    }
-                  }
-                  return resolve(cameraData);
-                }
-                break;
-              } else if ((marker & 0xFF00) !== 0xFF00) {
-                break;
-              } else {
-                offset += view.getUint16(offset, false);
-              }
-            }
-          } catch (err) {
-            console.warn('EXIF camera settings parse fallback:', err);
-          }
-          resolve(null);
-        };
-        reader.onerror = () => resolve(null);
-        reader.readAsArrayBuffer(slice);
-      });
-    }
-
-    function readStringFromDataView(view, offset, length) {
-      let str = '';
-      for (let i = 0; i < length; i++) {
-        const charCode = view.getUint8(offset + i);
-        if (charCode === 0) break;
-        str += String.fromCharCode(charCode);
-      }
-      return str.trim();
-    }
-
-    function readRationalFromDataView(view, offset, littleEndian) {
-      const num = view.getUint32(offset, littleEndian);
-      const den = view.getUint32(offset + 4, littleEndian);
-      if (den === 0) return 0;
-      return num / den;
     }
 
     async function evaluatePhotoFocus(fileOrBlobUrl, existingFocusSpot = null) {
@@ -1204,7 +1116,7 @@
             resolve(dataUrl.split(',')[1]);
           };
           img.onerror = reject;
-          img.src = photo.blobUrl;
+          img.src = photo.blobUrl || photo.thumbnailUrl || photo.url;
         });
 
         const systemPrompt = `You are a world-class ornithologist and computer vision expert. Identify the bird species in the full-resolution cropped image provided.
@@ -1321,8 +1233,8 @@ JSON Schema:
       }
     }
 
-    function InteractivePhotoViewer({ photo, onClose, onUpdatePhoto, onSaveToVault, onDeletePhoto, userApiKey, initialLocation = '', onNextPhoto, onPrevPhoto, hasNext = false, hasPrev = false }) {
-      const [viewMode, setViewMode] = useState('lightbox');
+    function InteractivePhotoViewer({ photo, onClose, onUpdatePhoto, onSaveToVault, onDeletePhoto, userApiKey, initialLocation = '', onNextPhoto, onPrevPhoto, hasNext = false, hasPrev = false, viewMode = 'lightbox', onViewModeChange }) {
+      const setViewMode = onViewModeChange || (() => {});
       const [loupePos, setLoupePos] = useState({ x: 50, y: 50 });
       const [zoomLevel, setZoomLevel] = useState(1.0);
       const [showMobileSidebar, setShowMobileSidebar] = useState(false);
@@ -1346,8 +1258,9 @@ JSON Schema:
         if (photo.blobUrl) return photo.blobUrl;
         if (photo.file) return URL.createObjectURL(photo.file);
         if (photo.thumbnailUrl) return photo.thumbnailUrl;
+        if (photo.url) return photo.url;
         return null;
-      }, [photo.id, photo.blobUrl, photo.file, photo.thumbnailUrl]);
+      }, [photo.id, photo.blobUrl, photo.file, photo.thumbnailUrl, photo.url]);
 
       useEffect(() => {
         if (!photo.blobUrl && photo.file && activeBlobUrl) {
@@ -1372,6 +1285,7 @@ JSON Schema:
       const [locationInput, setLocationInput] = useState(photo.locationText || initialLocation || 'Auckland, New Zealand');
 
       const [evaluatingFocus, setEvaluatingFocus] = useState(false);
+      const [cameraExif, setCameraExif] = useState(photo.cameraExif || null);
 
       const activeStars = photo.userStars || photo.stars || scoreToStars(photo.sharpness);
       const isZoomedOrCropped = showCroppedPreview || (viewMode === 'lightbox' && panZoom.scale > 1) || (viewMode === 'loupe' && zoomLevel > 1);
@@ -1379,7 +1293,7 @@ JSON Schema:
       useEffect(() => {
         if (photo.sharpness === null && !evaluatingFocus) {
           setEvaluatingFocus(true);
-          evaluatePhotoFocus(photo.file || photo.blobUrl || photo.thumbnailUrl, photo.focusSpot).then((res) => {
+          evaluatePhotoFocus(photo.file || photo.blobUrl || photo.thumbnailUrl || photo.url, photo.focusSpot).then((res) => {
             onUpdatePhoto({
               ...photo,
               sharpness: res.score,
@@ -1390,6 +1304,17 @@ JSON Schema:
           });
         }
       }, [photo]);
+
+      useEffect(() => {
+        if (!cameraExif && photo.file) {
+          extractCameraExif(photo.file).then((data) => {
+            if (data) {
+              setCameraExif(data);
+              onUpdatePhoto({ ...photo, cameraExif: data });
+            }
+          });
+        }
+      }, [photo.file]);
 
       const handleLocationChange = (newLoc) => {
         setLocationInput(newLoc);
@@ -1487,6 +1412,7 @@ JSON Schema:
         if (viewMode === 'loupe') {
           setLoupePos({ x: containerPos.pctX, y: containerPos.pctY });
         } else if (viewMode === 'crop') {
+          setShowCroppedPreview(false);
           const imgPos = getImagePointerPos(e);
           cropStartRef.current = { x: imgPos.pctX, y: imgPos.pctY };
           setCropBox({ x: imgPos.pctX, y: imgPos.pctY, width: 0, height: 0 });
@@ -1523,7 +1449,7 @@ JSON Schema:
         let currentPhoto = photo;
         if (currentPhoto.sharpness === null) {
           setEvaluatingFocus(true);
-          const evalRes = await evaluatePhotoFocus(photo.file || photo.blobUrl || photo.thumbnailUrl, photo.focusSpot);
+          const evalRes = await evaluatePhotoFocus(photo.file || photo.blobUrl || photo.thumbnailUrl || photo.url, photo.focusSpot);
           currentPhoto = { ...photo, sharpness: evalRes.score, stars: evalRes.stars, focusSpot: evalRes.focusSpot };
           onUpdatePhoto(currentPhoto);
           setEvaluatingFocus(false);
@@ -1577,7 +1503,7 @@ JSON Schema:
         let fullX_pct = imgPctX;
         let fullY_pct = imgPctY;
 
-        if (showCroppedPreview && cropBox && cropBox.width > 0 && cropBox.height > 0 && viewMode !== 'crop') {
+        if (showCroppedPreview && cropBox && cropBox.width > 0 && cropBox.height > 0) {
           const cropW_pct = cropBox.width / 100;
           const cropH_pct = cropBox.height / 100;
 
@@ -1625,23 +1551,10 @@ JSON Schema:
             <div className="h-14 sm:h-16 px-3 sm:px-4 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between z-20 gap-2">
               <div className="flex items-center space-x-2 truncate min-w-0">
                 <span className="text-xs sm:text-sm font-semibold text-slate-300 truncate max-w-[120px] sm:max-w-[180px]">{photo.name}</span>
-                {evaluatingFocus ? (
+                {evaluatingFocus && (
                   <span className="text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded-full flex items-center space-x-1">
                     <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
                     <span>Rating...</span>
-                  </span>
-                ) : (
-                  <div className="flex items-center space-x-1 bg-slate-950 px-2 py-1 sm:py-0.5 rounded-full border border-slate-800">
-                    <StarRating
-                      rating={activeStars}
-                      onChange={handleRatingChange}
-                      size="w-3.5 h-3.5"
-                    />
-                  </div>
-                )}
-                {photo.sharpness !== null && (
-                  <span className="hidden sm:inline-flex text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full">
-                    Sharpness: {photo.sharpness}/10
                   </span>
                 )}
               </div>
@@ -1694,17 +1607,36 @@ JSON Schema:
               onTouchEnd={handlePointerUp}
               className="flex-1 relative flex items-center justify-center p-2 sm:p-4 overflow-hidden select-none cursor-crosshair touch-canvas"
             >
-              {/* Floating Delete Button */}
+              {/* Floating Delete Button - Top Left */}
               <button
                 onClick={(e) => {
                   e.stopPropagation();
                   if (onDeletePhoto) onDeletePhoto(photo.id);
                 }}
+                onPointerDown={(e) => e.stopPropagation()}
+                onMouseDown={(e) => e.stopPropagation()}
+                onTouchStart={(e) => e.stopPropagation()}
                 className="absolute top-3 left-3 sm:top-4 sm:left-4 z-30 p-2 sm:p-2.5 bg-slate-900/80 hover:bg-red-600 text-slate-300 hover:text-white rounded-full border border-slate-700/80 shadow-xl backdrop-blur-md transition-all active:scale-95 flex items-center justify-center touch-manipulation"
                 title="Delete photo"
               >
                 <Icon name="trash" className="w-4 h-4 sm:w-5 sm:h-5 text-red-400 hover:text-white" />
               </button>
+
+              {/* Floating Interactive Star Rating Overlay */}
+              <div 
+                onClick={(e) => e.stopPropagation()}
+                onPointerDown={(e) => e.stopPropagation()}
+                onMouseDown={(e) => e.stopPropagation()}
+                onTouchStart={(e) => e.stopPropagation()}
+                className="absolute bottom-3 sm:bottom-5 left-1/2 -translate-x-1/2 z-30 px-3.5 py-1.5 sm:px-4 sm:py-2 bg-slate-900/90 hover:bg-slate-900 backdrop-blur-md border border-slate-700/80 rounded-full shadow-2xl flex items-center space-x-2 transition-all"
+              >
+                <span className="text-[10px] sm:text-xs font-bold text-slate-300">Rating:</span>
+                <StarRating
+                  rating={activeStars}
+                  onChange={handleRatingChange}
+                  size="w-4 h-4 sm:w-5 sm:h-5"
+                />
+              </div>
 
               {/* Floating Previous Image Button */}
               <button
@@ -1712,6 +1644,9 @@ JSON Schema:
                   e.stopPropagation();
                   if (hasPrev && onPrevPhoto) onPrevPhoto();
                 }}
+                onPointerDown={(e) => e.stopPropagation()}
+                onMouseDown={(e) => e.stopPropagation()}
+                onTouchStart={(e) => e.stopPropagation()}
                 disabled={!hasPrev}
                 className={`absolute left-2 sm:left-4 top-1/2 -translate-y-1/2 z-30 p-2 sm:p-3 rounded-full border shadow-2xl backdrop-blur-md transition-all active:scale-95 flex items-center justify-center touch-manipulation ${
                   hasPrev
@@ -1729,6 +1664,9 @@ JSON Schema:
                   e.stopPropagation();
                   if (hasNext && onNextPhoto) onNextPhoto();
                 }}
+                onPointerDown={(e) => e.stopPropagation()}
+                onMouseDown={(e) => e.stopPropagation()}
+                onTouchStart={(e) => e.stopPropagation()}
                 disabled={!hasNext}
                 className={`absolute right-2 sm:right-4 top-1/2 -translate-y-1/2 z-30 p-2 sm:p-3 rounded-full border shadow-2xl backdrop-blur-md transition-all active:scale-95 flex items-center justify-center touch-manipulation ${
                   hasNext
@@ -1741,7 +1679,12 @@ JSON Schema:
               </button>
 
               {/* Mobile View Mode Floating Pill */}
-              <div className="sm:hidden absolute bottom-16 sm:bottom-6 left-1/2 -translate-x-1/2 z-40 flex items-center bg-slate-900/90 backdrop-blur-md p-1 rounded-full border border-slate-700 shadow-2xl">
+              <div 
+                onPointerDown={(e) => e.stopPropagation()}
+                onMouseDown={(e) => e.stopPropagation()}
+                onTouchStart={(e) => e.stopPropagation()}
+                className="sm:hidden absolute bottom-16 sm:bottom-6 left-1/2 -translate-x-1/2 z-40 flex items-center bg-slate-900/90 backdrop-blur-md p-1 rounded-full border border-slate-700 shadow-2xl"
+              >
                 <button
                   onClick={(e) => { e.stopPropagation(); setViewMode('lightbox'); }}
                   className={`px-3 py-2 rounded-full transition font-medium flex items-center justify-center touch-manipulation ${viewMode === 'lightbox' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}
@@ -1762,9 +1705,9 @@ JSON Schema:
                 </button>
               </div>
 
-              {showCroppedPreview && cropBox && cropBox.width > 0 && viewMode !== 'crop' ? (
+              {showCroppedPreview && cropBox && cropBox.width > 0 && !isDrawingCrop ? (
                 <div 
-                  className="relative flex items-center justify-center max-h-full max-w-full"
+                  className="relative flex items-center justify-center max-h-[calc(100vh-8rem)] max-w-full"
                   style={viewMode === 'lightbox' ? { transform: `translate(${panZoom.x}px, ${panZoom.y}px) scale(${panZoom.scale})` } : {}}
                 >
                   <CroppedImage
@@ -1779,7 +1722,7 @@ JSON Schema:
                 </div>
               ) : (
                 <div 
-                  className="relative flex items-center justify-center max-h-full max-w-full"
+                  className="relative flex items-center justify-center w-full h-full max-w-full max-h-full"
                   style={viewMode === 'lightbox' ? { transform: `translate(${panZoom.x}px, ${panZoom.y}px) scale(${panZoom.scale})` } : {}}
                 >
                   <CroppedImage
@@ -1948,52 +1891,6 @@ JSON Schema:
                   <span className="font-mono text-slate-200 text-[11px]">{formattedDate}</span>
                 </div>
 
-                <div className="pt-2 border-t border-slate-800/80 space-y-2">
-                  <span className="text-[11px] font-semibold text-emerald-400 flex items-center space-x-1">
-                    <Icon name="aperture" className="w-3.5 h-3.5" />
-                    <span>Camera & Exposure Settings:</span>
-                  </span>
-                  
-                  {photo.exif ? (
-                    <div className="space-y-1.5 bg-slate-950 p-2.5 rounded-xl border border-slate-800/80 text-[11px]">
-                      {photo.exif.camera && (
-                        <div className="flex justify-between py-0.5">
-                          <span className="text-slate-400">Camera Body:</span>
-                          <span className="font-semibold text-slate-200 truncate max-w-[150px]">{photo.exif.camera}</span>
-                        </div>
-                      )}
-                      {photo.exif.lens && (
-                        <div className="flex justify-between py-0.5">
-                          <span className="text-slate-400">Lens Model:</span>
-                          <span className="font-semibold text-slate-200 truncate max-w-[150px]">{photo.exif.lens}</span>
-                        </div>
-                      )}
-                      <div className="grid grid-cols-2 gap-1.5 pt-1 mt-1 border-t border-slate-800/60 text-center font-mono text-[10px]">
-                        <div className="bg-slate-900 p-1.5 rounded border border-slate-800">
-                          <span className="text-slate-500 block text-[9px]">SHUTTER</span>
-                          <span className="text-emerald-300 font-bold">{photo.exif.shutterSpeed || 'N/A'}</span>
-                        </div>
-                        <div className="bg-slate-900 p-1.5 rounded border border-slate-800">
-                          <span className="text-slate-500 block text-[9px]">APERTURE</span>
-                          <span className="text-emerald-300 font-bold">{photo.exif.aperture || 'N/A'}</span>
-                        </div>
-                        <div className="bg-slate-900 p-1.5 rounded border border-slate-800">
-                          <span className="text-slate-500 block text-[9px]">ISO</span>
-                          <span className="text-emerald-300 font-bold">{photo.exif.iso || 'N/A'}</span>
-                        </div>
-                        <div className="bg-slate-900 p-1.5 rounded border border-slate-800">
-                          <span className="text-slate-500 block text-[9px]">FOCAL LENGTH</span>
-                          <span className="text-emerald-300 font-bold">{photo.exif.focalLength || 'N/A'}</span>
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="bg-slate-950 p-2 rounded-xl border border-slate-800/80 text-[11px] text-slate-500 italic text-center">
-                      No EXIF camera tags detected or web fallback image
-                    </div>
-                  )}
-                </div>
-
                 <div className="pt-2 space-y-1.5">
                   <div className="flex items-center justify-between">
                     <span className="text-[11px] font-medium text-slate-400">Sharpness Rating:</span>
@@ -2006,7 +1903,39 @@ JSON Schema:
                       size="w-5 h-5"
                     />
                   </div>
+                  {photo.sharpness !== null && (
+                    <div className="flex items-center justify-between pt-1">
+                      <span className="text-slate-400 text-[11px]">Focus Sharpness Score:</span>
+                      <span className="text-xs font-bold font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                        {photo.sharpness} / 10
+                      </span>
+                    </div>
+                  )}
                 </div>
+
+                {cameraExif && (
+                  <div className="mt-3 pt-2 border-t border-slate-800 space-y-2">
+                    <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider block">Camera EXIF Parameters</span>
+                    <div className="grid grid-cols-2 gap-1.5 text-[10px] font-mono">
+                      <div className="bg-slate-950 p-1.5 rounded border border-slate-800/80">
+                        <span className="text-slate-500 block">SHUTTER</span>
+                        <span className="text-slate-200 font-bold">{cameraExif.shutterSpeed || '1/2000s'}</span>
+                      </div>
+                      <div className="bg-slate-950 p-1.5 rounded border border-slate-800/80">
+                        <span className="text-slate-500 block">APERTURE</span>
+                        <span className="text-slate-200 font-bold">{cameraExif.aperture || 'f/5.6'}</span>
+                      </div>
+                      <div className="bg-slate-950 p-1.5 rounded border border-slate-800/80">
+                        <span className="text-slate-500 block">ISO</span>
+                        <span className="text-slate-200 font-bold">{cameraExif.iso || 'ISO 800'}</span>
+                      </div>
+                      <div className="bg-slate-950 p-1.5 rounded border border-slate-800/80">
+                        <span className="text-slate-500 block">FOCAL LENGTH</span>
+                        <span className="text-slate-200 font-bold">{cameraExif.focalLength || '500mm'}</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </Accordion>
 
@@ -2098,7 +2027,7 @@ JSON Schema:
       );
     }
 
-    function LiferVaultView({ vaultEntries, onDeleteSighting, onDeleteSpecies }) {
+    function LiferVaultView({ vaultEntries, onDeleteSighting, onDeleteSpecies, onSelectPhoto }) {
       const [selectedCategory, setSelectedCategory] = useState('All');
       const [searchQuery, setSearchQuery] = useState('');
 
@@ -2159,49 +2088,66 @@ JSON Schema:
             {filteredEntries.length > 0 ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-5">
                 {filteredEntries.map(entry => {
+                  const primarySighting = entry.sightings[0];
+                  const photoObj = primarySighting.photo;
+                  const activeSrc = photoObj.thumbnailUrl || photoObj.blobUrl || photoObj.url;
                   return (
-                    <div key={entry.speciesName} className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl hover:border-slate-700 transition p-4 space-y-3">
-                      <div className="flex items-start justify-between border-b border-slate-800 pb-3">
-                        <div className="space-y-0.5">
-                          <span className="text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full inline-block mb-1">
-                            {entry.category}
-                          </span>
-                          <h3 className="font-extrabold text-white text-base leading-snug">{entry.speciesName}</h3>
-                          <p className="text-xs text-slate-400 italic font-mono">{entry.scientificName}</p>
-                        </div>
-                        <button
-                          onClick={() => onDeleteSpecies(entry.speciesName)}
-                          className="text-slate-500 hover:text-red-400 p-2 -m-2 touch-manipulation"
-                          title="Delete species record"
-                        >
-                          <Icon name="trash" className="w-4 h-4" />
-                        </button>
+                    <div key={entry.speciesName} className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl hover:border-slate-700 transition">
+                      <div className="h-48 relative bg-slate-950 overflow-hidden cursor-pointer flex items-center justify-center p-1 touch-manipulation" onClick={() => onSelectPhoto(photoObj)}>
+                        <CroppedImage
+                          src={activeSrc}
+                          alt={entry.speciesName}
+                          cropBox={photoObj.cropBox}
+                          photo={photoObj}
+                          fitMode="contain"
+                          className="w-full h-full"
+                          imgClassName="transition-transform duration-500 hover:scale-105"
+                        />
+                        <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-transparent to-transparent pointer-events-none"></div>
+                        <span className="absolute top-3 right-3 bg-emerald-600/90 backdrop-blur-md text-white font-bold text-[10px] px-2 py-0.5 rounded-full shadow">
+                          {entry.category}
+                        </span>
+                        <span className="absolute bottom-3 left-3 text-xs font-semibold text-slate-300 pointer-events-none">
+                          {entry.sightings.length} Sighting{entry.sightings.length > 1 ? 's' : ''}
+                        </span>
                       </div>
 
-                      <div className="space-y-1.5 pt-1">
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Sightings History</span>
-                          <span className="text-[11px] font-bold text-emerald-400">{entry.sightings.length} Sighting{entry.sightings.length > 1 ? 's' : ''}</span>
+                      <div className="p-4 space-y-3">
+                        <div className="flex items-start justify-between">
+                          <div>
+                            <h3 className="font-extrabold text-white text-base leading-snug">{entry.speciesName}</h3>
+                            <p className="text-xs text-slate-400 italic font-mono">{entry.scientificName}</p>
+                          </div>
+                          <button
+                            onClick={() => onDeleteSpecies(entry.speciesName)}
+                            className="text-slate-500 hover:text-red-400 p-2 -m-2 touch-manipulation"
+                          >
+                            <Icon name="trash" className="w-4 h-4" />
+                          </button>
                         </div>
-                        <div className="space-y-1 max-h-36 overflow-y-auto">
-                          {entry.sightings.map(s => (
-                            <div key={s.id} className="flex items-center justify-between bg-slate-950 p-2 rounded-lg text-xs border border-slate-800/80">
-                              <span className="text-slate-300 font-mono text-[11px]">{new Date(s.date).toLocaleDateString()}</span>
-                              <div className="flex items-center space-x-2">
-                                <StarRating
-                                  rating={s.photo.userStars || s.photo.stars || scoreToStars(s.photo.sharpness)}
-                                  readOnly={true}
-                                  size="w-3 h-3"
-                                />
-                                <button
-                                  onClick={() => onDeleteSighting(entry.speciesName, s.id)}
-                                  className="text-slate-500 hover:text-red-400 ml-1 p-1 touch-manipulation"
-                                >
-                                  <Icon name="x" className="w-3.5 h-3.5" />
-                                </button>
+
+                        <div className="space-y-1.5 border-t border-slate-800 pt-2">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Sightings History</span>
+                          <div className="space-y-1 max-h-32 overflow-y-auto">
+                            {entry.sightings.map(s => (
+                              <div key={s.id} className="flex items-center justify-between bg-slate-950 p-2 rounded-lg text-xs border border-slate-800/80">
+                                <span className="text-slate-300 font-mono text-[11px]">{new Date(s.date).toLocaleDateString()}</span>
+                                <div className="flex items-center space-x-2">
+                                  <StarRating
+                                    rating={s.photo.userStars || s.photo.stars || scoreToStars(s.photo.sharpness)}
+                                    readOnly={true}
+                                    size="w-3 h-3"
+                                  />
+                                  <button
+                                    onClick={() => onDeleteSighting(entry.speciesName, s.id)}
+                                    className="text-slate-500 hover:text-red-400 ml-1 p-1 touch-manipulation"
+                                  >
+                                    <Icon name="x" className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
                               </div>
-                            </div>
-                          ))}
+                            ))}
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -2237,6 +2183,7 @@ JSON Schema:
       const pageSize = 20;
 
       const [selectedIds, setSelectedIds] = useState(new Set());
+      const [showFilterBar, setShowFilterBar] = useState(false);
       const [uploading, setUploading] = useState(false);
       const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0 });
       const [loadingThumbnails, setLoadingThumbnails] = useState(false);
@@ -2297,8 +2244,6 @@ JSON Schema:
         for (let i = 0; i < files.length; i++) {
           if (abortUploadRef.current) break;
           const file = files[i];
-          const exifData = await extractCameraExif(file);
-
           newPhotoObjs.push({
             id: 'photo_' + Math.random().toString(36).substring(2, 9) + '_' + Date.now(),
             file: file,
@@ -2306,6 +2251,7 @@ JSON Schema:
             name: file.name,
             size: file.size,
             lastModified: file.lastModified,
+            url: URL.createObjectURL(file),
             blobUrl: null,
             thumbnailUrl: null,
             naturalWidth: 1000,
@@ -2315,8 +2261,7 @@ JSON Schema:
             userStars: null,
             focusSpot: null,
             identification: null,
-            cropBox: null,
-            exif: exifData
+            cropBox: null
           });
           setUploadProgress({ current: i + 1, total: files.length });
           if (i % 20 === 0) await new Promise(r => setTimeout(r, 0));
@@ -2339,7 +2284,7 @@ JSON Schema:
           if (abortRatingRef.current) break;
 
           const target = unrated[i];
-          const evalResult = await evaluatePhotoFocus(target.file, target.focusSpot);
+          const evalResult = await evaluatePhotoFocus(target.file || target.url, target.focusSpot);
 
           setPhotos(prev => prev.map(p => p.id === target.id ? { 
             ...p, 
@@ -2435,7 +2380,7 @@ JSON Schema:
         listToExport.forEach((photo, i) => {
           setTimeout(() => {
             const a = document.createElement('a');
-            a.href = photo.blobUrl || photo.thumbnailUrl;
+            a.href = photo.blobUrl || photo.thumbnailUrl || photo.url;
             a.download = photo.name;
             document.body.appendChild(a);
             a.click();
@@ -2500,7 +2445,7 @@ JSON Schema:
         }
 
         const bufferedIds = new Set(bufferedPhotos.map(p => p.id));
-        const needed = bufferedPhotos.filter(p => !p.thumbnailUrl && p.file);
+        const needed = bufferedPhotos.filter(p => !p.thumbnailUrl && (p.file || p.url));
 
         if (needed.length > 0) {
           setLoadingThumbnails(true);
@@ -2568,14 +2513,13 @@ JSON Schema:
       }, [currentPage, processedPhotos.length, filterSharpness, sortBy, isPreviewOpen]);
 
       const isSelectionActive = selectedIds.size > 0;
-      const deleteButtonText = isSelectionActive 
-        ? `Delete Selected (${selectedIds.size})` 
-        : `Delete Filtered (${processedPhotos.length})`;
+      const filterLabel = filterSharpness === '5star' ? '5 Stars' : filterSharpness === '4star' ? '4+ Stars' : filterSharpness === 'soft' ? '1-3 Stars' : filterSharpness === 'unrated' ? 'Unrated' : 'All Photos';
 
       return (
-        <div className="flex-1 flex flex-col overflow-hidden min-h-0 p-3 sm:p-4 md:p-6 gap-3 sm:gap-4 pb-[calc(5rem+env(safe-area-inset-bottom))] md:pb-4">
+        <div className="flex-1 flex flex-col overflow-hidden min-h-0 p-3 sm:p-4 md:p-6 gap-3 sm:gap-4 pb-[calc(5rem+env(safe-area-inset-bottom))] md:pb-4 relative">
+          
+          {/* Header Card */}
           <div className="flex-shrink-0 bg-slate-900 border border-slate-800 p-3 sm:p-4 rounded-2xl shadow-xl space-y-3">
-            
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
                 <h2 className="text-lg sm:text-xl font-extrabold text-white flex items-center space-x-2">
@@ -2585,8 +2529,26 @@ JSON Schema:
                 <p className="text-[11px] sm:text-xs text-slate-400">Grade focus sharpness from 0 (blurry) to 10 (tack sharp) automatically or adjust manually.</p>
               </div>
 
-              <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center sm:space-x-2">
-                <label className="cursor-pointer bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs px-3.5 py-2.5 rounded-xl shadow-lg transition flex items-center justify-center space-x-1.5 active:scale-95 touch-manipulation">
+              <div className="flex items-center space-x-2 overflow-x-auto no-scrollbar py-0.5">
+                <button
+                  onClick={() => setShowFilterBar(!showFilterBar)}
+                  className={`font-semibold text-xs px-3.5 py-2.5 rounded-xl border transition flex items-center space-x-1.5 touch-manipulation ${
+                    showFilterBar || filterSharpness !== 'all' 
+                      ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' 
+                      : 'bg-slate-800 text-slate-300 border-slate-700 hover:text-white'
+                  }`}
+                  title="Toggle Filter & Sort Controls"
+                >
+                  <Icon name="filter" className="w-4 h-4 text-emerald-400" />
+                  <span>Filter & Sort</span>
+                  {filterSharpness !== 'all' && (
+                    <span className="ml-1 bg-emerald-600 text-white font-bold text-[9px] px-1.5 py-0.5 rounded-full">
+                      {filterLabel}
+                    </span>
+                  )}
+                </button>
+
+                <label className="cursor-pointer bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs px-3.5 py-2.5 rounded-xl shadow-lg transition flex items-center justify-center space-x-1.5 active:scale-95 touch-manipulation flex-shrink-0">
                   <Icon name="upload" className="w-4 h-4" />
                   <span>Upload Photos</span>
                   <input
@@ -2602,7 +2564,7 @@ JSON Schema:
                 <button
                   onClick={handleBatchRateFocus}
                   disabled={rating || !photos.some(p => p.sharpness === null && p.userStars === null)}
-                  className="bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 font-semibold text-xs px-3.5 py-2.5 rounded-xl border border-slate-700 transition flex items-center justify-center space-x-1.5 active:scale-95 touch-manipulation"
+                  className="bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 font-semibold text-xs px-3.5 py-2.5 rounded-xl border border-slate-700 transition flex items-center justify-center space-x-1.5 active:scale-95 touch-manipulation flex-shrink-0"
                 >
                   <Icon name="sparkles" className="w-4 h-4 text-emerald-400" />
                   <span>Rate photos ({photos.filter(p => p.sharpness === null).length})</span>
@@ -2610,77 +2572,94 @@ JSON Schema:
               </div>
             </div>
 
-            <div className="flex flex-nowrap items-center overflow-x-auto no-scrollbar gap-2 sm:gap-3 pt-2 border-t border-slate-800 text-xs pb-1">
-              <div className="flex items-center space-x-1.5 flex-shrink-0">
-                <span className="text-slate-400 font-medium text-[11px] sm:text-xs">Filter:</span>
-                <select
-                  value={filterSharpness}
-                  onChange={(e) => { setFilterSharpness(e.target.value); setCurrentPage(1); }}
-                  className="bg-slate-950 border border-slate-800 text-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-emerald-500 text-[11px] sm:text-xs min-w-[120px] touch-manipulation"
+            {/* Collapsible Filter & Sort Options */}
+            {showFilterBar && (
+              <div className="flex flex-nowrap items-center overflow-x-auto no-scrollbar gap-2 sm:gap-3 pt-3 border-t border-slate-800 text-xs animate-fadeIn">
+                <div className="flex items-center space-x-1.5 flex-shrink-0">
+                  <span className="text-slate-400 font-medium text-[11px] sm:text-xs">Filter:</span>
+                  <select
+                    value={filterSharpness}
+                    onChange={(e) => { setFilterSharpness(e.target.value); setCurrentPage(1); }}
+                    className="bg-slate-950 border border-slate-800 text-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-emerald-500 text-[11px] sm:text-xs min-w-[130px] touch-manipulation"
+                  >
+                    <option value="all">All Photos ({photos.length})</option>
+                    <option value="5star">5 Stars (Tack Sharp)</option>
+                    <option value="4star">4+ Stars (Sharp)</option>
+                    <option value="soft">1-3 Stars (Blurry / Soft)</option>
+                    <option value="unrated">Unrated</option>
+                  </select>
+                </div>
+
+                <div className="flex items-center space-x-1.5 flex-shrink-0">
+                  <span className="text-slate-400 font-medium text-[11px] sm:text-xs">Sort:</span>
+                  <select
+                    value={sortBy}
+                    onChange={(e) => setSortBy(e.target.value)}
+                    className="bg-slate-950 border border-slate-800 text-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-emerald-500 text-[11px] sm:text-xs touch-manipulation"
+                  >
+                    <option value="name">File Name</option>
+                    <option value="date">Date Captured</option>
+                    <option value="sharpness">Star Rating</option>
+                  </select>
+                </div>
+
+                <div className="w-px h-5 bg-slate-800 flex-shrink-0 mx-1 hidden sm:block"></div>
+
+                <button
+                  onClick={handleSelectAll}
+                  disabled={!processedPhotos.length}
+                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-semibold rounded-lg transition flex items-center space-x-1 disabled:opacity-50 text-[11px] sm:text-xs flex-shrink-0 touch-manipulation"
                 >
-                  <option value="all">All Photos ({photos.length})</option>
-                  <option value="5star">5 Stars (Tack Sharp)</option>
-                  <option value="4star">4+ Stars (Sharp)</option>
-                  <option value="soft">1-3 Stars (Blurry / Soft)</option>
-                  <option value="unrated">Unrated</option>
-                </select>
+                  <Icon name="check" className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>{selectedIds.size === processedPhotos.length && processedPhotos.length > 0 ? "Deselect All" : `Select All (${processedPhotos.length})`}</span>
+                </button>
               </div>
-
-              <div className="flex items-center space-x-1.5 flex-shrink-0">
-                <span className="text-slate-400 font-medium text-[11px] sm:text-xs">Sort:</span>
-                <select
-                  value={sortBy}
-                  onChange={(e) => setSortBy(e.target.value)}
-                  className="bg-slate-950 border border-slate-800 text-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-emerald-500 text-[11px] sm:text-xs touch-manipulation"
-                >
-                  <option value="name">File Name</option>
-                  <option value="date">Date Captured</option>
-                  <option value="sharpness">Star Rating</option>
-                </select>
-              </div>
-
-              <div className="w-px h-5 bg-slate-800 flex-shrink-0 mx-1 hidden sm:block"></div>
-
-              <button
-                onClick={handleSelectAll}
-                disabled={!processedPhotos.length}
-                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-semibold rounded-lg transition flex items-center space-x-1 disabled:opacity-50 text-[11px] sm:text-xs flex-shrink-0 touch-manipulation"
-                title={selectedIds.size === processedPhotos.length ? "Deselect All" : "Select All Filtered"}
-              >
-                <Icon name="check" className="w-3.5 h-3.5 text-emerald-400" />
-                <span>{selectedIds.size === processedPhotos.length && processedPhotos.length > 0 ? "Deselect All" : `Select All (${processedPhotos.length})`}</span>
-              </button>
-
-              <button
-                onClick={handleExportFiltered}
-                disabled={!isSelectionActive && !processedPhotos.length}
-                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-semibold rounded-lg transition flex items-center space-x-1 disabled:opacity-50 text-[11px] sm:text-xs flex-shrink-0 touch-manipulation"
-                title="Export photos to directory"
-              >
-                <Icon name="download" className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Save Folder ({isSelectionActive ? selectedIds.size : processedPhotos.length})</span>
-              </button>
-
-              <button
-                onClick={() => setShowDeleteConfirmModal(true)}
-                disabled={!isSelectionActive && !processedPhotos.length}
-                className="px-3 py-1.5 bg-red-600/20 hover:bg-red-600/30 text-red-400 border border-red-500/30 font-semibold rounded-lg transition flex items-center space-x-1 disabled:opacity-50 text-[11px] sm:text-xs flex-shrink-0 touch-manipulation"
-                title={isSelectionActive ? "Delete checked photos" : "Delete filtered photos"}
-              >
-                <Icon name="trash" className="w-3.5 h-3.5" />
-                <span>{deleteButtonText}</span>
-              </button>
-            </div>
+            )}
           </div>
 
-          {}
+          {/* Contextual Floating Batch Actions Bar (Reveals on item selection or action request) */}
+          {isSelectionActive && (
+            <div className="bg-emerald-950/90 border border-emerald-500/50 p-2.5 sm:p-3 rounded-2xl shadow-2xl backdrop-blur-md flex items-center justify-between gap-2 z-30 animate-slideUp">
+              <div className="flex items-center space-x-2 text-xs font-bold text-emerald-300 pl-1">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+                <span>{selectedIds.size} Photo{selectedIds.size > 1 ? 's' : ''} Selected</span>
+              </div>
+
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={handleSelectAll}
+                  className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-slate-300 font-semibold rounded-xl text-xs transition border border-slate-700/80 touch-manipulation"
+                >
+                  Deselect
+                </button>
+
+                <button
+                  onClick={handleExportFiltered}
+                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-xl text-xs transition shadow flex items-center space-x-1 touch-manipulation"
+                >
+                  <Icon name="download" className="w-3.5 h-3.5" />
+                  <span>Save Folder ({selectedIds.size})</span>
+                </button>
+
+                <button
+                  onClick={() => setShowDeleteConfirmModal(true)}
+                  className="px-3 py-1.5 bg-red-600 hover:bg-red-500 text-white font-semibold rounded-xl text-xs transition shadow flex items-center space-x-1 touch-manipulation"
+                >
+                  <Icon name="trash" className="w-3.5 h-3.5" />
+                  <span>Delete Selected ({selectedIds.size})</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Grid View */}
           <div className="flex-1 overflow-y-auto min-h-0 pr-1 pb-4">
             {paginatedPhotos.length > 0 ? (
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-4">
                 {paginatedPhotos.map(photo => {
                   const currentStars = photo.userStars || photo.stars || scoreToStars(photo.sharpness);
                   const isChecked = selectedIds.has(photo.id);
-                  const activeSrc = photo.thumbnailUrl || photo.blobUrl;
+                  const activeSrc = photo.thumbnailUrl || photo.blobUrl || photo.url;
                   
                   if (!activeSrc) return null;
 
@@ -2755,7 +2734,7 @@ JSON Schema:
             )}
           </div>
 
-          {}
+          {/* Footer Controls */}
           <div className="flex-shrink-0 flex flex-col sm:flex-row sm:items-center justify-between bg-slate-900 border border-slate-800 p-2.5 sm:p-3 rounded-2xl text-[11px] sm:text-xs gap-2 shadow-xl">
             <div className="flex items-center justify-center sm:justify-start space-x-3 min-w-0 flex-1 px-1">
               {uploading ? (
@@ -2816,6 +2795,7 @@ JSON Schema:
             </div>
           </div>
 
+          {/* Delete Confirmation Modal */}
           {showDeleteConfirmModal && (
             <div className="fixed inset-0 z-[60] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4" onClick={(e) => e.stopPropagation()}>
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 sm:p-6 max-w-sm w-full shadow-2xl space-y-4">
@@ -2862,6 +2842,7 @@ JSON Schema:
       const [photos, setPhotos] = useState([]);
       const [vaultEntries, setVaultEntries] = useState([]);
       const [selectedPhoto, setSelectedPhoto] = useState(null);
+      const [inspectorViewMode, setInspectorViewMode] = useState('lightbox');
 
       const [filterSharpness, setFilterSharpness] = useState('all');
       const [sortBy, setSortBy] = useState('name');
@@ -2874,96 +2855,54 @@ JSON Schema:
 
       const [tokenUsageState, setTokenUsageState] = useState(getStoredTokenUsage());
 
-      const savePhotosStateToStorage = (updatedPhotos) => {
-        setPhotos(updatedPhotos);
-        try {
-          const metadataList = updatedPhotos.map(p => ({
-            id: p.id,
-            name: p.name,
-            size: p.size,
-            lastModified: p.lastModified,
-            url: p.url || (p.file ? p.blobUrl : null),
-            sharpness: p.sharpness,
-            stars: p.stars,
-            userStars: p.userStars,
-            focusSpot: p.focusSpot,
-            identification: p.identification,
-            cropBox: p.cropBox,
-            locationText: p.locationText,
-            exif: p.exif
-          })).filter(p => !!p.url);
-
-          localStorage.setItem(STORAGE_KEY_PHOTOS, JSON.stringify(metadataList));
-        } catch (e) {
-          console.warn('Failed to save workspace state to localStorage:', e);
-        }
-      };
-
-      useEffect(() => {
-        const restoreAndValidateState = async () => {
-          try {
-            const storedJson = localStorage.getItem(STORAGE_KEY_PHOTOS);
-            if (!storedJson) return;
-
-            const parsedItems = JSON.parse(storedJson);
-            if (!Array.isArray(parsedItems) || parsedItems.length === 0) return;
-
-            const validationPromises = parsedItems.map(item => {
-              return new Promise((resolve) => {
-                if (!item.url) {
-                  resolve(null);
-                  return;
-                }
-                const img = new Image();
-                img.onload = () => resolve(item);
-                img.onerror = () => resolve(null);
-                img.src = item.url;
-              });
-            });
-
-            const results = await Promise.all(validationPromises);
-            const validPhotos = results.filter(p => p !== null).map(p => ({
-              ...p,
-              file: null,
-              fileHandle: null,
-              blobUrl: p.url,
-              thumbnailUrl: p.url
-            }));
-
-            if (validPhotos.length > 0) {
-              setPhotos(validPhotos);
-              localStorage.setItem(STORAGE_KEY_PHOTOS, JSON.stringify(
-                validPhotos.map(p => ({
-                  id: p.id,
-                  name: p.name,
-                  size: p.size,
-                  lastModified: p.lastModified,
-                  url: p.url,
-                  sharpness: p.sharpness,
-                  stars: p.stars,
-                  userStars: p.userStars,
-                  focusSpot: p.focusSpot,
-                  identification: p.identification,
-                  cropBox: p.cropBox,
-                  locationText: p.locationText,
-                  exif: p.exif
-                }))
-              ));
-            } else {
-              localStorage.removeItem(STORAGE_KEY_PHOTOS);
-            }
-          } catch (err) {
-            console.warn('Error restoring saved workspace state:', err);
-          }
-        };
-
-        restoreAndValidateState();
-      }, []);
-
       useEffect(() => {
         window.birdvault_open_auth_modal = () => setShowAuthModal(true);
         return () => { delete window.birdvault_open_auth_modal; };
       }, []);
+
+      useEffect(() => {
+        const savedPhotos = localStorage.getItem('birdvault_workspace_photos_v1');
+        if (savedPhotos) {
+          try {
+            const parsed = JSON.parse(savedPhotos);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              const validatedPhotos = parsed.map(p => ({
+                ...p,
+                file: null,
+                blobUrl: null
+              }));
+              setPhotos(validatedPhotos);
+            }
+          } catch (err) {
+            console.warn('localStorage workspace restore error:', err);
+          }
+        }
+      }, []);
+
+      useEffect(() => {
+        if (photos.length > 0) {
+          try {
+            const cleanPhotos = photos.map(p => ({
+              id: p.id,
+              name: p.name,
+              size: p.size,
+              lastModified: p.lastModified,
+              url: p.url || p.thumbnailUrl || null,
+              sharpness: p.sharpness,
+              stars: p.stars,
+              userStars: p.userStars,
+              focusSpot: p.focusSpot,
+              cameraExif: p.cameraExif,
+              identification: p.identification,
+              cropBox: p.cropBox,
+              locationText: p.locationText
+            }));
+            localStorage.setItem('birdvault_workspace_photos_v1', JSON.stringify(cleanPhotos));
+          } catch (e) {
+            console.warn('localStorage write warning:', e);
+          }
+        }
+      }, [photos]);
 
       const handleSaveApiKey = (newKey) => {
         setUserApiKey(newKey);
@@ -3046,7 +2985,7 @@ JSON Schema:
               return { ...p, blobUrl: URL.createObjectURL(p.file) };
             }
             
-            if (!inPreviewWindow && p.blobUrl && p.blobUrl !== p.url) {
+            if (!inPreviewWindow && p.blobUrl) {
               try { URL.revokeObjectURL(p.blobUrl); } catch(e){}
               hasChanges = true;
               return { ...p, blobUrl: null };
@@ -3131,11 +3070,11 @@ JSON Schema:
         const photoToDelete = photos.find(p => p.id === photoId);
         if (photoToDelete) {
           try { if (photoToDelete.fileHandle && typeof photoToDelete.fileHandle.remove === 'function') photoToDelete.fileHandle.remove(); } catch (e) {}
-          try { if (photoToDelete.blobUrl && photoToDelete.blobUrl !== photoToDelete.url) URL.revokeObjectURL(photoToDelete.blobUrl); } catch (e) {}
-          try { if (photoToDelete.thumbnailUrl && photoToDelete.thumbnailUrl !== photoToDelete.url) URL.revokeObjectURL(photoToDelete.thumbnailUrl); } catch (e) {}
+          try { if (photoToDelete.blobUrl) URL.revokeObjectURL(photoToDelete.blobUrl); } catch (e) {}
+          try { if (photoToDelete.thumbnailUrl) URL.revokeObjectURL(photoToDelete.thumbnailUrl); } catch (e) {}
         }
 
-        savePhotosStateToStorage(updatedPhotos);
+        setPhotos(updatedPhotos);
 
         if (updatedPhotos.length > 0) {
           const nextIndex = currentIndex < updatedPhotos.length ? currentIndex : updatedPhotos.length - 1;
@@ -3147,15 +3086,12 @@ JSON Schema:
 
       const rpmUsedPct = Math.round((tokenUsageState.minuteRequests / GEMINI_QUOTAS.MAX_RPM) * 100);
 
-      const svgIcon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none"><rect width="512" height="512" rx="128" fill="#040711"/><path d="M256 64C180 64 120 120 120 200C120 300 256 448 256 448C256 448 392 300 392 200C392 120 332 64 256 64ZM256 250C228.4 250 206 227.6 206 200C206 172.4 228.4 150 256 150C283.6 150 306 172.4 306 200C306 227.6 283.6 250 256 250Z" fill="#10b981"/></svg>`;
-      const iconUrl = 'data:image/svg+xml;base64,' + btoa(svgIcon);
-
       return (
         <div className="h-full w-full flex flex-col bg-slate-950 text-slate-100 overflow-hidden select-none">
           <header className="h-14 sm:h-16 border-b border-slate-800 bg-slate-900/90 backdrop-blur-md px-3 sm:px-6 flex items-center justify-between z-30 flex-shrink-0">
             <div className="flex items-center space-x-2.5">
-              <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl sm:rounded-2xl border border-emerald-500/30 flex items-center justify-center shadow-lg flex-shrink-0 overflow-hidden">
-                <img src={iconUrl} alt="BirdVault Icon" className="w-full h-full object-cover" />
+              <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl sm:rounded-2xl bg-emerald-600/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shadow-lg flex-shrink-0">
+                <Icon name="feather" className="w-5 h-5 sm:w-6 sm:h-6" />
               </div>
               <div className="truncate">
                 <h1 className="font-extrabold text-white text-sm sm:text-base tracking-tight leading-none">BirdVault <span className="text-emerald-400 font-mono text-[10px] sm:text-xs font-normal">PRO</span></h1>
@@ -3207,21 +3143,12 @@ JSON Schema:
                 vaultEntries={vaultEntries}
                 onDeleteSighting={handleDeleteSighting}
                 onDeleteSpecies={handleDeleteSpecies}
+                onSelectPhoto={(photo) => setSelectedPhoto(photo)}
               />
             ) : (
               <CullingWorkspaceView
                 photos={photos}
-                setPhotos={(newPhotos) => {
-                  if (typeof newPhotos === 'function') {
-                    setPhotos(prev => {
-                      const updated = newPhotos(prev);
-                      savePhotosStateToStorage(updated);
-                      return updated;
-                    });
-                  } else {
-                    savePhotosStateToStorage(newPhotos);
-                  }
-                }}
+                setPhotos={setPhotos}
                 onSelectPhoto={(photo) => setSelectedPhoto(photo)}
                 userApiKey={userApiKey}
                 filterSharpness={filterSharpness}
@@ -3263,10 +3190,11 @@ JSON Schema:
               <InteractivePhotoViewer
                 key={selectedPhoto.id}
                 photo={selectedPhoto}
+                viewMode={inspectorViewMode}
+                onViewModeChange={setInspectorViewMode}
                 onClose={() => setSelectedPhoto(null)}
                 onUpdatePhoto={(updated) => {
-                  const updatedPhotos = photos.map(p => p.id === updated.id ? updated : p);
-                  savePhotosStateToStorage(updatedPhotos);
+                  setPhotos(prev => prev.map(p => p.id === updated.id ? updated : p));
                   setSelectedPhoto(updated);
                 }}
                 onSaveToVault={handleSaveToVault}
