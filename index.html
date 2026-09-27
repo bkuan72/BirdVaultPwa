@@ -81,6 +81,8 @@
       color: #f1f5f9;
       overscroll-behavior: none;
       -webkit-font-smoothing: antialiased;
+      user-select: none;
+      -webkit-user-select: none;
     }
     ::-webkit-scrollbar {
       width: 6px;
@@ -115,6 +117,10 @@
     }
     button, input, select {
       touch-action: manipulation;
+    }
+    img {
+      -webkit-user-drag: none;
+      user-drag: none;
     }
   </style>
 </head>
@@ -578,7 +584,7 @@
 
         return (
           <div 
-            className={`relative overflow-hidden flex items-center justify-center bg-slate-950 ${className}`}
+            className={`relative overflow-hidden flex items-center justify-center bg-slate-950 select-none ${className}`}
             style={frameStyle}
           >
             <svg
@@ -586,6 +592,8 @@
               viewBox={`${cropX} ${cropY} ${cropW} ${cropH}`}
               preserveAspectRatio={preserveAspect}
               className={`w-full h-full block ${imgClassName}`}
+              draggable="false"
+              onDragStart={(e) => e.preventDefault()}
             >
               <image
                 href={finalSrc}
@@ -602,7 +610,7 @@
 
       return (
         <div 
-          className={`relative overflow-hidden flex items-center justify-center bg-slate-950 ${className}`}
+          className={`relative overflow-hidden flex items-center justify-center bg-slate-950 select-none ${className}`}
           style={frameStyle}
         >
           <img
@@ -610,6 +618,8 @@
             src={src}
             alt={alt}
             decoding="async"
+            draggable="false"
+            onDragStart={(e) => e.preventDefault()}
             className={`${fitMode === 'cover' ? 'w-full h-full object-cover' : 'w-full h-full object-contain'} ${imgClassName}`}
           />
           {children}
@@ -1344,8 +1354,8 @@ JSON Schema:
         const rect = imgRef.current.getBoundingClientRect();
         if (!rect.width || !rect.height) return { pctX: 50, pctY: 50 };
 
-        const clientX = e.touches && e.touches.length > 0 ? e.touches[0].clientX : e.clientX;
-        const clientY = e.touches && e.touches.length > 0 ? e.touches[0].clientY : e.clientY;
+        const clientX = e.clientX !== undefined ? e.clientX : (e.touches && e.touches[0] ? e.touches[0].clientX : 0);
+        const clientY = e.clientY !== undefined ? e.clientY : (e.touches && e.touches[0] ? e.touches[0].clientY : 0);
 
         const pctX = Math.max(0, Math.min(100, ((clientX - rect.left) / rect.width) * 100));
         const pctY = Math.max(0, Math.min(100, ((clientY - rect.top) / rect.height) * 100));
@@ -1355,8 +1365,8 @@ JSON Schema:
       const getContainerPointerPos = useCallback((e) => {
         if (!containerRef.current) return { pctX: 50, pctY: 50 };
         const rect = containerRef.current.getBoundingClientRect();
-        const clientX = e.touches && e.touches.length > 0 ? e.touches[0].clientX : e.clientX;
-        const clientY = e.touches && e.touches.length > 0 ? e.touches[0].clientY : e.clientY;
+        const clientX = e.clientX !== undefined ? e.clientX : (e.touches && e.touches[0] ? e.touches[0].clientX : 0);
+        const clientY = e.clientY !== undefined ? e.clientY : (e.touches && e.touches[0] ? e.touches[0].clientY : 0);
         const pctX = Math.max(0, Math.min(100, ((clientX - rect.left) / rect.width) * 100));
         const pctY = Math.max(0, Math.min(100, ((clientY - rect.top) / rect.height) * 100));
         return { x: clientX - rect.left, y: clientY - rect.top, pctX, pctY, clientX, clientY };
@@ -1413,6 +1423,14 @@ JSON Schema:
       };
 
       const handlePointerDown = (e) => {
+        if (e.preventDefault && typeof e.preventDefault === 'function') {
+          e.preventDefault();
+        }
+
+        if (e.target && e.target.setPointerCapture && e.pointerId !== undefined) {
+          try { e.target.setPointerCapture(e.pointerId); } catch (err) {}
+        }
+
         if (e.touches && e.touches.length === 2 && viewMode === 'lightbox') {
           initialTouchDistanceRef.current = getTouchDistance(e);
           return;
@@ -1562,7 +1580,7 @@ JSON Schema:
       }, [photo.size]);
 
       return (
-        <div className="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-md flex flex-col md:flex-row overflow-hidden">
+        <div className="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-md flex flex-col md:flex-row overflow-hidden select-none">
           <div className="flex-1 flex flex-col relative bg-black/80 overflow-hidden h-full">
             
             <div className="h-14 sm:h-16 px-3 sm:px-4 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between z-20 gap-2">
@@ -1615,13 +1633,11 @@ JSON Schema:
 
             <div
               ref={containerRef}
-              onMouseMove={handlePointerMove}
-              onMouseDown={handlePointerDown}
-              onMouseUp={handlePointerUp}
+              onPointerDown={handlePointerDown}
+              onPointerMove={handlePointerMove}
+              onPointerUp={handlePointerUp}
+              onPointerCancel={handlePointerUp}
               onWheel={handleWheelZoom}
-              onTouchStart={(e) => { handlePointerDown(e); handlePointerMove(e); }}
-              onTouchMove={handlePointerMove}
-              onTouchEnd={handlePointerUp}
               className="flex-1 relative flex items-center justify-center p-2 sm:p-4 overflow-hidden select-none cursor-crosshair touch-canvas"
             >
               {/* Floating Delete Button - Top Left */}
@@ -1947,11 +1963,11 @@ JSON Schema:
                     <div className="grid grid-cols-2 gap-1.5 text-[10px] font-mono">
                       <div className="bg-slate-950 p-1.5 rounded border border-slate-800/80">
                         <span className="text-slate-500 block">SHUTTER</span>
-                        <span className="text-slate-200 font-bold">{cameraExif.shutterSpeed || '1/2000s'}</span>
+                        <span className="text-slate-200 font-bold">{cameraExif.shutterSpeed || '1/3200s'}</span>
                       </div>
                       <div className="bg-slate-950 p-1.5 rounded border border-slate-800/80">
                         <span className="text-slate-500 block">APERTURE</span>
-                        <span className="text-slate-200 font-bold">{cameraExif.aperture || 'f/5.6'}</span>
+                        <span className="text-slate-200 font-bold">{cameraExif.aperture || 'f/4.0'}</span>
                       </div>
                       <div className="bg-slate-950 p-1.5 rounded border border-slate-800/80">
                         <span className="text-slate-500 block">ISO</span>
@@ -1959,7 +1975,7 @@ JSON Schema:
                       </div>
                       <div className="bg-slate-950 p-1.5 rounded border border-slate-800/80">
                         <span className="text-slate-500 block">FOCAL LENGTH</span>
-                        <span className="text-slate-200 font-bold">{cameraExif.focalLength || '500mm'}</span>
+                        <span className="text-slate-200 font-bold">{cameraExif.focalLength || '600mm'}</span>
                       </div>
                     </div>
                   </div>
@@ -2010,7 +2026,7 @@ JSON Schema:
                       <h4 className="text-sm font-extrabold text-white">{aiResult.speciesName}</h4>
                       <p className="text-[11px] text-slate-400 italic font-mono">{aiResult.scientificName}</p>
                     </div>
-                    <p className="text-[11px] text-slate-300 leading-relaxed border-t border-slate-800/80 pt-2">
+                    <p className="hidden sm:block text-[11px] text-slate-300 leading-relaxed border-t border-slate-800/80 pt-2">
                       {aiResult.description}
                     </p>
                   </div>
@@ -2037,7 +2053,7 @@ JSON Schema:
 
             <Accordion title="Lifer List Vault Sync" icon="feather" defaultOpen={!!aiResult}>
               <div className="space-y-2">
-                <p className="text-[11px] text-slate-400 leading-relaxed">
+                <p className="hidden sm:block text-[11px] text-slate-400 leading-relaxed">
                   Save this sighting and its cropped focal metadata into your permanent master species list.
                 </p>
                 <button
@@ -2082,7 +2098,7 @@ JSON Schema:
                   <Icon name="feather" className="w-5 h-5 sm:w-6 sm:h-6 text-emerald-400" />
                   <span>Lifer Species Vault</span>
                 </h2>
-                <p className="text-[11px] sm:text-xs text-slate-400">Master catalog of verified wildlife species & sighting records</p>
+                <p className="hidden sm:block text-[11px] sm:text-xs text-slate-400">Master catalog of verified wildlife species & sighting records</p>
               </div>
 
               <div className="flex items-center space-x-3 w-full md:w-auto">
@@ -2546,7 +2562,6 @@ JSON Schema:
       return (
         <div className="flex-1 flex flex-col overflow-hidden min-h-0 p-3 sm:p-4 md:p-6 gap-3 sm:gap-4 pb-[calc(5rem+env(safe-area-inset-bottom))] md:pb-4 relative">
           
-          {/* Header Card */}
           <div className="flex-shrink-0 bg-slate-900 border border-slate-800 p-3 sm:p-4 rounded-2xl shadow-xl space-y-3">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
@@ -2554,7 +2569,7 @@ JSON Schema:
                   <Icon name="camera" className="w-5 h-5 sm:w-6 sm:h-6 text-emerald-400" />
                   <span>Focus Culling Workspace</span>
                 </h2>
-                <p className="text-[11px] sm:text-xs text-slate-400">Grade focus sharpness from 0 (blurry) to 10 (tack sharp) automatically or adjust manually.</p>
+                <p className="hidden sm:block text-[11px] sm:text-xs text-slate-400">Grade focus sharpness from 0 (blurry) to 10 (tack sharp) automatically or adjust manually.</p>
               </div>
 
               <div className="flex items-center space-x-2 overflow-x-auto no-scrollbar py-0.5">
@@ -2600,7 +2615,6 @@ JSON Schema:
               </div>
             </div>
 
-            {/* Collapsible Filter & Sort Options */}
             {showFilterBar && (
               <div className="flex flex-nowrap items-center overflow-x-auto no-scrollbar gap-2 sm:gap-3 pt-3 border-t border-slate-800 text-xs animate-fadeIn">
                 <div className="flex items-center space-x-1.5 flex-shrink-0">
@@ -2645,7 +2659,6 @@ JSON Schema:
             )}
           </div>
 
-          {/* Contextual Floating Batch Actions Bar (Reveals on item selection or action request) */}
           {isSelectionActive && (
             <div className="bg-emerald-950/90 border border-emerald-500/50 p-2.5 sm:p-3 rounded-2xl shadow-2xl backdrop-blur-md flex items-center justify-between gap-2 z-30 animate-slideUp">
               <div className="flex items-center space-x-2 text-xs font-bold text-emerald-300 pl-1">
@@ -2680,7 +2693,6 @@ JSON Schema:
             </div>
           )}
 
-          {/* Grid View */}
           <div className="flex-1 overflow-y-auto min-h-0 pr-1 pb-4">
             {paginatedPhotos.length > 0 ? (
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-4">
@@ -2762,7 +2774,6 @@ JSON Schema:
             )}
           </div>
 
-          {/* Footer Controls */}
           <div className="flex-shrink-0 flex flex-col sm:flex-row sm:items-center justify-between bg-slate-900 border border-slate-800 p-2.5 sm:p-3 rounded-2xl text-[11px] sm:text-xs gap-2 shadow-xl">
             <div className="flex items-center justify-center sm:justify-start space-x-3 min-w-0 flex-1 px-1">
               {uploading ? (
@@ -2823,7 +2834,6 @@ JSON Schema:
             </div>
           </div>
 
-          {/* Delete Confirmation Modal */}
           {showDeleteConfirmModal && (
             <div className="fixed inset-0 z-[60] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4" onClick={(e) => e.stopPropagation()}>
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 sm:p-6 max-w-sm w-full shadow-2xl space-y-4">
