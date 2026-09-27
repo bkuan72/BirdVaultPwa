@@ -41,7 +41,6 @@
     })();
   </script>
 
-  <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
@@ -64,7 +63,6 @@
     }
   </script>
 
-  <!-- Google Fonts (Inter) -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
@@ -123,6 +121,8 @@
 
   <script type="text/babel">
     const { useState, useEffect, useRef, useMemo, useCallback } = React;
+
+    const STORAGE_KEY_PHOTOS = 'birdvault_workspace_photos_v1';
 
     const GEMINI_QUOTAS = {
       MAX_RPM: 15,
@@ -204,7 +204,8 @@
         chevronLeft: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7"/>,
         chevronRight: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7"/>,
         chevronDown: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"/>,
-        info: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        info: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>,
+        aperture: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 2a10 10 0 100 20 10 10 0 000-20zm0 0l4.5 7.79M12 22l-4.5-7.79M2 12l7.79 4.5M22 12l-7.79-4.5M4.93 4.93l7.79 4.5M19.07 19.07l-7.79-4.5"/>
       };
       return (
         <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -559,8 +560,10 @@
         if (!aspect || fitMode !== "contain") return {};
         return {
           aspectRatio: `${aspect}`,
-          width: `min(100%, calc((100vh - 8rem) * ${aspect}))`,
-          maxHeight: 'calc(100vh - 8rem)'
+          maxWidth: '100%',
+          maxHeight: '100%',
+          width: 'auto',
+          height: 'auto'
         };
       }, [aspect, fitMode]);
 
@@ -572,7 +575,7 @@
         const cropW = (cropBox.width / 100) * naturalW;
         const cropH = (cropBox.height / 100) * naturalH;
 
-        const finalSrc = photo?.blobUrl || src;
+        const finalSrc = photo?.blobUrl || photo?.url || src;
 
         return (
           <div 
@@ -678,14 +681,23 @@
             const currentPhoto = neededPhotos[index++];
             let thumbUrl = null;
             try {
-              const res = await generateFastThumbnail(currentPhoto.file, 240);
-              thumbUrl = res.thumbUrl;
-              pendingBatch.push({
-                id: currentPhoto.id,
-                thumbUrl: res.thumbUrl,
-                thumbWidth: res.width,
-                thumbHeight: res.height
-              });
+              if (currentPhoto.file) {
+                const res = await generateFastThumbnail(currentPhoto.file, 240);
+                thumbUrl = res.thumbUrl;
+                pendingBatch.push({
+                  id: currentPhoto.id,
+                  thumbUrl: res.thumbUrl,
+                  thumbWidth: res.width,
+                  thumbHeight: res.height
+                });
+              } else if (currentPhoto.url) {
+                pendingBatch.push({
+                  id: currentPhoto.id,
+                  thumbUrl: currentPhoto.url,
+                  thumbWidth: 1000,
+                  thumbHeight: 750
+                });
+              }
 
               if (pendingBatch.length >= 6 || Date.now() - lastFlush > 100) {
                 flush();
@@ -710,6 +722,154 @@
       });
     }
 
+    function readStringFromDataView(view, offset, length) {
+      let str = '';
+      for (let i = 0; i < length; i++) {
+        const charCode = view.getUint8(offset + i);
+        if (charCode === 0) break;
+        str += String.fromCharCode(charCode);
+      }
+      return str.trim();
+    }
+
+    function readRationalFromDataView(view, offset, littleEndian) {
+      const num = view.getUint32(offset, littleEndian);
+      const den = view.getUint32(offset + 4, littleEndian);
+      if (den === 0) return 0;
+      return num / den;
+    }
+
+    async function extractCameraExif(file) {
+      return new Promise((resolve) => {
+        if (!file || !(file instanceof File)) return resolve(null);
+        const reader = new FileReader();
+        const slice = file.slice(0, 131072); // Read initial 128KB
+        reader.onload = (e) => {
+          try {
+            const view = new DataView(e.target.result);
+            if (view.getUint16(0, false) !== 0xFFD8) return resolve(null); // Not JPEG
+            
+            let offset = 2;
+            while (offset < view.byteLength - 2) {
+              const marker = view.getUint16(offset, false);
+              offset += 2;
+              if (marker === 0xFFE1) { // APP1 Marker
+                const length = view.getUint16(offset, false);
+                const exifHeader = view.getUint32(offset + 2, false);
+                if (exifHeader === 0x45786966) { // "Exif"
+                  const tiffOffset = offset + 8;
+                  const littleEndian = view.getUint16(tiffOffset, false) === 0x4949; // "II"
+                  const ifdOffset = view.getUint32(tiffOffset + 4, littleEndian);
+                  
+                  const cameraData = {
+                    make: '',
+                    model: '',
+                    camera: '',
+                    lens: '',
+                    shutterSpeed: '',
+                    aperture: '',
+                    iso: '',
+                    focalLength: ''
+                  };
+
+                  const dirOffset = tiffOffset + ifdOffset;
+                  if (dirOffset + 2 <= view.byteLength) {
+                    const numEntries = view.getUint16(dirOffset, littleEndian);
+                    let exifPointer = null;
+
+                    for (let i = 0; i < numEntries; i++) {
+                      const entryOffset = dirOffset + 2 + (i * 12);
+                      if (entryOffset + 12 > view.byteLength) break;
+                      const tag = view.getUint16(entryOffset, littleEndian);
+                      const count = view.getUint32(entryOffset + 4, littleEndian);
+                      const valOffset = view.getUint32(entryOffset + 8, littleEndian);
+
+                      if (tag === 0x010F) { // Make
+                        const absOffset = count <= 4 ? entryOffset + 8 : tiffOffset + valOffset;
+                        if (absOffset + count <= view.byteLength) cameraData.make = readStringFromDataView(view, absOffset, count);
+                      } else if (tag === 0x0110) { // Model
+                        const absOffset = count <= 4 ? entryOffset + 8 : tiffOffset + valOffset;
+                        if (absOffset + count <= view.byteLength) cameraData.model = readStringFromDataView(view, absOffset, count);
+                      } else if (tag === 0x8769) { // Exif IFD Pointer
+                        exifPointer = valOffset;
+                      }
+                    }
+
+                    if (cameraData.make || cameraData.model) {
+                      let cleanMake = cameraData.make;
+                      let cleanModel = cameraData.model;
+                      if (cleanModel.toLowerCase().startsWith(cleanMake.toLowerCase())) {
+                        cameraData.camera = cleanModel;
+                      } else {
+                        cameraData.camera = `${cleanMake} ${cleanModel}`.trim();
+                      }
+                    }
+
+                    if (exifPointer) {
+                      const subDirOffset = tiffOffset + exifPointer;
+                      if (subDirOffset + 2 <= view.byteLength) {
+                        const subEntries = view.getUint16(subDirOffset, littleEndian);
+                        for (let j = 0; j < subEntries; j++) {
+                          const entryOffset = subDirOffset + 2 + (j * 12);
+                          if (entryOffset + 12 > view.byteLength) break;
+                          const tag = view.getUint16(entryOffset, littleEndian);
+                          const count = view.getUint32(entryOffset + 4, littleEndian);
+                          const valOffset = view.getUint32(entryOffset + 8, littleEndian);
+
+                          if (tag === 0x829A) { // ExposureTime
+                            const absOffset = tiffOffset + valOffset;
+                            if (absOffset + 8 <= view.byteLength) {
+                              const num = view.getUint32(absOffset, littleEndian);
+                              const den = view.getUint32(absOffset + 4, littleEndian);
+                              if (num > 0 && den > 0) {
+                                cameraData.shutterSpeed = num >= den ? `${(num / den).toFixed(1)}s` : `1/${Math.round(den / num)}s`;
+                              }
+                            }
+                          } else if (tag === 0x829D) { // FNumber
+                            const absOffset = tiffOffset + valOffset;
+                            if (absOffset + 8 <= view.byteLength) {
+                              const fval = readRationalFromDataView(view, absOffset, littleEndian);
+                              if (fval > 0) cameraData.aperture = `f/${fval.toFixed(1)}`;
+                            }
+                          } else if (tag === 0x8827) { // ISO Speed
+                            const isoVal = view.getUint16(entryOffset + 8, littleEndian);
+                            if (isoVal > 0) cameraData.iso = `ISO ${isoVal}`;
+                          } else if (tag === 0x920A) { // Focal Length
+                            const absOffset = tiffOffset + valOffset;
+                            if (absOffset + 8 <= view.byteLength) {
+                              const fl = readRationalFromDataView(view, absOffset, littleEndian);
+                              if (fl > 0) cameraData.focalLength = `${Math.round(fl)}mm`;
+                            }
+                          } else if (tag === 0xA434) { // Lens Model
+                            const absOffset = count <= 4 ? entryOffset + 8 : tiffOffset + valOffset;
+                            if (absOffset + count <= view.byteLength) {
+                              cameraData.lens = readStringFromDataView(view, absOffset, count);
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+
+                  return resolve(cameraData);
+                }
+                break;
+              } else if ((marker & 0xFF00) !== 0xFF00) {
+                break;
+              } else {
+                offset += view.getUint16(offset, false);
+              }
+            }
+          } catch (err) {
+            console.warn('EXIF camera settings parse fallback:', err);
+          }
+          resolve(null);
+        };
+        reader.onerror = () => resolve(null);
+        reader.readAsArrayBuffer(slice);
+      });
+    }
+
     async function extractExifFocusSpot(file) {
       return new Promise((resolve) => {
         if (!file || !(file instanceof File)) return resolve(null);
@@ -728,7 +888,6 @@
                 const length = view.getUint16(offset, false);
                 const exifHeader = view.getUint32(offset + 2, false);
                 if (exifHeader === 0x45786966) {
-                  // Found EXIF
                   return resolve(null);
                 }
                 break;
@@ -1067,7 +1226,7 @@
             resolve(dataUrl.split(',')[1]);
           };
           img.onerror = reject;
-          img.src = photo.blobUrl;
+          img.src = photo.blobUrl || photo.url;
         });
 
         const systemPrompt = `You are a world-class ornithologist and computer vision expert. Identify the bird species in the full-resolution cropped image provided.
@@ -1207,10 +1366,11 @@ JSON Schema:
 
       const activeBlobUrl = useMemo(() => {
         if (photo.blobUrl) return photo.blobUrl;
+        if (photo.url) return photo.url;
         if (photo.file) return URL.createObjectURL(photo.file);
         if (photo.thumbnailUrl) return photo.thumbnailUrl;
         return null;
-      }, [photo.id, photo.blobUrl, photo.file, photo.thumbnailUrl]);
+      }, [photo.id, photo.blobUrl, photo.url, photo.file, photo.thumbnailUrl]);
 
       useEffect(() => {
         if (!photo.blobUrl && photo.file && activeBlobUrl) {
@@ -1240,9 +1400,19 @@ JSON Schema:
       const isZoomedOrCropped = showCroppedPreview || (viewMode === 'lightbox' && panZoom.scale > 1) || (viewMode === 'loupe' && zoomLevel > 1);
 
       useEffect(() => {
+        if (photo.file && !photo.exif) {
+          extractCameraExif(photo.file).then((exifRes) => {
+            if (exifRes) {
+              onUpdatePhoto({ ...photo, exif: exifRes });
+            }
+          });
+        }
+      }, [photo.id]);
+
+      useEffect(() => {
         if (photo.sharpness === null && !evaluatingFocus) {
           setEvaluatingFocus(true);
-          evaluatePhotoFocus(photo.file || photo.blobUrl || photo.thumbnailUrl, photo.focusSpot).then((res) => {
+          evaluatePhotoFocus(photo.file || photo.blobUrl || photo.url || photo.thumbnailUrl, photo.focusSpot).then((res) => {
             onUpdatePhoto({
               ...photo,
               sharpness: res.score,
@@ -1386,7 +1556,7 @@ JSON Schema:
         let currentPhoto = photo;
         if (currentPhoto.sharpness === null) {
           setEvaluatingFocus(true);
-          const evalRes = await evaluatePhotoFocus(photo.file || photo.blobUrl || photo.thumbnailUrl, photo.focusSpot);
+          const evalRes = await evaluatePhotoFocus(photo.file || photo.blobUrl || photo.url || photo.thumbnailUrl, photo.focusSpot);
           currentPhoto = { ...photo, sharpness: evalRes.score, stars: evalRes.stars, focusSpot: evalRes.focusSpot };
           onUpdatePhoto(currentPhoto);
           setEvaluatingFocus(false);
@@ -1557,7 +1727,6 @@ JSON Schema:
               onTouchEnd={handlePointerUp}
               className="flex-1 relative flex items-center justify-center p-2 sm:p-4 overflow-hidden select-none cursor-crosshair touch-canvas"
             >
-              {/* Floating Delete Button - Top Left */}
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -1569,7 +1738,6 @@ JSON Schema:
                 <Icon name="trash" className="w-4 h-4 sm:w-5 sm:h-5 text-red-400 hover:text-white" />
               </button>
 
-              {/* Floating Previous Image Button */}
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -1586,7 +1754,6 @@ JSON Schema:
                 <Icon name="chevronLeft" className="w-5 h-5 sm:w-6 sm:h-6" />
               </button>
 
-              {/* Floating Next Image Button */}
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -1603,7 +1770,6 @@ JSON Schema:
                 <Icon name="chevronRight" className="w-5 h-5 sm:w-6 sm:h-6" />
               </button>
 
-              {/* Mobile View Mode Floating Pill */}
               <div className="sm:hidden absolute bottom-16 sm:bottom-6 left-1/2 -translate-x-1/2 z-40 flex items-center bg-slate-900/90 backdrop-blur-md p-1 rounded-full border border-slate-700 shadow-2xl">
                 <button
                   onClick={(e) => { e.stopPropagation(); setViewMode('lightbox'); }}
@@ -1627,7 +1793,7 @@ JSON Schema:
 
               {showCroppedPreview && cropBox && cropBox.width > 0 && viewMode !== 'crop' ? (
                 <div 
-                  className="relative flex items-center justify-center max-h-[calc(100vh-8rem)] max-w-full"
+                  className="relative flex items-center justify-center w-full h-full max-w-full max-h-full overflow-hidden"
                   style={viewMode === 'lightbox' ? { transform: `translate(${panZoom.x}px, ${panZoom.y}px) scale(${panZoom.scale})` } : {}}
                 >
                   <CroppedImage
@@ -1642,7 +1808,7 @@ JSON Schema:
                 </div>
               ) : (
                 <div 
-                  className="relative flex items-center justify-center max-h-full max-w-full"
+                  className="relative flex items-center justify-center w-full h-full max-w-full max-h-full overflow-hidden"
                   style={viewMode === 'lightbox' ? { transform: `translate(${panZoom.x}px, ${panZoom.y}px) scale(${panZoom.scale})` } : {}}
                 >
                   <CroppedImage
@@ -1809,6 +1975,53 @@ JSON Schema:
                 <div className="flex justify-between py-1 border-b border-slate-800/80">
                   <span className="text-slate-400">Captured / Modified:</span>
                   <span className="font-mono text-slate-200 text-[11px]">{formattedDate}</span>
+                </div>
+
+                {/* Camera EXIF Settings Panel */}
+                <div className="pt-2 border-t border-slate-800/80 space-y-2">
+                  <span className="text-[11px] font-semibold text-emerald-400 flex items-center space-x-1">
+                    <Icon name="aperture" className="w-3.5 h-3.5" />
+                    <span>Camera & Exposure Settings:</span>
+                  </span>
+                  
+                  {photo.exif ? (
+                    <div className="space-y-1.5 bg-slate-950 p-2.5 rounded-xl border border-slate-800/80 text-[11px]">
+                      {photo.exif.camera && (
+                        <div className="flex justify-between py-0.5">
+                          <span className="text-slate-400">Camera Body:</span>
+                          <span className="font-semibold text-slate-200 truncate max-w-[150px]">{photo.exif.camera}</span>
+                        </div>
+                      )}
+                      {photo.exif.lens && (
+                        <div className="flex justify-between py-0.5">
+                          <span className="text-slate-400">Lens Model:</span>
+                          <span className="font-semibold text-slate-200 truncate max-w-[150px]">{photo.exif.lens}</span>
+                        </div>
+                      )}
+                      <div className="grid grid-cols-2 gap-1.5 pt-1 mt-1 border-t border-slate-800/60 text-center font-mono text-[10px]">
+                        <div className="bg-slate-900 p-1.5 rounded border border-slate-800">
+                          <span className="text-slate-500 block text-[9px]">SHUTTER</span>
+                          <span className="text-emerald-300 font-bold">{photo.exif.shutterSpeed || 'N/A'}</span>
+                        </div>
+                        <div className="bg-slate-900 p-1.5 rounded border border-slate-800">
+                          <span className="text-slate-500 block text-[9px]">APERTURE</span>
+                          <span className="text-emerald-300 font-bold">{photo.exif.aperture || 'N/A'}</span>
+                        </div>
+                        <div className="bg-slate-900 p-1.5 rounded border border-slate-800">
+                          <span className="text-slate-500 block text-[9px]">ISO</span>
+                          <span className="text-emerald-300 font-bold">{photo.exif.iso || 'N/A'}</span>
+                        </div>
+                        <div className="bg-slate-900 p-1.5 rounded border border-slate-800">
+                          <span className="text-slate-500 block text-[9px]">FOCAL LENGTH</span>
+                          <span className="text-emerald-300 font-bold">{photo.exif.focalLength || 'N/A'}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="bg-slate-950 p-2 rounded-xl border border-slate-800/80 text-[11px] text-slate-500 italic text-center">
+                      No EXIF camera tags detected or web fallback image
+                    </div>
+                  )}
                 </div>
 
                 <div className="pt-2 space-y-1.5">
@@ -1978,7 +2191,7 @@ JSON Schema:
                 {filteredEntries.map(entry => {
                   const primarySighting = entry.sightings[0];
                   const photoObj = primarySighting.photo;
-                  const activeSrc = photoObj.thumbnailUrl || photoObj.blobUrl;
+                  const activeSrc = photoObj.thumbnailUrl || photoObj.blobUrl || photoObj.url;
                   return (
                     <div key={entry.speciesName} className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl hover:border-slate-700 transition">
                       <div className="h-48 relative bg-slate-950 overflow-hidden cursor-pointer flex items-center justify-center p-1 touch-manipulation" onClick={() => onSelectPhoto(photoObj)}>
@@ -2131,6 +2344,11 @@ JSON Schema:
         for (let i = 0; i < files.length; i++) {
           if (abortUploadRef.current) break;
           const file = files[i];
+          const blobUrl = URL.createObjectURL(file);
+          
+          // Asynchronously extract camera EXIF settings
+          const exifData = await extractCameraExif(file);
+
           newPhotoObjs.push({
             id: 'photo_' + Math.random().toString(36).substring(2, 9) + '_' + Date.now(),
             file: file,
@@ -2138,7 +2356,8 @@ JSON Schema:
             name: file.name,
             size: file.size,
             lastModified: file.lastModified,
-            blobUrl: null,
+            url: blobUrl,
+            blobUrl: blobUrl,
             thumbnailUrl: null,
             naturalWidth: 1000,
             naturalHeight: 750,
@@ -2147,7 +2366,8 @@ JSON Schema:
             userStars: null,
             focusSpot: null,
             identification: null,
-            cropBox: null
+            cropBox: null,
+            exif: exifData
           });
           setUploadProgress({ current: i + 1, total: files.length });
           if (i % 20 === 0) await new Promise(r => setTimeout(r, 0));
@@ -2170,7 +2390,7 @@ JSON Schema:
           if (abortRatingRef.current) break;
 
           const target = unrated[i];
-          const evalResult = await evaluatePhotoFocus(target.file, target.focusSpot);
+          const evalResult = await evaluatePhotoFocus(target.file || target.blobUrl || target.url, target.focusSpot);
 
           setPhotos(prev => prev.map(p => p.id === target.id ? { 
             ...p, 
@@ -2266,7 +2486,7 @@ JSON Schema:
         listToExport.forEach((photo, i) => {
           setTimeout(() => {
             const a = document.createElement('a');
-            a.href = photo.blobUrl || photo.thumbnailUrl;
+            a.href = photo.blobUrl || photo.url || photo.thumbnailUrl;
             a.download = photo.name;
             document.body.appendChild(a);
             a.click();
@@ -2331,7 +2551,7 @@ JSON Schema:
         }
 
         const bufferedIds = new Set(bufferedPhotos.map(p => p.id));
-        const needed = bufferedPhotos.filter(p => !p.thumbnailUrl && p.file);
+        const needed = bufferedPhotos.filter(p => !p.thumbnailUrl && (p.file || p.url));
 
         if (needed.length > 0) {
           setLoadingThumbnails(true);
@@ -2374,15 +2594,9 @@ JSON Schema:
             let updatedPhoto = p;
             let changed = false;
 
-            if (!bufferedIds.has(p.id) && p.thumbnailUrl) {
+            if (!bufferedIds.has(p.id) && p.thumbnailUrl && p.thumbnailUrl !== p.url) {
               try { URL.revokeObjectURL(p.thumbnailUrl); } catch(e){}
               updatedPhoto = { ...updatedPhoto, thumbnailUrl: null };
-              changed = true;
-            }
-
-            if (p.blobUrl) {
-              try { URL.revokeObjectURL(p.blobUrl); } catch(e){}
-              updatedPhoto = { ...updatedPhoto, blobUrl: null };
               changed = true;
             }
 
@@ -2510,7 +2724,7 @@ JSON Schema:
                 {paginatedPhotos.map(photo => {
                   const currentStars = photo.userStars || photo.stars || scoreToStars(photo.sharpness);
                   const isChecked = selectedIds.has(photo.id);
-                  const activeSrc = photo.thumbnailUrl || photo.blobUrl;
+                  const activeSrc = photo.thumbnailUrl || photo.blobUrl || photo.url;
                   
                   if (!activeSrc) return null;
 
@@ -2703,6 +2917,92 @@ JSON Schema:
 
       const [tokenUsageState, setTokenUsageState] = useState(getStoredTokenUsage());
 
+      const savePhotosStateToStorage = (updatedPhotos) => {
+        setPhotos(updatedPhotos);
+        try {
+          const metadataList = updatedPhotos.map(p => ({
+            id: p.id,
+            name: p.name,
+            size: p.size,
+            lastModified: p.lastModified,
+            url: p.url || (p.file ? p.blobUrl : null),
+            sharpness: p.sharpness,
+            stars: p.stars,
+            userStars: p.userStars,
+            focusSpot: p.focusSpot,
+            identification: p.identification,
+            cropBox: p.cropBox,
+            locationText: p.locationText,
+            exif: p.exif
+          })).filter(p => !!p.url);
+
+          localStorage.setItem(STORAGE_KEY_PHOTOS, JSON.stringify(metadataList));
+        } catch (e) {
+          console.warn('Failed to save workspace state to localStorage:', e);
+        }
+      };
+
+      useEffect(() => {
+        const restoreAndValidateState = async () => {
+          try {
+            const storedJson = localStorage.getItem(STORAGE_KEY_PHOTOS);
+            if (!storedJson) return;
+
+            const parsedItems = JSON.parse(storedJson);
+            if (!Array.isArray(parsedItems) || parsedItems.length === 0) return;
+
+            const validationPromises = parsedItems.map(item => {
+              return new Promise((resolve) => {
+                if (!item.url) {
+                  resolve(null);
+                  return;
+                }
+                const img = new Image();
+                img.onload = () => resolve(item);
+                img.onerror = () => resolve(null);
+                img.src = item.url;
+              });
+            });
+
+            const results = await Promise.all(validationPromises);
+            const validPhotos = results.filter(p => p !== null).map(p => ({
+              ...p,
+              file: null,
+              fileHandle: null,
+              blobUrl: p.url,
+              thumbnailUrl: p.url
+            }));
+
+            if (validPhotos.length > 0) {
+              setPhotos(validPhotos);
+              localStorage.setItem(STORAGE_KEY_PHOTOS, JSON.stringify(
+                validPhotos.map(p => ({
+                  id: p.id,
+                  name: p.name,
+                  size: p.size,
+                  lastModified: p.lastModified,
+                  url: p.url,
+                  sharpness: p.sharpness,
+                  stars: p.stars,
+                  userStars: p.userStars,
+                  focusSpot: p.focusSpot,
+                  identification: p.identification,
+                  cropBox: p.cropBox,
+                  locationText: p.locationText,
+                  exif: p.exif
+                }))
+              ));
+            } else {
+              localStorage.removeItem(STORAGE_KEY_PHOTOS);
+            }
+          } catch (err) {
+            console.warn('Error restoring saved workspace state:', err);
+          }
+        };
+
+        restoreAndValidateState();
+      }, []);
+
       useEffect(() => {
         window.birdvault_open_auth_modal = () => setShowAuthModal(true);
         return () => { delete window.birdvault_open_auth_modal; };
@@ -2789,7 +3089,7 @@ JSON Schema:
               return { ...p, blobUrl: URL.createObjectURL(p.file) };
             }
             
-            if (!inPreviewWindow && p.blobUrl) {
+            if (!inPreviewWindow && p.blobUrl && p.blobUrl !== p.url) {
               try { URL.revokeObjectURL(p.blobUrl); } catch(e){}
               hasChanges = true;
               return { ...p, blobUrl: null };
@@ -2874,11 +3174,11 @@ JSON Schema:
         const photoToDelete = photos.find(p => p.id === photoId);
         if (photoToDelete) {
           try { if (photoToDelete.fileHandle && typeof photoToDelete.fileHandle.remove === 'function') photoToDelete.fileHandle.remove(); } catch (e) {}
-          try { if (photoToDelete.blobUrl) URL.revokeObjectURL(photoToDelete.blobUrl); } catch (e) {}
-          try { if (photoToDelete.thumbnailUrl) URL.revokeObjectURL(photoToDelete.thumbnailUrl); } catch (e) {}
+          try { if (photoToDelete.blobUrl && photoToDelete.blobUrl !== photoToDelete.url) URL.revokeObjectURL(photoToDelete.blobUrl); } catch (e) {}
+          try { if (photoToDelete.thumbnailUrl && photoToDelete.thumbnailUrl !== photoToDelete.url) URL.revokeObjectURL(photoToDelete.thumbnailUrl); } catch (e) {}
         }
 
-        setPhotos(updatedPhotos);
+        savePhotosStateToStorage(updatedPhotos);
 
         if (updatedPhotos.length > 0) {
           const nextIndex = currentIndex < updatedPhotos.length ? currentIndex : updatedPhotos.length - 1;
@@ -2890,12 +3190,15 @@ JSON Schema:
 
       const rpmUsedPct = Math.round((tokenUsageState.minuteRequests / GEMINI_QUOTAS.MAX_RPM) * 100);
 
+      const svgIcon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none"><rect width="512" height="512" rx="128" fill="#040711"/><path d="M256 64C180 64 120 120 120 200C120 300 256 448 256 448C256 448 392 300 392 200C392 120 332 64 256 64ZM256 250C228.4 250 206 227.6 206 200C206 172.4 228.4 150 256 150C283.6 150 306 172.4 306 200C306 227.6 283.6 250 256 250Z" fill="#10b981"/></svg>`;
+      const iconUrl = 'data:image/svg+xml;base64,' + btoa(svgIcon);
+
       return (
         <div className="h-full w-full flex flex-col bg-slate-950 text-slate-100 overflow-hidden select-none">
           <header className="h-14 sm:h-16 border-b border-slate-800 bg-slate-900/90 backdrop-blur-md px-3 sm:px-6 flex items-center justify-between z-30 flex-shrink-0">
             <div className="flex items-center space-x-2.5">
-              <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl sm:rounded-2xl bg-emerald-600/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shadow-lg flex-shrink-0">
-                <Icon name="feather" className="w-5 h-5 sm:w-6 sm:h-6" />
+              <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl sm:rounded-2xl border border-emerald-500/30 flex items-center justify-center shadow-lg flex-shrink-0 overflow-hidden">
+                <img src={iconUrl} alt="BirdVault Icon" className="w-full h-full object-cover" />
               </div>
               <div className="truncate">
                 <h1 className="font-extrabold text-white text-sm sm:text-base tracking-tight leading-none">BirdVault <span className="text-emerald-400 font-mono text-[10px] sm:text-xs font-normal">PRO</span></h1>
@@ -2952,7 +3255,17 @@ JSON Schema:
             ) : (
               <CullingWorkspaceView
                 photos={photos}
-                setPhotos={setPhotos}
+                setPhotos={(newPhotos) => {
+                  if (typeof newPhotos === 'function') {
+                    setPhotos(prev => {
+                      const updated = newPhotos(prev);
+                      savePhotosStateToStorage(updated);
+                      return updated;
+                    });
+                  } else {
+                    savePhotosStateToStorage(newPhotos);
+                  }
+                }}
                 onSelectPhoto={(photo) => setSelectedPhoto(photo)}
                 userApiKey={userApiKey}
                 filterSharpness={filterSharpness}
@@ -2996,7 +3309,8 @@ JSON Schema:
                 photo={selectedPhoto}
                 onClose={() => setSelectedPhoto(null)}
                 onUpdatePhoto={(updated) => {
-                  setPhotos(prev => prev.map(p => p.id === updated.id ? updated : p));
+                  const updatedPhotos = photos.map(p => p.id === updated.id ? updated : p);
+                  savePhotosStateToStorage(updatedPhotos);
                   setSelectedPhoto(updated);
                 }}
                 onSaveToVault={handleSaveToVault}
