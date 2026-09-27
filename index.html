@@ -1277,6 +1277,7 @@ JSON Schema:
       const [showCroppedPreview, setShowCroppedPreview] = useState(!!(photo.cropBox && photo.cropBox.width > 0));
       const [isDrawingCrop, setIsDrawingCrop] = useState(false);
       const cropStartRef = useRef(null);
+      const currentCropBoxRef = useRef(photo.cropBox || null);
       const containerRef = useRef(null);
       const imgRef = useRef(null);
 
@@ -1289,6 +1290,12 @@ JSON Schema:
 
       const activeStars = photo.userStars || photo.stars || scoreToStars(photo.sharpness);
       const isZoomedOrCropped = showCroppedPreview || (viewMode === 'lightbox' && panZoom.scale > 1) || (viewMode === 'loupe' && zoomLevel > 1);
+
+      useEffect(() => {
+        setCropBox(photo.cropBox || null);
+        currentCropBoxRef.current = photo.cropBox || null;
+        setShowCroppedPreview(!!(photo.cropBox && photo.cropBox.width > 0));
+      }, [photo.id]);
 
       useEffect(() => {
         if (photo.sharpness === null && !evaluatingFocus) {
@@ -1335,8 +1342,11 @@ JSON Schema:
       const getImagePointerPos = useCallback((e) => {
         if (!imgRef.current) return { pctX: 50, pctY: 50 };
         const rect = imgRef.current.getBoundingClientRect();
-        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+        if (!rect.width || !rect.height) return { pctX: 50, pctY: 50 };
+
+        const clientX = e.touches && e.touches.length > 0 ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches && e.touches.length > 0 ? e.touches[0].clientY : e.clientY;
+
         const pctX = Math.max(0, Math.min(100, ((clientX - rect.left) / rect.width) * 100));
         const pctY = Math.max(0, Math.min(100, ((clientY - rect.top) / rect.height) * 100));
         return { pctX, pctY, clientX, clientY };
@@ -1345,8 +1355,8 @@ JSON Schema:
       const getContainerPointerPos = useCallback((e) => {
         if (!containerRef.current) return { pctX: 50, pctY: 50 };
         const rect = containerRef.current.getBoundingClientRect();
-        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+        const clientX = e.touches && e.touches.length > 0 ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches && e.touches.length > 0 ? e.touches[0].clientY : e.clientY;
         const pctX = Math.max(0, Math.min(100, ((clientX - rect.left) / rect.width) * 100));
         const pctY = Math.max(0, Math.min(100, ((clientY - rect.top) / rect.height) * 100));
         return { x: clientX - rect.left, y: clientY - rect.top, pctX, pctY, clientX, clientY };
@@ -1391,6 +1401,7 @@ JSON Schema:
           const height = Math.abs(imgPos.pctY - startY);
 
           const updatedCrop = { x: left, y: top, width, height };
+          currentCropBoxRef.current = updatedCrop;
           setCropBox(updatedCrop);
         } else if (isDraggingPan && viewMode === 'lightbox') {
           setPanZoom(p => ({
@@ -1415,7 +1426,9 @@ JSON Schema:
           setShowCroppedPreview(false);
           const imgPos = getImagePointerPos(e);
           cropStartRef.current = { x: imgPos.pctX, y: imgPos.pctY };
-          setCropBox({ x: imgPos.pctX, y: imgPos.pctY, width: 0, height: 0 });
+          const initialBox = { x: imgPos.pctX, y: imgPos.pctY, width: 0, height: 0 };
+          currentCropBoxRef.current = initialBox;
+          setCropBox(initialBox);
           setIsDrawingCrop(true);
         } else if (viewMode === 'lightbox') {
           setIsDraggingPan(true);
@@ -1427,11 +1440,14 @@ JSON Schema:
         if (e && e.touches && e.touches.length < 2) {
           initialTouchDistanceRef.current = null;
         }
-        if (isDrawingCrop && cropBox && cropBox.width > 2 && cropBox.height > 2) {
-          setShowCroppedPreview(true);
-          onUpdatePhoto({ ...photo, cropBox: cropBox });
+        if (isDrawingCrop) {
+          const finalCrop = currentCropBoxRef.current;
+          if (finalCrop && finalCrop.width > 1 && finalCrop.height > 1) {
+            setShowCroppedPreview(true);
+            onUpdatePhoto({ ...photo, cropBox: finalCrop });
+          }
+          setIsDrawingCrop(false);
         }
-        setIsDrawingCrop(false);
         setIsDraggingPan(false);
       };
 
@@ -1472,6 +1488,7 @@ JSON Schema:
 
       const handleClearCrop = () => {
         setCropBox(null);
+        currentCropBoxRef.current = null;
         setShowCroppedPreview(false);
         onUpdatePhoto({ ...photo, cropBox: null });
       };
@@ -1705,7 +1722,7 @@ JSON Schema:
                 </button>
               </div>
 
-              {showCroppedPreview && cropBox && cropBox.width > 0 && !isDrawingCrop ? (
+              {showCroppedPreview && cropBox && cropBox.width > 0 && !isDrawingCrop && viewMode !== 'crop' ? (
                 <div 
                   className="relative flex items-center justify-center max-h-[calc(100vh-8rem)] max-w-full"
                   style={viewMode === 'lightbox' ? { transform: `translate(${panZoom.x}px, ${panZoom.y}px) scale(${panZoom.scale})` } : {}}
@@ -1736,7 +1753,7 @@ JSON Schema:
                   >
                     {cropBox && cropBox.width > 0 && viewMode === 'crop' && (
                       <div
-                        className="absolute border-2 border-dashed border-emerald-400 bg-emerald-500/20 pointer-events-none z-20"
+                        className="absolute border-2 border-emerald-400 bg-emerald-500/20 pointer-events-none z-20 shadow-[0_0_0_9999px_rgba(0,0,0,0.6)]"
                         style={{
                           left: `${cropBox.x}%`,
                           top: `${cropBox.y}%`,
@@ -1744,8 +1761,19 @@ JSON Schema:
                           height: `${cropBox.height}%`
                         }}
                       >
-                        <span className="absolute -top-6 left-0 bg-emerald-600 text-white text-[9px] sm:text-[10px] font-bold px-1.5 py-0.5 rounded whitespace-nowrap shadow">
-                          Crop Region ({cropBox.width.toFixed(0)}% × {cropBox.height.toFixed(0)}%)
+                        <div className="absolute inset-0 grid grid-cols-3 grid-rows-3 pointer-events-none opacity-40">
+                          <div className="border-r border-b border-emerald-300"></div>
+                          <div className="border-r border-b border-emerald-300"></div>
+                          <div className="border-b border-emerald-300"></div>
+                          <div className="border-r border-b border-emerald-300"></div>
+                          <div className="border-r border-b border-emerald-300"></div>
+                          <div className="border-b border-emerald-300"></div>
+                          <div className="border-r border-emerald-300"></div>
+                          <div className="border-r border-emerald-300"></div>
+                          <div></div>
+                        </div>
+                        <span className="absolute -top-6 left-0 bg-emerald-600 text-white text-[9px] sm:text-[10px] font-bold px-1.5 py-0.5 rounded whitespace-nowrap shadow flex items-center space-x-1">
+                          <span>Crop ROI ({cropBox.width.toFixed(0)}% × {cropBox.height.toFixed(0)}%)</span>
                         </span>
                       </div>
                     )}
