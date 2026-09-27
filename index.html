@@ -182,6 +182,228 @@
       return usage;
     }
 
+    async function extractCameraExif(file) {
+      return new Promise((resolve) => {
+        if (!file || !(file instanceof File)) return resolve(null);
+        
+        const reader = new FileReader();
+        const slice = file.slice(0, 262144); // Read up to 256KB to capture EXIF APP1
+        
+        reader.onload = (e) => {
+          try {
+            const view = new DataView(e.target.result);
+            if (view.byteLength < 12) return resolve(null);
+            if (view.getUint16(0, false) !== 0xFFD8) return resolve(null); // Not a JPEG
+
+            let offset = 2;
+            let app1Offset = -1;
+
+            while (offset < view.byteLength - 4) {
+              const marker = view.getUint16(offset, false);
+              offset += 2;
+              
+              if (marker === 0xFFE1) { // APP1 Marker
+                const length = view.getUint16(offset, false);
+                const exifHeader = view.getUint32(offset + 2, false);
+                if (exifHeader === 0x45786966) { // "Exif"
+                  app1Offset = offset + 2;
+                  break;
+                }
+                offset += length;
+              } else if ((marker & 0xFF00) === 0xFF00 && marker !== 0xFF00) {
+                const length = view.getUint16(offset, false);
+                offset += length;
+              } else {
+                break;
+              }
+            }
+
+            if (app1Offset === -1) return resolve(null);
+
+            const tiffOffset = app1Offset + 6; // Skip "Exif\0\0"
+            if (tiffOffset + 8 > view.byteLength) return resolve(null);
+
+            const endianCode = view.getUint16(tiffOffset, false);
+            let littleEndian = false;
+            if (endianCode === 0x4949) {
+              littleEndian = true; // 'II' - Intel
+            } else if (endianCode === 0x4D4D) {
+              littleEndian = false; // 'MM' - Motorola
+            } else {
+              return resolve(null);
+            }
+
+            if (view.getUint16(tiffOffset + 2, littleEndian) !== 0x002A) return resolve(null);
+
+            const firstIFDOffset = view.getUint32(tiffOffset + 4, littleEndian);
+            if (!firstIFDOffset) return resolve(null);
+
+            const getString = (start, length) => {
+              let str = '';
+              for (let i = 0; i < length; i++) {
+                if (start + i >= view.byteLength) break;
+                const charCode = view.getUint8(start + i);
+                if (charCode === 0) break;
+                str += String.fromCharCode(charCode);
+              }
+              return str.trim();
+            };
+
+            const getRational = (valueOffset) => {
+              if (valueOffset + 8 > view.byteLength) return null;
+              const num = view.getUint32(valueOffset, littleEndian);
+              const den = view.getUint32(valueOffset + 4, littleEndian);
+              if (den === 0) return null;
+              return num / den;
+            };
+
+            const getValue = (type, count, valueOffset, entryOffset) => {
+              if (type === 3) { // SHORT
+                return view.getUint16(entryOffset + 8, littleEndian);
+              } else if (type === 4) { // LONG
+                return view.getUint32(entryOffset + 8, littleEndian);
+              } else if (type === 5 || type === 10) { // RATIONAL
+                return getRational(tiffOffset + valueOffset);
+              } else if (type === 2) { // ASCII
+                const strOffset = count > 4 ? tiffOffset + valueOffset : entryOffset + 8;
+                return getString(strOffset, count);
+              }
+              return null;
+            };
+
+            const readIFD = (ifdStart) => {
+              const tags = {};
+              if (ifdStart + 2 > view.byteLength) return tags;
+              const numEntries = view.getUint16(ifdStart, littleEndian);
+              let entryOffset = ifdStart + 2;
+
+              for (let i = 0; i < numEntries; i++) {
+                if (entryOffset + 12 > view.byteLength) break;
+                const tag = view.getUint16(entryOffset, littleEndian);
+                const type = view.getUint16(entryOffset + 2, littleEndian);
+                const count = view.getUint32(entryOffset + 4, littleEndian);
+                const valueOffset = view.getUint32(entryOffset + 8, littleEndian);
+
+                const val = getValue(type, count, valueOffset, entryOffset);
+                if (val !== null && val !== undefined) {
+                  tags[tag] = val;
+                }
+                entryOffset += 12;
+              }
+              return tags;
+            };
+
+            const ifd0Tags = readIFD(tiffOffset + firstIFDOffset);
+
+            let cameraData = {
+              make: ifd0Tags[0x010F] || null,
+              model: ifd0Tags[0x0110] || null,
+              lens: null,
+              shutterSpeed: null,
+              aperture: null,
+              iso: null,
+              focalLength: null
+            };
+
+            const exifSubIFDOffset = ifd0Tags[0x8769];
+            if (exifSubIFDOffset) {
+              const exifTags = readIFD(tiffOffset + exifSubIFDOffset);
+
+              // Focal Length (0x920A)
+              if (exifTags[0x920A] !== undefined) {
+                const fl = parseFloat(exifTags[0x920A]);
+                if (!isNaN(fl) && fl > 0) {
+                  cameraData.focalLength = `${Math.round(fl)}mm`;
+                  if (exifTags[0xA405]) { // 35mm equivalent
+                    cameraData.focalLength += ` (${exifTags[0xA405]}mm eq)`;
+                  }
+                }
+              }
+
+              // Shutter Speed / Exposure Time (0x829A)
+              if (exifTags[0x829A] !== undefined) {
+                const expTime = parseFloat(exifTags[0x829A]);
+                if (!isNaN(expTime) && expTime > 0) {
+                  if (expTime < 1) {
+                    cameraData.shutterSpeed = `1/${Math.round(1 / expTime)}s`;
+                  } else {
+                    cameraData.shutterSpeed = `${expTime.toFixed(1)}s`;
+                  }
+                }
+              }
+
+              // Aperture / FNumber (0x829D)
+              if (exifTags[0x829D] !== undefined) {
+                const fnum = parseFloat(exifTags[0x829D]);
+                if (!isNaN(fnum) && fnum > 0) {
+                  cameraData.aperture = `f/${fnum.toFixed(1)}`;
+                }
+              }
+
+              // ISO (0x8827 or 0x8833)
+              const isoVal = exifTags[0x8827] || exifTags[0x8833];
+              if (isoVal !== undefined) {
+                cameraData.iso = `ISO ${isoVal}`;
+              }
+
+              // Lens Model (0xA434)
+              if (exifTags[0xA434]) {
+                cameraData.lens = exifTags[0xA434];
+              }
+            }
+
+            if (cameraData.make || cameraData.model || cameraData.focalLength || cameraData.shutterSpeed || cameraData.aperture || cameraData.iso || cameraData.lens) {
+              resolve(cameraData);
+            } else {
+              resolve(null);
+            }
+          } catch (err) {
+            console.warn('EXIF binary parse error:', err);
+            resolve(null);
+          }
+        };
+        reader.onerror = () => resolve(null);
+        reader.readAsArrayBuffer(slice);
+      });
+    }
+
+    async function extractExifFocusSpot(file) {
+      return new Promise((resolve) => {
+        if (!file || !(file instanceof File)) return resolve(null);
+        const reader = new FileReader();
+        const slice = file.slice(0, 131072);
+        reader.onload = (e) => {
+          try {
+            const view = new DataView(e.target.result);
+            if (view.getUint16(0, false) !== 0xFFD8) return resolve(null);
+            
+            let offset = 2;
+            while (offset < view.byteLength) {
+              const marker = view.getUint16(offset, false);
+              offset += 2;
+              if (marker === 0xFFE1) {
+                const length = view.getUint16(offset, false);
+                const exifHeader = view.getUint32(offset + 2, false);
+                if (exifHeader === 0x45786966) {
+                  return resolve(null);
+                }
+                break;
+              } else if ((marker & 0xFF00) !== 0xFF00) {
+                break;
+              } else {
+                offset += view.getUint16(offset, false);
+              }
+            }
+          } catch (err) {
+            console.warn('EXIF AF parse fallback:', err);
+          }
+          resolve(null);
+        };
+        reader.onerror = () => resolve(null);
+        reader.readAsArrayBuffer(slice);
+      });
+    }
+
     function Icon({ name, className = "w-5 h-5" }) {
       const icons = {
         google: <path fill="currentColor" d="M12.48 10.92v3.28h7.84c-.24 1.84-.853 3.187-1.787 4.133-1.147 1.147-2.933 2.4-6.053 2.4-4.827 0-8.6-3.893-8.6-8.72s3.773-8.72 8.6-8.72c2.6 0 4.507 1.027 5.907 2.347l2.307-2.307C18.747 1.44 16.133 0 12.48 0 5.867 0 .307 5.387.307 12s5.56 12 12.173 12c3.573 0 6.267-1.173 8.373-3.36 2.16-2.16 2.84-5.213 2.84-7.667 0-.76-.053-1.467-.173-2.053H12.48z"/>,
@@ -722,91 +944,6 @@
       });
     }
 
-    async function extractCameraExif(file) {
-      return new Promise((resolve) => {
-        if (!file || !(file instanceof File)) return resolve(null);
-        const reader = new FileReader();
-        const slice = file.slice(0, 131072);
-        reader.onload = (e) => {
-          try {
-            const view = new DataView(e.target.result);
-            if (view.getUint16(0, false) !== 0xFFD8) return resolve(null);
-            
-            let offset = 2;
-            let cameraData = {};
-
-            while (offset < view.byteLength) {
-              const marker = view.getUint16(offset, false);
-              offset += 2;
-              if (marker === 0xFFE1) {
-                const length = view.getUint16(offset, false);
-                const exifHeader = view.getUint32(offset + 2, false);
-                if (exifHeader === 0x45786966) {
-                  cameraData = {
-                    make: 'Canon / Nikon',
-                    model: 'EOS R5 / Z8',
-                    lens: '600mm f/4 IS USM',
-                    shutterSpeed: '1/3200s',
-                    aperture: 'f/4.0',
-                    iso: 'ISO 800',
-                    focalLength: '600mm'
-                  };
-                  return resolve(cameraData);
-                }
-                break;
-              } else if ((marker & 0xFF00) !== 0xFF00) {
-                break;
-              } else {
-                offset += view.getUint16(offset, false);
-              }
-            }
-          } catch (err) {
-            console.warn('EXIF camera params fallback:', err);
-          }
-          resolve(null);
-        };
-        reader.onerror = () => resolve(null);
-        reader.readAsArrayBuffer(slice);
-      });
-    }
-
-    async function extractExifFocusSpot(file) {
-      return new Promise((resolve) => {
-        if (!file || !(file instanceof File)) return resolve(null);
-        const reader = new FileReader();
-        const slice = file.slice(0, 131072);
-        reader.onload = (e) => {
-          try {
-            const view = new DataView(e.target.result);
-            if (view.getUint16(0, false) !== 0xFFD8) return resolve(null);
-            
-            let offset = 2;
-            while (offset < view.byteLength) {
-              const marker = view.getUint16(offset, false);
-              offset += 2;
-              if (marker === 0xFFE1) {
-                const length = view.getUint16(offset, false);
-                const exifHeader = view.getUint32(offset + 2, false);
-                if (exifHeader === 0x45786966) {
-                  return resolve(null);
-                }
-                break;
-              } else if ((marker & 0xFF00) !== 0xFF00) {
-                break;
-              } else {
-                offset += view.getUint16(offset, false);
-              }
-            }
-          } catch (err) {
-            console.warn('EXIF AF parse fallback:', err);
-          }
-          resolve(null);
-        };
-        reader.onerror = () => resolve(null);
-        reader.readAsArrayBuffer(slice);
-      });
-    }
-
     async function evaluatePhotoFocus(fileOrBlobUrl, existingFocusSpot = null) {
       return new Promise(async (resolve) => {
         let focusSpot = existingFocusSpot;
@@ -1197,7 +1334,7 @@ JSON Schema:
               message: 'Gemini API Rate Limit reached (15 Requests/Min or Daily Quota). Allowance resets automatically on minute/daily schedule.'
             };
           }
-          if (response.status === 400 || response.status === 403 || response.status === 401) {
+          if (response.status === 400 || response.status === 401 || response.status === 403) {
             return { 
               error: 'INVALID_KEY', 
               message: `Gemini API Key rejected (${serverMessage}). Please verify your key at Google AI Studio and ensure there are no trailing space characters.` 
@@ -1640,7 +1777,6 @@ JSON Schema:
               onWheel={handleWheelZoom}
               className="flex-1 relative flex items-center justify-center p-2 sm:p-4 overflow-hidden select-none cursor-crosshair touch-canvas"
             >
-              {/* Floating Delete Button - Top Left */}
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -1655,7 +1791,6 @@ JSON Schema:
                 <Icon name="trash" className="w-4 h-4 sm:w-5 sm:h-5 text-red-400 hover:text-white" />
               </button>
 
-              {/* Floating Interactive Star Rating Overlay */}
               <div 
                 onClick={(e) => e.stopPropagation()}
                 onPointerDown={(e) => e.stopPropagation()}
@@ -1671,7 +1806,6 @@ JSON Schema:
                 />
               </div>
 
-              {/* Floating Previous Image Button */}
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -1691,7 +1825,6 @@ JSON Schema:
                 <Icon name="chevronLeft" className="w-5 h-5 sm:w-6 sm:h-6" />
               </button>
 
-              {/* Floating Next Image Button */}
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -1711,7 +1844,6 @@ JSON Schema:
                 <Icon name="chevronRight" className="w-5 h-5 sm:w-6 sm:h-6" />
               </button>
 
-              {/* Mobile View Mode Floating Pill */}
               <div 
                 onPointerDown={(e) => e.stopPropagation()}
                 onMouseDown={(e) => e.stopPropagation()}
@@ -1957,25 +2089,38 @@ JSON Schema:
                   )}
                 </div>
 
+                {/* Real parsed camera EXIF settings panel */}
                 {cameraExif && (
                   <div className="mt-3 pt-2 border-t border-slate-800 space-y-2">
                     <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider block">Camera EXIF Parameters</span>
                     <div className="grid grid-cols-2 gap-1.5 text-[10px] font-mono">
+                      {cameraExif.make || cameraExif.model ? (
+                        <div className="col-span-2 bg-slate-950 p-1.5 rounded border border-slate-800/80 flex justify-between items-center">
+                          <span className="text-slate-500">CAMERA</span>
+                          <span className="text-slate-200 font-bold truncate max-w-[150px]">{[cameraExif.make, cameraExif.model].filter(Boolean).join(' ')}</span>
+                        </div>
+                      ) : null}
+                      {cameraExif.lens && (
+                        <div className="col-span-2 bg-slate-950 p-1.5 rounded border border-slate-800/80 flex justify-between items-center">
+                          <span className="text-slate-500">LENS</span>
+                          <span className="text-slate-200 font-bold truncate max-w-[150px]">{cameraExif.lens}</span>
+                        </div>
+                      )}
                       <div className="bg-slate-950 p-1.5 rounded border border-slate-800/80">
                         <span className="text-slate-500 block">SHUTTER</span>
-                        <span className="text-slate-200 font-bold">{cameraExif.shutterSpeed || '1/3200s'}</span>
+                        <span className="text-slate-200 font-bold">{cameraExif.shutterSpeed || 'N/A'}</span>
                       </div>
                       <div className="bg-slate-950 p-1.5 rounded border border-slate-800/80">
                         <span className="text-slate-500 block">APERTURE</span>
-                        <span className="text-slate-200 font-bold">{cameraExif.aperture || 'f/4.0'}</span>
+                        <span className="text-slate-200 font-bold">{cameraExif.aperture || 'N/A'}</span>
                       </div>
                       <div className="bg-slate-950 p-1.5 rounded border border-slate-800/80">
                         <span className="text-slate-500 block">ISO</span>
-                        <span className="text-slate-200 font-bold">{cameraExif.iso || 'ISO 800'}</span>
+                        <span className="text-slate-200 font-bold">{cameraExif.iso || 'N/A'}</span>
                       </div>
                       <div className="bg-slate-950 p-1.5 rounded border border-slate-800/80">
                         <span className="text-slate-500 block">FOCAL LENGTH</span>
-                        <span className="text-slate-200 font-bold">{cameraExif.focalLength || '600mm'}</span>
+                        <span className="text-slate-200 font-bold">{cameraExif.focalLength || 'N/A'}</span>
                       </div>
                     </div>
                   </div>
@@ -2288,6 +2433,10 @@ JSON Schema:
         for (let i = 0; i < files.length; i++) {
           if (abortUploadRef.current) break;
           const file = files[i];
+
+          // Read camera EXIF during initial file upload
+          const cameraExif = await extractCameraExif(file);
+
           newPhotoObjs.push({
             id: 'photo_' + Math.random().toString(36).substring(2, 9) + '_' + Date.now(),
             file: file,
@@ -2304,6 +2453,7 @@ JSON Schema:
             stars: null,
             userStars: null,
             focusSpot: null,
+            cameraExif: cameraExif,
             identification: null,
             cropBox: null
           });
