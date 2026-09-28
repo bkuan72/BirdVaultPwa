@@ -8,20 +8,36 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="mobile-web-app-capable" content="yes">
-  <meta name="theme-color" content="#090d16">
+  <meta name="theme-color" content="#040711">
 
   <script>
     (function() {
-      const svgIcon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none"><rect width="512" height="512" rx="128" fill="#040711"/><path d="M256 64C180 64 120 120 120 200C120 300 256 448 256 448C256 448 392 300 392 200C392 120 332 64 256 64ZM256 250C228.4 250 206 227.6 206 200C206 172.4 228.4 150 256 150C283.6 150 306 172.4 306 200C306 227.6 283.6 250 256 250Z" fill="#10b981"/></svg>`;
+      // Suppress Tailwind Play CDN production warnings in developer console
+      const origWarn = console.warn;
+      console.warn = function(...args) {
+        if (args[0] && typeof args[0] === 'string' && args[0].includes('cdn.tailwindcss.com')) return;
+        origWarn.apply(console, args);
+      };
+
+      // Inline vector SVG icon to prevent broken external assets
+      const svgIcon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none"><rect width="512" height="512" rx="128" fill="#040711"/><path d="M256 64C180 64 120 120 120 200C120 300 256 448 256 448C256 448 392 300 392 200C392 120 332 64 256 64ZM256 250C228.4 250 206 227.6 206 200C206 172.4 228.4 150 256 150C283.6 150 306 172.4 306 200C306 227.6 283.6 250 256 250Z" fill="#10b981"/><path d="M256 120C211.8 120 176 155.8 176 200C176 260 256 360 256 360C256 360 336 260 336 200C336 155.8 300.2 120 256 120ZM256 230C239.4 230 226 216.6 226 200C226 183.4 239.4 170 256 170C272.6 170 286 183.4 286 200C286 216.6 272.6 230 256 230Z" fill="#34d399"/></svg>`;
       const iconUrl = 'data:image/svg+xml;base64,' + btoa(svgIcon);
+
+      // Resolve valid absolute start_url for blob manifest to eliminate browser manifest errors
+      let validStartUrl = window.location.origin + window.location.pathname;
+      try {
+        validStartUrl = new URL(window.location.pathname, window.location.origin).href;
+      } catch (e) {
+        validStartUrl = window.location.href || '.';
+      }
 
       const manifest = {
         name: "BirdVault Pro",
         short_name: "BirdVault",
-        start_url: ".",
+        start_url: validStartUrl,
         display: "standalone",
         background_color: "#040711",
-        theme_color: "#090d16",
+        theme_color: "#040711",
         icons: [
           { src: iconUrl, sizes: "512x512", type: "image/svg+xml", purpose: "any maskable" }
         ]
@@ -41,7 +57,7 @@
     })();
   </script>
 
-  <!-- Tailwind CSS -->
+  <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
@@ -123,6 +139,16 @@
       -webkit-user-drag: none;
       user-drag: none;
     }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(-4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes slideUp {
+      from { opacity: 0; transform: translateY(12px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .animate-fadeIn { animation: fadeIn 0.2s ease-out forwards; }
+    .animate-slideUp { animation: slideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
   </style>
 </head>
 <body class="h-[100dvh] w-full overflow-hidden bg-slate-950 text-slate-100 flex flex-col">
@@ -144,6 +170,7 @@
       return Math.max(1, Math.min(5, Math.ceil(score / 2)));
     }
 
+    // Deterministic File Fingerprint Generator (Zero Binary Storage)
     function generateFingerprintId(file) {
       if (!file) return null;
       const cleanName = (file.name || 'unnamed').replace(/[^a-zA-Z0-9._-]/g, '_');
@@ -232,7 +259,7 @@
         if (!file || !(file instanceof File)) return resolve(null);
         
         const reader = new FileReader();
-        const slice = file.slice(0, 262144);
+        const slice = file.slice(0, 262144); // Read first 256KB for EXIF headers
         
         reader.onload = (e) => {
           try {
@@ -250,7 +277,7 @@
               if (marker === 0xFFE1) {
                 const length = view.getUint16(offset, false);
                 const exifHeader = view.getUint32(offset + 2, false);
-                if (exifHeader === 0x45786966) {
+                if (exifHeader === 0x45786966) { // "Exif"
                   app1Offset = offset + 2;
                   break;
                 }
@@ -1052,12 +1079,14 @@
     }
 
     function CroppedImage({ src, alt, cropBox, photo = null, className = "", imgClassName = "", innerRef = null, fitMode = "contain", children = null }) {
+      const [imgError, setImgError] = useState(false);
       const [imgDims, setImgDims] = useState({
         w: (photo?.naturalWidth && photo.naturalWidth > 300) ? photo.naturalWidth : 1000,
         h: (photo?.naturalHeight && photo.naturalHeight > 300) ? photo.naturalHeight : 750
       });
 
       useEffect(() => {
+        setImgError(false);
         if (src) {
           const img = new Image();
           img.onload = () => {
@@ -1065,6 +1094,7 @@
               setImgDims({ w: img.naturalWidth, h: img.naturalHeight });
             }
           };
+          img.onerror = () => setImgError(true);
           img.src = src;
         }
       }, [src]);
@@ -1093,6 +1123,17 @@
 
       const preserveAspect = fitMode === "cover" ? "xMidYMid slice" : "xMidYMid meet";
 
+      if (imgError || !src) {
+        return (
+          <div className={`relative overflow-hidden flex flex-col items-center justify-center bg-slate-950 p-4 text-center select-none ${className}`} style={frameStyle}>
+            <Icon name="image" className="w-8 h-8 text-slate-600 mb-1" />
+            <span className="text-[10px] text-emerald-400 font-semibold bg-emerald-950/80 px-2 py-1 rounded border border-emerald-500/30">
+              📁 Re-select source folder for 1:1 preview
+            </span>
+          </div>
+        );
+      }
+
       if (cropBox && cropBox.width > 0 && cropBox.height > 0) {
         const cropX = (cropBox.x / 100) * naturalW;
         const cropY = (cropBox.y / 100) * naturalH;
@@ -1120,6 +1161,7 @@
                 y="0"
                 width={naturalW}
                 height={naturalH}
+                onError={() => setImgError(true)}
               />
             </svg>
             {children}
@@ -1139,6 +1181,7 @@
             decoding="async"
             draggable="false"
             onDragStart={(e) => e.preventDefault()}
+            onError={() => setImgError(true)}
             className={`${fitMode === 'cover' ? 'w-full h-full object-cover' : 'w-full h-full object-contain'} ${imgClassName}`}
           />
           {children}
@@ -2396,9 +2439,19 @@ JSON Schema:
       );
     }
 
-    function LiferVaultView({ vaultEntries, onDeleteSighting, onDeleteSpecies, onSelectPhoto }) {
+    function LiferVaultView({ vaultEntries, photos = [], onDeleteSighting, onDeleteSpecies, onSelectPhoto }) {
       const [selectedCategory, setSelectedCategory] = useState('All');
       const [searchQuery, setSearchQuery] = useState('');
+
+      // Create quick lookup map for workspace photos by fingerprint/id
+      const workspacePhotosMap = useMemo(() => {
+        const map = new Map();
+        (photos || []).forEach(p => {
+          if (p.fingerprintId) map.set(p.fingerprintId, p);
+          if (p.id) map.set(p.id, p);
+        });
+        return map;
+      }, [photos]);
 
       const categories = useMemo(() => {
         const cats = new Set(vaultEntries.map(e => e.category || 'Other'));
@@ -2457,10 +2510,25 @@ JSON Schema:
             {filteredEntries.length > 0 ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-5">
                 {filteredEntries.map(entry => {
-                  const primarySighting = entry.sightings[0];
-                  const photoObj = primarySighting.photo;
-                  const activeSrc = photoObj.thumbnailUrl || photoObj.blobUrl || photoObj.url;
-                  const hasActiveFile = !!photoObj.file;
+                  const primarySighting = entry.sightings[0] || {};
+                  const savedPhoto = primarySighting.photo || {};
+                  const fpId = primarySighting.photoFingerprintId || savedPhoto.fingerprintId || savedPhoto.id;
+
+                  // Re-hydrate dynamically from live workspace photos if present
+                  const livePhoto = workspacePhotosMap.get(fpId);
+                  const photoObj = livePhoto || savedPhoto;
+
+                  let activeSrc = null;
+                  if (livePhoto && (livePhoto.thumbnailUrl || livePhoto.blobUrl || livePhoto.url)) {
+                    activeSrc = livePhoto.thumbnailUrl || livePhoto.blobUrl || livePhoto.url;
+                  } else if (savedPhoto && (savedPhoto.thumbnailUrl || savedPhoto.blobUrl || savedPhoto.url)) {
+                    const raw = savedPhoto.thumbnailUrl || savedPhoto.blobUrl || savedPhoto.url;
+                    if (raw && !raw.startsWith('blob:')) {
+                      activeSrc = raw;
+                    }
+                  }
+
+                  const hasActiveFile = !!(photoObj && photoObj.file);
 
                   return (
                     <div key={entry.speciesName} className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl hover:border-slate-700 transition flex flex-col justify-between">
@@ -2480,7 +2548,7 @@ JSON Schema:
                               imgClassName="transition-transform duration-500 hover:scale-105"
                             />
                           ) : (
-                            <div className="flex flex-col items-center justify-center p-4 text-center space-y-2">
+                            <div className="flex flex-col items-center justify-center p-4 text-center space-y-2 h-full w-full bg-slate-950">
                               <Icon name="image" className="w-8 h-8 text-slate-600" />
                               <span className="text-[10px] text-emerald-400 font-semibold bg-emerald-950/80 px-2 py-1 rounded border border-emerald-500/30">
                                 📁 Re-select source folder for 1:1 preview
@@ -2514,24 +2582,27 @@ JSON Schema:
                           <div className="space-y-1.5 border-t border-slate-800 pt-2">
                             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Sightings History</span>
                             <div className="space-y-1 max-h-32 overflow-y-auto">
-                              {entry.sightings.map(s => (
-                                <div key={s.id} className="flex items-center justify-between bg-slate-950 p-2 rounded-lg text-xs border border-slate-800/80">
-                                  <span className="text-slate-300 font-mono text-[11px]">{new Date(s.date).toLocaleDateString()}</span>
-                                  <div className="flex items-center space-x-2">
-                                    <StarRating
-                                      rating={s.photo.userStars || s.photo.stars || scoreToStars(s.photo.sharpness)}
-                                      readOnly={true}
-                                      size="w-3 h-3"
-                                    />
-                                    <button
-                                      onClick={() => onDeleteSighting(entry.speciesName, s.id)}
-                                      className="text-slate-500 hover:text-red-400 ml-1 p-1 touch-manipulation"
-                                    >
-                                      <Icon name="x" className="w-3.5 h-3.5" />
-                                    </button>
+                              {entry.sightings.map(s => {
+                                const sPhoto = s.photo || {};
+                                return (
+                                  <div key={s.id} className="flex items-center justify-between bg-slate-950 p-2 rounded-lg text-xs border border-slate-800/80">
+                                    <span className="text-slate-300 font-mono text-[11px]">{new Date(s.date).toLocaleDateString()}</span>
+                                    <div className="flex items-center space-x-2">
+                                      <StarRating
+                                        rating={sPhoto.userStars || sPhoto.stars || scoreToStars(sPhoto.sharpness)}
+                                        readOnly={true}
+                                        size="w-3 h-3"
+                                      />
+                                      <button
+                                        onClick={() => onDeleteSighting(entry.speciesName, s.id)}
+                                        className="text-slate-500 hover:text-red-400 ml-1 p-1 touch-manipulation"
+                                      >
+                                        <Icon name="x" className="w-3.5 h-3.5" />
+                                      </button>
+                                    </div>
                                   </div>
-                                </div>
-                              ))}
+                                );
+                              })}
                             </div>
                           </div>
                         </div>
@@ -3407,7 +3478,23 @@ JSON Schema:
       useEffect(() => {
         const savedVault = localStorage.getItem('birdvault_entries_v5');
         if (savedVault) {
-          try { setVaultEntries(JSON.parse(savedVault)); } catch (e) {}
+          try {
+            const parsed = JSON.parse(savedVault);
+            // Sanitize any legacy blob: URLs in stored vault entries on startup
+            const sanitized = (parsed || []).map(entry => ({
+              ...entry,
+              sightings: (entry.sightings || []).map(s => ({
+                ...s,
+                photo: s.photo ? {
+                  ...s.photo,
+                  thumbnailUrl: (s.photo.thumbnailUrl && !s.photo.thumbnailUrl.startsWith('blob:')) ? s.photo.thumbnailUrl : null,
+                  blobUrl: null,
+                  url: (s.photo.url && !s.photo.url.startsWith('blob:')) ? s.photo.url : null
+                } : s.photo
+              }))
+            }));
+            setVaultEntries(sanitized);
+          } catch (e) {}
         }
       }, []);
 
@@ -3422,14 +3509,16 @@ JSON Schema:
 
         const fpId = photoWithAi.fingerprintId || photoWithAi.id;
 
+        const sanitizeUrl = (u) => (u && typeof u === 'string' && !u.startsWith('blob:')) ? u : null;
+
         const cleanPhotoMeta = {
           id: fpId,
           fingerprintId: fpId,
-          file: photoWithAi.file || null,
+          file: null,
           name: photoWithAi.name,
           size: photoWithAi.size,
           lastModified: photoWithAi.lastModified,
-          thumbnailUrl: photoWithAi.thumbnailUrl || null,
+          thumbnailUrl: sanitizeUrl(photoWithAi.thumbnailUrl),
           sharpness: photoWithAi.sharpness,
           stars: photoWithAi.stars,
           userStars: photoWithAi.userStars,
@@ -3565,6 +3654,7 @@ JSON Schema:
             {activeTab === 'vault' ? (
               <LiferVaultView
                 vaultEntries={vaultEntries}
+                photos={photos}
                 onDeleteSighting={handleDeleteSighting}
                 onDeleteSpecies={handleDeleteSpecies}
                 onSelectPhoto={(photo) => setSelectedPhoto(photo)}
