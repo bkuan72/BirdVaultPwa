@@ -235,6 +235,24 @@
       }
     }
 
+    async function getOpfsSightingFileBlob(category, speciesName, fileName) {
+      try {
+        const root = await getOpfsRootHandle();
+        if (!root || !fileName) return null;
+
+        const catDirName = await sanitizeDirectoryName(category || 'Other');
+        const speciesDirName = await sanitizeDirectoryName(speciesName);
+
+        const catHandle = await root.getDirectoryHandle(catDirName, { create: false });
+        const speciesHandle = await catHandle.getDirectoryHandle(speciesDirName, { create: false });
+        const fileHandle = await speciesHandle.getFileHandle(fileName, { create: false });
+
+        return await fileHandle.getFile();
+      } catch (err) {
+        return null;
+      }
+    }
+
     async function updateOpfsMasterManifest(manifestData) {
       try {
         const root = await getOpfsRootHandle();
@@ -308,7 +326,8 @@
           cameraExif: photoMeta.cameraExif || null,
           identification: photoMeta.identification || null,
           cropBox: photoMeta.cropBox || null,
-          locationText: photoMeta.locationText || null
+          locationText: photoMeta.locationText || null,
+          opfsFileName: photoMeta.opfsFileName || null
         };
         localStorage.setItem('birdvault_fingerprints_v1', JSON.stringify(db));
       } catch (e) {
@@ -643,22 +662,14 @@
       return URL.createObjectURL(file);
     }
 
+    // HIGH-PERFORMANCE OPTIMIZED THUMBNAIL PROCESSOR (Page-bound active queue with thread yielding)
     async function processThumbnailQueue(neededPhotos, updateBatchCallback, progressCallback, signal) {
       let index = 0;
       let completed = 0;
       const total = neededPhotos.length;
-      const concurrency = 2;
+      const concurrency = 2; // Controlled parallel decoding worker count
 
       let pendingBatch = [];
-      let lastFlush = Date.now();
-
-      const flush = () => {
-        if (pendingBatch.length > 0) {
-          if (!signal?.aborted) updateBatchCallback([...pendingBatch]);
-          pendingBatch = [];
-          lastFlush = Date.now();
-        }
-      };
 
       return new Promise((resolve) => {
         if (!total) return resolve();
@@ -678,9 +689,11 @@
                 thumbHeight: res.height
               });
 
-              if (pendingBatch.length >= 6 || Date.now() - lastFlush > 100) {
-                flush();
-                await new Promise(r => setTimeout(r, 0));
+              // Flush updates immediately to UI & yield main thread to keep UI completely smooth (60 FPS)
+              if (pendingBatch.length >= 2 || index === total) {
+                if (!signal?.aborted) updateBatchCallback([...pendingBatch]);
+                pendingBatch = [];
+                await new Promise(r => setTimeout(r, 0)); // Yield thread
               }
             } catch (err) {
               console.warn('Thumbnail generation error:', err);
@@ -690,12 +703,13 @@
               if (!signal?.aborted) progressCallback(completed, total);
             }
           }
-          flush();
         };
 
         const workers = Array.from({ length: Math.min(concurrency, total) }, () => worker());
         Promise.all(workers).then(() => {
-          flush();
+          if (pendingBatch.length > 0 && !signal?.aborted) {
+            updateBatchCallback([...pendingBatch]);
+          }
           resolve();
         });
       });
@@ -1177,9 +1191,9 @@
               <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 space-y-1 text-[11px] text-slate-400">
                 <p className="font-semibold text-slate-300 flex items-center space-x-1">
                   <Icon name="shield" className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Privacy & Deterministic Persistence Notice</span>
+                  <span>Privacy & State Persistence Notice</span>
                 </p>
-                <p>All photo metadata is mapped strictly to deterministic file fingerprints. Zero image blobs are ever saved in browser storage.</p>
+                <p>All photo metadata is mapped strictly to deterministic file fingerprints. Zero image blobs are stored in application state.</p>
               </div>
 
               <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between pt-2 border-t border-slate-800 gap-3">
@@ -1263,7 +1277,7 @@
           <div className={`relative overflow-hidden flex flex-col items-center justify-center bg-slate-950 p-4 text-center select-none ${className}`} style={frameStyle}>
             <Icon name="image" className="w-8 h-8 text-slate-600 mb-1" />
             <span className="text-[10px] text-emerald-400 font-semibold bg-emerald-950/80 px-2 py-1 rounded border border-emerald-500/30">
-              📁 Re-select source folder for 1:1 preview
+              📁 Image blob unavailable (purged or relocated)
             </span>
           </div>
         );
@@ -2697,13 +2711,10 @@ JSON Schema:
                   if (livePhoto && (livePhoto.thumbnailUrl || livePhoto.blobUrl || livePhoto.url)) {
                     activeSrc = livePhoto.thumbnailUrl || livePhoto.blobUrl || livePhoto.url;
                   } else if (savedPhoto && (savedPhoto.thumbnailUrl || savedPhoto.blobUrl || savedPhoto.url)) {
-                    const raw = savedPhoto.thumbnailUrl || savedPhoto.blobUrl || savedPhoto.url;
-                    if (raw && !raw.startsWith('blob:')) {
-                      activeSrc = raw;
-                    }
+                    activeSrc = savedPhoto.thumbnailUrl || savedPhoto.blobUrl || savedPhoto.url;
                   }
 
-                  const hasActiveFile = !!(photoObj && photoObj.file);
+                  const hasActiveFile = !!(photoObj && (photoObj.file || activeSrc));
 
                   return (
                     <div key={entry.speciesName} className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl hover:border-slate-700 transition flex flex-col justify-between">
@@ -2726,7 +2737,7 @@ JSON Schema:
                             <div className="flex flex-col items-center justify-center p-4 text-center space-y-2 h-full w-full bg-slate-950">
                               <Icon name="image" className="w-8 h-8 text-slate-600" />
                               <span className="text-[10px] text-emerald-400 font-semibold bg-emerald-950/80 px-2 py-1 rounded border border-emerald-500/30">
-                                📁 Saved to OPFS physical folder
+                                📁 Image blob unlocatable (Purged)
                               </span>
                             </div>
                           )}
@@ -2812,7 +2823,7 @@ JSON Schema:
       processedPhotos,
       isPreviewOpen
     }) {
-      const pageSize = 20;
+      const pageSize = 12;
 
       const [selectedIds, setSelectedIds] = useState(new Set());
       const [showFilterBar, setShowFilterBar] = useState(false);
@@ -2909,7 +2920,8 @@ JSON Schema:
             cameraExif: cameraExif,
             identification: savedMeta.identification || null,
             cropBox: savedMeta.cropBox || null,
-            locationText: savedMeta.locationText || null
+            locationText: savedMeta.locationText || null,
+            opfsFileName: savedMeta.opfsFileName || null
           };
 
           saveFingerprintMetadata(photoObj);
@@ -3077,11 +3089,12 @@ JSON Schema:
         return processedPhotos.slice(start, start + pageSize);
       }, [processedPhotos, currentPage]);
 
+      // OPTIMIZED PAGE-BOUND ACTIVE BUFFER (Target size reduced to 17: 12 active page + 5 pre-fetch buffer)
       const bufferedPhotos = useMemo(() => {
         const total = processedPhotos.length;
         if (total === 0) return [];
 
-        const targetBufferSize = 100;
+        const targetBufferSize = 17; // 12 current page + 5 pre-fetch buffer
         const pageStart = (currentPage - 1) * pageSize;
         const pageEnd = Math.min(total, currentPage * pageSize);
         const pageCenter = Math.floor((pageStart + pageEnd) / 2);
@@ -3185,6 +3198,8 @@ JSON Schema:
 
       const isSelectionActive = selectedIds.size > 0;
       const filterLabel = filterSharpness === '5star' ? '5 Stars' : filterSharpness === '4star' ? '4+ Stars' : filterSharpness === 'soft' ? '1-3 Stars' : filterSharpness === 'unrated' ? 'Unrated' : 'All Photos';
+
+      const showFooterBar = totalPages > 1 || uploading || (loadingThumbnails && !isPreviewOpen) || rating;
 
       return (
         <div className="flex-1 flex flex-col overflow-hidden min-h-0 p-3 sm:p-4 md:p-6 gap-3 sm:gap-4 pb-[calc(5rem+env(safe-area-inset-bottom))] md:pb-4 relative">
@@ -3322,7 +3337,7 @@ JSON Schema:
 
           <div className="flex-1 overflow-y-auto min-h-0 pr-1 pb-4">
             {paginatedPhotos.length > 0 ? (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-4">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-4">
                 {paginatedPhotos.map(photo => {
                   const currentStars = photo.userStars || photo.stars || scoreToStars(photo.sharpness);
                   const isChecked = selectedIds.has(photo.id);
@@ -3331,7 +3346,7 @@ JSON Schema:
                   return (
                     <div
                       key={photo.id}
-                      onClick={() => photo.file && onSelectPhoto(photo)}
+                      onClick={() => (photo.file || activeSrc) && onSelectPhoto(photo)}
                       className={`group relative aspect-square bg-slate-900 border rounded-2xl overflow-hidden shadow-lg cursor-pointer hover:border-emerald-500 transition flex items-center justify-center p-1 touch-manipulation ${isChecked ? 'border-emerald-500 ring-2 ring-emerald-500/50' : 'border-slate-800'}`}
                     >
                       {activeSrc ? (
@@ -3408,65 +3423,69 @@ JSON Schema:
             )}
           </div>
 
-          <div className="flex-shrink-0 flex flex-col sm:flex-row sm:items-center justify-between bg-slate-900 border border-slate-800 p-2.5 sm:p-3 rounded-2xl text-[11px] sm:text-xs gap-2 shadow-xl">
-            <div className="flex items-center justify-center sm:justify-start space-x-3 min-w-0 flex-1 px-1">
-              {uploading ? (
-                <div className="flex items-center space-x-2 truncate text-emerald-400 font-medium">
-                  <div className="w-3.5 h-3.5 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin flex-shrink-0"></div>
-                  <span className="truncate">
-                    Reading & Fingerprinting files: <strong className="font-mono text-white">{uploadProgress.current}</strong>/{uploadProgress.total}
+          {showFooterBar && (
+            <div className="flex-shrink-0 flex flex-col sm:flex-row sm:items-center justify-between bg-slate-900 border border-slate-800 p-2.5 sm:p-3 rounded-2xl text-[11px] sm:text-xs gap-2 shadow-xl animate-fadeIn">
+              <div className="flex items-center justify-center sm:justify-start space-x-3 min-w-0 flex-1 px-1">
+                {uploading ? (
+                  <div className="flex items-center space-x-2 truncate text-emerald-400 font-medium">
+                    <div className="w-3.5 h-3.5 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin flex-shrink-0"></div>
+                    <span className="truncate">
+                      Reading & Fingerprinting files: <strong className="font-mono text-white">{uploadProgress.current}</strong>/{uploadProgress.total}
+                    </span>
+                    <button
+                      onClick={() => { abortUploadRef.current = true; }}
+                      className="px-2 py-0.5 bg-red-600/20 text-red-400 hover:bg-red-600/30 text-[10px] rounded font-semibold ml-2 flex-shrink-0 touch-manipulation"
+                    >
+                      Abort
+                    </button>
+                  </div>
+                ) : loadingThumbnails && !isPreviewOpen ? (
+                  <div className="flex items-center space-x-2 truncate text-sky-400 font-medium">
+                    <div className="w-3.5 h-3.5 border-2 border-sky-400 border-t-transparent rounded-full animate-spin flex-shrink-0"></div>
+                    <span className="truncate">
+                      Buffer Thumbnails: <strong className="font-mono text-white">{thumbnailProgress.current}</strong>/{thumbnailProgress.total}
+                    </span>
+                  </div>
+                ) : rating ? (
+                  <div className="flex items-center space-x-2 truncate text-emerald-400 font-medium">
+                    <div className="w-3.5 h-3.5 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin flex-shrink-0"></div>
+                    <span className="truncate">
+                      Culling Focus: <strong className="font-mono text-white">{ratingProgress.current}</strong>/{ratingProgress.total}
+                    </span>
+                    <button
+                      onClick={() => { abortRatingRef.current = true; }}
+                      className="px-2 py-0.5 bg-red-600/20 text-red-400 hover:bg-red-600/30 text-[10px] rounded font-semibold ml-2 flex-shrink-0 touch-manipulation"
+                    >
+                      Abort
+                    </button>
+                  </div>
+                ) : (
+                  <span className="text-slate-400 truncate text-center w-full sm:w-auto">
+                    Page <strong>{currentPage}</strong> of {totalPages} ({processedPhotos.length} total)
                   </span>
+                )}
+              </div>
+
+              {totalPages > 1 && (
+                <div className="flex items-center justify-between sm:justify-end space-x-2 flex-shrink-0 w-full sm:w-auto mt-1 sm:mt-0">
                   <button
-                    onClick={() => { abortUploadRef.current = true; }}
-                    className="px-2 py-0.5 bg-red-600/20 text-red-400 hover:bg-red-600/30 text-[10px] rounded font-semibold ml-2 flex-shrink-0 touch-manipulation"
+                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                    disabled={currentPage === 1}
+                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed text-slate-300 rounded-lg font-medium transition touch-manipulation w-full sm:w-auto"
                   >
-                    Abort
+                    Previous
+                  </button>
+                  <button
+                    onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                    disabled={currentPage === totalPages}
+                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed text-slate-300 rounded-lg font-medium transition touch-manipulation w-full sm:w-auto"
+                  >
+                    Next
                   </button>
                 </div>
-              ) : loadingThumbnails && !isPreviewOpen ? (
-                <div className="flex items-center space-x-2 truncate text-sky-400 font-medium">
-                  <div className="w-3.5 h-3.5 border-2 border-sky-400 border-t-transparent rounded-full animate-spin flex-shrink-0"></div>
-                  <span className="truncate">
-                    Buffer Thumbnails: <strong className="font-mono text-white">{thumbnailProgress.current}</strong>/{thumbnailProgress.total}
-                  </span>
-                </div>
-              ) : rating ? (
-                <div className="flex items-center space-x-2 truncate text-emerald-400 font-medium">
-                  <div className="w-3.5 h-3.5 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin flex-shrink-0"></div>
-                  <span className="truncate">
-                    Culling Focus: <strong className="font-mono text-white">{ratingProgress.current}</strong>/{ratingProgress.total}
-                  </span>
-                  <button
-                    onClick={() => { abortRatingRef.current = true; }}
-                    className="px-2 py-0.5 bg-red-600/20 text-red-400 hover:bg-red-600/30 text-[10px] rounded font-semibold ml-2 flex-shrink-0 touch-manipulation"
-                  >
-                    Abort
-                  </button>
-                </div>
-              ) : (
-                <span className="text-slate-400 truncate text-center w-full sm:w-auto">
-                  Page <strong>{currentPage}</strong> of {totalPages} ({processedPhotos.length} total)
-                </span>
               )}
             </div>
-
-            <div className="flex items-center justify-between sm:justify-end space-x-2 flex-shrink-0 w-full sm:w-auto mt-1 sm:mt-0">
-              <button
-                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                disabled={currentPage === 1}
-                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed text-slate-300 rounded-lg font-medium transition touch-manipulation w-full sm:w-auto"
-              >
-                Previous
-              </button>
-              <button
-                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                disabled={currentPage === totalPages}
-                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed text-slate-300 rounded-lg font-medium transition touch-manipulation w-full sm:w-auto"
-              >
-                Next
-              </button>
-            </div>
-          </div>
+          )}
 
           {showDeleteConfirmModal && (
             <div className="fixed inset-0 z-[60] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4" onClick={(e) => e.stopPropagation()}>
@@ -3573,38 +3592,108 @@ JSON Schema:
         return () => { delete window.birdvault_open_auth_modal; };
       }, []);
 
+      // Reload & Re-hydration logic: Reload image blobs from OPFS if present, purge unlocatable images
       useEffect(() => {
-        const fpDb = getStoredFingerprintDb();
-        const fingerprintKeys = Object.keys(fpDb);
+        async function reloadWorkspaceAndVault() {
+          // 1. Vault Re-hydration & Purge unlocatable
+          const savedVault = localStorage.getItem('birdvault_entries_v5');
+          if (savedVault) {
+            try {
+              const parsed = JSON.parse(savedVault);
+              const validEntries = [];
 
-        if (fingerprintKeys.length > 0) {
-          const restoredWorkspace = fingerprintKeys.map(fpId => {
+              for (const entry of parsed) {
+                const validSightings = [];
+                for (const s of (entry.sightings || [])) {
+                  let loadedBlob = null;
+                  const opfsName = s.opfsFileName || (s.photo ? `${s.photo.name}` : null);
+                  if (opfsName) {
+                    loadedBlob = await getOpfsSightingFileBlob(entry.category, entry.speciesName, opfsName);
+                  }
+                  if (!loadedBlob && s.photo?.name) {
+                    loadedBlob = await getOpfsSightingFileBlob(entry.category, entry.speciesName, s.photo.name);
+                  }
+
+                  if (loadedBlob) {
+                    const freshBlobUrl = URL.createObjectURL(loadedBlob);
+                    validSightings.push({
+                      ...s,
+                      photo: {
+                        ...s.photo,
+                        thumbnailUrl: freshBlobUrl,
+                        blobUrl: freshBlobUrl,
+                        url: freshBlobUrl
+                      }
+                    });
+                  } else if (s.photo?.thumbnailUrl && !s.photo.thumbnailUrl.startsWith('blob:')) {
+                    validSightings.push(s);
+                  } else {
+                    console.log(`Purged vault sighting ${s.id} - image blob unlocatable.`);
+                  }
+                }
+
+                if (validSightings.length > 0) {
+                  validEntries.push({
+                    ...entry,
+                    sightings: validSightings
+                  });
+                }
+              }
+
+              setVaultEntries(validEntries);
+              localStorage.setItem('birdvault_entries_v5', JSON.stringify(validEntries));
+            } catch (e) {
+              console.warn('Vault reload error:', e);
+            }
+          }
+
+          // 2. Workspace Re-hydration & Purge unlocatable
+          const fpDb = getStoredFingerprintDb();
+          const fingerprintKeys = Object.keys(fpDb);
+          const validWorkspacePhotos = [];
+
+          for (const fpId of fingerprintKeys) {
             const savedMeta = fpDb[fpId];
-            return {
-              id: fpId,
-              fingerprintId: fpId,
-              file: null,
-              fileHandle: null,
-              name: savedMeta.name || 'Photo',
-              size: savedMeta.size || 0,
-              lastModified: savedMeta.lastModified || 0,
-              url: null,
-              blobUrl: null,
-              thumbnailUrl: null,
-              naturalWidth: 1000,
-              naturalHeight: 750,
-              sharpness: savedMeta.sharpness !== undefined ? savedMeta.sharpness : null,
-              stars: savedMeta.stars !== undefined ? savedMeta.stars : null,
-              userStars: savedMeta.userStars !== undefined ? savedMeta.userStars : null,
-              focusSpot: savedMeta.focusSpot || null,
-              cameraExif: savedMeta.cameraExif || null,
-              identification: savedMeta.identification || null,
-              cropBox: savedMeta.cropBox || null,
-              locationText: savedMeta.locationText || null
-            };
-          });
-          setPhotos(restoredWorkspace);
+            let workspaceBlob = null;
+            if (savedMeta.identification?.category && savedMeta.identification?.speciesName) {
+              const opfsName = savedMeta.opfsFileName || savedMeta.name;
+              workspaceBlob = await getOpfsSightingFileBlob(savedMeta.identification.category, savedMeta.identification.speciesName, opfsName);
+            }
+
+            if (workspaceBlob) {
+              const freshBlobUrl = URL.createObjectURL(workspaceBlob);
+              validWorkspacePhotos.push({
+                id: fpId,
+                fingerprintId: fpId,
+                file: null,
+                fileHandle: null,
+                name: savedMeta.name || 'Photo',
+                size: savedMeta.size || 0,
+                lastModified: savedMeta.lastModified || 0,
+                url: freshBlobUrl,
+                blobUrl: freshBlobUrl,
+                thumbnailUrl: freshBlobUrl,
+                naturalWidth: 1000,
+                naturalHeight: 750,
+                sharpness: savedMeta.sharpness !== undefined ? savedMeta.sharpness : null,
+                stars: savedMeta.stars !== undefined ? savedMeta.stars : null,
+                userStars: savedMeta.userStars !== undefined ? savedMeta.userStars : null,
+                focusSpot: savedMeta.focusSpot || null,
+                cameraExif: savedMeta.cameraExif || null,
+                identification: savedMeta.identification || null,
+                cropBox: savedMeta.cropBox || null,
+                locationText: savedMeta.locationText || null,
+                opfsFileName: savedMeta.opfsFileName || null
+              });
+            } else {
+              deleteFingerprintMetadata(fpId);
+            }
+          }
+
+          setPhotos(validWorkspacePhotos);
         }
+
+        reloadWorkspaceAndVault();
       }, []);
 
       const handleSaveApiKey = (newKey) => {
@@ -3651,7 +3740,7 @@ JSON Schema:
         if (!selectedPhoto) return;
         const indexInProcessed = processedPhotos.findIndex(p => p.id === selectedPhoto.id);
         if (indexInProcessed !== -1) {
-          const targetPage = Math.floor(indexInProcessed / 20) + 1;
+          const targetPage = Math.floor(indexInProcessed / 12) + 1;
           if (targetPage !== currentPage) {
             setCurrentPage(targetPage);
           }
@@ -3697,28 +3786,6 @@ JSON Schema:
         return () => window.removeEventListener('birdvault_token_update', handleTokenUpdate);
       }, []);
 
-      useEffect(() => {
-        const savedVault = localStorage.getItem('birdvault_entries_v5');
-        if (savedVault) {
-          try {
-            const parsed = JSON.parse(savedVault);
-            const sanitized = (parsed || []).map(entry => ({
-              ...entry,
-              sightings: (entry.sightings || []).map(s => ({
-                ...s,
-                photo: s.photo ? {
-                  ...s.photo,
-                  thumbnailUrl: (s.photo.thumbnailUrl && !s.photo.thumbnailUrl.startsWith('blob:')) ? s.photo.thumbnailUrl : null,
-                  blobUrl: null,
-                  url: (s.photo.url && !s.photo.url.startsWith('blob:')) ? s.photo.url : null
-                } : s.photo
-              }))
-            }));
-            setVaultEntries(sanitized);
-          } catch (e) {}
-        }
-      }, []);
-
       const saveVaultToStorage = (entries) => {
         setVaultEntries(entries);
         localStorage.setItem('birdvault_entries_v5', JSON.stringify(entries));
@@ -3730,6 +3797,9 @@ JSON Schema:
         const { speciesName, scientificName, category } = photoWithAi.identification;
 
         const fpId = photoWithAi.fingerprintId || photoWithAi.id;
+        const sightingId = 'sighting_' + Math.random().toString(36).substring(2, 9);
+        const fileName = `${new Date().toISOString().split('T')[0]}_${sightingId}.jpg`;
+
         const sanitizeUrl = (u) => (u && typeof u === 'string' && !u.startsWith('blob:')) ? u : null;
 
         const cleanPhotoMeta = {
@@ -3747,15 +3817,16 @@ JSON Schema:
           cameraExif: photoWithAi.cameraExif,
           identification: photoWithAi.identification,
           cropBox: photoWithAi.cropBox,
-          locationText: photoWithAi.locationText
+          locationText: photoWithAi.locationText,
+          opfsFileName: fileName
         };
 
         saveFingerprintMetadata(cleanPhotoMeta);
 
-        const sightingId = 'sighting_' + Math.random().toString(36).substring(2, 9);
         const newSighting = {
           id: sightingId,
           date: Date.now(),
+          opfsFileName: fileName,
           photoFingerprintId: fpId,
           photo: cleanPhotoMeta
         };
@@ -3778,9 +3849,11 @@ JSON Schema:
 
         // Write physical files to OPFS directory
         if (photoWithAi.file) {
-          const fileName = `${new Date().toISOString().split('T')[0]}_${sightingId}.jpg`;
           await writeOpfsSightingFile(category, speciesName, fileName, photoWithAi.file);
+        } else if (photoWithAi.blobUrl || photoWithAi.thumbnailUrl || photoWithAi.url) {
+          await writeOpfsSightingFile(category, speciesName, fileName, photoWithAi.blobUrl || photoWithAi.thumbnailUrl || photoWithAi.url);
         }
+
         await writeOpfsSightingFile(category, speciesName, 'species_info.json', {
           speciesName,
           scientificName,
