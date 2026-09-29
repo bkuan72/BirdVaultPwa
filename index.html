@@ -2834,9 +2834,57 @@ JSON Schema:
       const [rating, setRating] = useState(false);
       const [ratingProgress, setRatingProgress] = useState({ current: 0, total: 0 });
       const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
+      
+      // OPTION 3: TOUCH SWIPE GESTURE STATE & AUTO-FADING TOAST
+      const [swipeToast, setSwipeToast] = useState(null);
+      const touchStartRef = useRef(null);
+      const toastTimerRef = useRef(null);
+
       const abortUploadRef = useRef(false);
       const abortRatingRef = useRef(false);
       const fileInputRef = useRef(null);
+
+      const triggerPageToast = (msg) => {
+        setSwipeToast(msg);
+        if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = setTimeout(() => setSwipeToast(null), 1500);
+      };
+
+      const handleGridTouchStart = (e) => {
+        if (e.touches && e.touches.length === 1) {
+          touchStartRef.current = {
+            x: e.touches[0].clientX,
+            y: e.touches[0].clientY,
+            time: Date.now()
+          };
+        }
+      };
+
+      const handleGridTouchEnd = (e) => {
+        if (!touchStartRef.current) return;
+        const touch = e.changedTouches ? e.changedTouches[0] : null;
+        if (touch) {
+          const dx = touch.clientX - touchStartRef.current.x;
+          const dy = touch.clientY - touchStartRef.current.y;
+          const dt = Date.now() - touchStartRef.current.time;
+
+          const totalP = Math.ceil(processedPhotos.length / pageSize) || 1;
+
+          // Horizontal swipe detection threshold (50px swipe, <80px vertical drift, <500ms time)
+          if (Math.abs(dx) > 50 && Math.abs(dy) < 80 && dt < 500) {
+            if (dx < 0 && currentPage < totalP) {
+              const nextP = currentPage + 1;
+              setCurrentPage(nextP);
+              triggerPageToast(`Swiped to Page ${nextP} of ${totalP}`);
+            } else if (dx > 0 && currentPage > 1) {
+              const prevP = currentPage - 1;
+              setCurrentPage(prevP);
+              triggerPageToast(`Swiped to Page ${prevP} of ${totalP}`);
+            }
+          }
+        }
+        touchStartRef.current = null;
+      };
 
       const toggleSelectPhoto = (photoId, e) => {
         if (e) e.stopPropagation();
@@ -3199,7 +3247,8 @@ JSON Schema:
       const isSelectionActive = selectedIds.size > 0;
       const filterLabel = filterSharpness === '5star' ? '5 Stars' : filterSharpness === '4star' ? '4+ Stars' : filterSharpness === 'soft' ? '1-3 Stars' : filterSharpness === 'unrated' ? 'Unrated' : 'All Photos';
 
-      const showFooterBar = totalPages > 1 || uploading || (loadingThumbnails && !isPreviewOpen) || rating;
+      // Footer bar renders only if background tasks are active
+      const showFooterBar = uploading || (loadingThumbnails && !isPreviewOpen) || rating;
 
       return (
         <div className="flex-1 flex flex-col overflow-hidden min-h-0 p-3 sm:p-4 md:p-6 gap-3 sm:gap-4 pb-[calc(5rem+env(safe-area-inset-bottom))] md:pb-4 relative">
@@ -3335,7 +3384,19 @@ JSON Schema:
             </div>
           )}
 
-          <div className="flex-1 overflow-y-auto min-h-0 pr-1 pb-4">
+          {/* OPTION 3: SWIPE TOAST FEEDBACK NOTIFICATION */}
+          {swipeToast && (
+            <div className="absolute top-20 left-1/2 -translate-x-1/2 z-40 bg-emerald-900/90 border border-emerald-400 text-white font-bold text-xs px-4 py-2 rounded-full shadow-2xl backdrop-blur-md animate-fadeIn transition-all pointer-events-none">
+              {swipeToast}
+            </div>
+          )}
+
+          {/* THUMBNAIL GRID WITH OPTION 3 TOUCH SWIPE LISTENERS */}
+          <div 
+            onTouchStart={handleGridTouchStart}
+            onTouchEnd={handleGridTouchEnd}
+            className="flex-1 overflow-y-auto min-h-0 pr-1 pb-4"
+          >
             {paginatedPhotos.length > 0 ? (
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-4">
                 {paginatedPhotos.map(photo => {
@@ -3413,6 +3474,34 @@ JSON Schema:
                     </div>
                   );
                 })}
+
+                {/* OPTION 2: INLINE GRID NAVIGATION TILE (SCROLLS WITH GRID, DOES NOT OBSCURA THUMBNAILS) */}
+                {totalPages > 1 && (
+                  <div className="aspect-square bg-slate-900/90 border border-emerald-500/30 rounded-2xl p-3 flex flex-col items-center justify-between shadow-xl text-center">
+                    <div className="space-y-1 my-auto">
+                      <span className="text-[9px] font-extrabold text-emerald-400 uppercase tracking-widest block">Batch Navigation</span>
+                      <div className="text-xs font-extrabold text-white">Page {currentPage} of {totalPages}</div>
+                      <p className="text-[10px] text-slate-400 leading-tight">Swipe grid left/right or use buttons to switch</p>
+                    </div>
+
+                    <div className="flex items-center space-x-1.5 w-full pt-2 border-t border-slate-800">
+                      <button
+                        onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                        disabled={currentPage === 1}
+                        className="flex-1 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed text-slate-200 rounded-xl text-xs font-semibold transition touch-manipulation"
+                      >
+                        ← Prev
+                      </button>
+                      <button
+                        onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                        disabled={currentPage === totalPages}
+                        className="flex-1 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-30 disabled:cursor-not-allowed text-white rounded-xl text-xs font-semibold transition shadow touch-manipulation"
+                      >
+                        Next →
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="p-8 sm:p-12 text-center bg-slate-900/40 border border-dashed border-slate-800 rounded-3xl space-y-3">
@@ -3423,6 +3512,7 @@ JSON Schema:
             )}
           </div>
 
+          {/* BACKGROUND PROCESS STATUS BAR (renders only when background tasks are running) */}
           {showFooterBar && (
             <div className="flex-shrink-0 flex flex-col sm:flex-row sm:items-center justify-between bg-slate-900 border border-slate-800 p-2.5 sm:p-3 rounded-2xl text-[11px] sm:text-xs gap-2 shadow-xl animate-fadeIn">
               <div className="flex items-center justify-center sm:justify-start space-x-3 min-w-0 flex-1 px-1">
@@ -3459,31 +3549,8 @@ JSON Schema:
                       Abort
                     </button>
                   </div>
-                ) : (
-                  <span className="text-slate-400 truncate text-center w-full sm:w-auto">
-                    Page <strong>{currentPage}</strong> of {totalPages} ({processedPhotos.length} total)
-                  </span>
-                )}
+                ) : null}
               </div>
-
-              {totalPages > 1 && (
-                <div className="flex items-center justify-between sm:justify-end space-x-2 flex-shrink-0 w-full sm:w-auto mt-1 sm:mt-0">
-                  <button
-                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                    disabled={currentPage === 1}
-                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed text-slate-300 rounded-lg font-medium transition touch-manipulation w-full sm:w-auto"
-                  >
-                    Previous
-                  </button>
-                  <button
-                    onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                    disabled={currentPage === totalPages}
-                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed text-slate-300 rounded-lg font-medium transition touch-manipulation w-full sm:w-auto"
-                  >
-                    Next
-                  </button>
-                </div>
-              )}
             </div>
           )}
 
