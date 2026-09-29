@@ -20,10 +20,10 @@
       };
 
       // Inline vector SVG icon to prevent broken external assets
-      const svgIcon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none"><rect width="512" height="512" rx="128" fill="#040711"/><path d="M256 64C180 64 120 120 120 200C120 300 256 448 256 448C256 448 392 300 392 200C392 120 332 64 256 64ZM256 250C228.4 250 206 227.6 206 200C206 172.4 228.4 150 256 150C283.6 150 306 172.4 306 200C306 227.6 283.6 250 256 250Z" fill="#10b981"/><path d="M256 120C211.8 120 176 155.8 176 200C176 260 256 360 256 360C256 360 336 260 336 200C336 155.8 300.2 120 256 120ZM256 230C239.4 230 226 216.6 226 200C226 183.4 239.4 170 256 170C272.6 170 286 183.4 286 200C286 216.6 272.6 230 256 230Z" fill="#34d399"/></svg>`;
+      const svgIcon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none"><rect width="512" height="512" rx="128" fill="#040711"/><path d="M256 64C180 64 120 120 120 200C120 300 256 448 256 448C256 448 392 300 392 200C392 120 332 64 256 64ZM256 250C228.4 250 206 227.6 206 200C206 172.4 228.4 150 256 150C283.6 150 306 127.6 306 200C306 227.6 283.6 250 256 250Z" fill="#10b981"/><path d="M256 120C211.8 120 176 155.8 176 200C176 260 256 360 256 360C256 360 336 260 336 200C336 155.8 300.2 120 256 120ZM256 230C239.4 230 226 216.6 226 200C226 183.4 239.4 170 256 170C272.6 170 286 183.4 286 200C286 216.6 272.6 230 256 230Z" fill="#34d399"/></svg>`;
       const iconUrl = 'data:image/svg+xml;base64,' + btoa(svgIcon);
 
-      // Resolve valid absolute start_url for blob manifest to eliminate browser manifest errors
+      // Resolve valid absolute start_url for blob manifest
       let validStartUrl = window.location.origin + window.location.pathname;
       try {
         validStartUrl = new URL(window.location.pathname, window.location.origin).href;
@@ -79,6 +79,9 @@
       }
     }
   </script>
+
+  <!-- JSZip CDN for OPFS Vault ZIP packaging -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 
   <!-- Google Fonts (Inter) -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -170,12 +173,112 @@
       return Math.max(1, Math.min(5, Math.ceil(score / 2)));
     }
 
-    // Deterministic File Fingerprint Generator (Zero Binary Storage)
     function generateFingerprintId(file) {
       if (!file) return null;
       const cleanName = (file.name || 'unnamed').replace(/[^a-zA-Z0-9._-]/g, '_');
       return `fp_${cleanName}_${file.size || 0}_${file.lastModified || 0}`;
     }
+
+    // --- UNIVERSAL STORAGE & OPFS DIRECTORY ENGINE ---
+
+    const OPFS_VAULT_ROOT = 'BirdVault_Lifer_Catalog';
+
+    async function isOpfsSupported() {
+      return typeof navigator !== 'undefined' && 
+             navigator.storage && 
+             typeof navigator.storage.getDirectory === 'function';
+    }
+
+    async function getOpfsRootHandle() {
+      if (!(await isOpfsSupported())) return null;
+      try {
+        const root = await navigator.storage.getDirectory();
+        return await root.getDirectoryHandle(OPFS_VAULT_ROOT, { create: true });
+      } catch (err) {
+        console.warn('OPFS Root Access Warning:', err);
+        return null;
+      }
+    }
+
+    async function sanitizeDirectoryName(name) {
+      return (name || 'Uncategorized').replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 60);
+    }
+
+    async function writeOpfsSightingFile(category, speciesName, fileName, blobOrFile) {
+      try {
+        const root = await getOpfsRootHandle();
+        if (!root) return false;
+
+        const catDirName = await sanitizeDirectoryName(category || 'Other');
+        const speciesDirName = await sanitizeDirectoryName(speciesName);
+
+        const catHandle = await root.getDirectoryHandle(catDirName, { create: true });
+        const speciesHandle = await catHandle.getDirectoryHandle(speciesDirName, { create: true });
+
+        const fileHandle = await speciesHandle.getFileHandle(fileName, { create: true });
+        const writable = await fileHandle.createWritable();
+        
+        if (blobOrFile instanceof File || blobOrFile instanceof Blob) {
+          await writable.write(blobOrFile);
+        } else if (typeof blobOrFile === 'string' && blobOrFile.startsWith('data:')) {
+          const res = await fetch(blobOrFile);
+          const blob = await res.blob();
+          await writable.write(blob);
+        } else {
+          await writable.write(new Blob([JSON.stringify(blobOrFile, null, 2)], { type: 'application/json' }));
+        }
+        await writable.close();
+        return true;
+      } catch (err) {
+        console.warn('OPFS File Write Error:', err);
+        return false;
+      }
+    }
+
+    async function updateOpfsMasterManifest(manifestData) {
+      try {
+        const root = await getOpfsRootHandle();
+        if (!root) return false;
+        const fileHandle = await root.getFileHandle('vault_manifest.json', { create: true });
+        const writable = await fileHandle.createWritable();
+        await writable.write(JSON.stringify(manifestData, null, 2));
+        await writable.close();
+        return true;
+      } catch (err) {
+        console.warn('OPFS Manifest Update Error:', err);
+        return false;
+      }
+    }
+
+    async function exportOpfsVaultToZip() {
+      if (typeof JSZip === 'undefined') {
+        throw new Error('JSZip library is not loaded');
+      }
+
+      const root = await getOpfsRootHandle();
+      if (!root) throw new Error('OPFS physical storage is not accessible on this device');
+
+      const zip = new JSZip();
+      const vaultFolder = zip.folder(OPFS_VAULT_ROOT);
+
+      async function traverseDirectory(dirHandle, currentZipFolder) {
+        for await (const [name, handle] of dirHandle.entries()) {
+          if (handle.kind === 'file') {
+            const file = await handle.getFile();
+            currentZipFolder.file(name, file);
+          } else if (handle.kind === 'directory') {
+            const subFolder = currentZipFolder.folder(name);
+            await traverseDirectory(handle, subFolder);
+          }
+        }
+      }
+
+      await traverseDirectory(root, vaultFolder);
+      const zipBlob = await zip.generateAsync({ type: 'blob' });
+      return new File([zipBlob], `${OPFS_VAULT_ROOT}_Export.zip`, { type: 'application/zip' });
+    }
+
+    // --- STATE PERSISTENCE ACCESSOR FUNCTIONS ---
 
     function getStoredFingerprintDb() {
       try {
@@ -210,6 +313,38 @@
         localStorage.setItem('birdvault_fingerprints_v1', JSON.stringify(db));
       } catch (e) {
         console.warn('Fingerprint DB save warning:', e);
+      }
+    }
+
+    function deleteFingerprintMetadata(fpId) {
+      if (!fpId) return;
+      try {
+        const db = getStoredFingerprintDb();
+        if (db[fpId]) {
+          delete db[fpId];
+          localStorage.setItem('birdvault_fingerprints_v1', JSON.stringify(db));
+        }
+      } catch (e) {
+        console.warn('Fingerprint DB delete warning:', e);
+      }
+    }
+
+    function syncFingerprintDbPrune(activePhotos) {
+      try {
+        const activeIds = new Set((activePhotos || []).map(p => p.fingerprintId || p.id));
+        const db = getStoredFingerprintDb();
+        let changed = false;
+        Object.keys(db).forEach(fpId => {
+          if (!activeIds.has(fpId)) {
+            delete db[fpId];
+            changed = true;
+          }
+        });
+        if (changed) {
+          localStorage.setItem('birdvault_fingerprints_v1', JSON.stringify(db));
+        }
+      } catch (e) {
+        console.warn('Fingerprint DB sync prune error:', e);
       }
     }
 
@@ -259,7 +394,7 @@
         if (!file || !(file instanceof File)) return resolve(null);
         
         const reader = new FileReader();
-        const slice = file.slice(0, 262144); // Read first 256KB for EXIF headers
+        const slice = file.slice(0, 262144);
         
         reader.onload = (e) => {
           try {
@@ -277,7 +412,7 @@
               if (marker === 0xFFE1) {
                 const length = view.getUint16(offset, false);
                 const exifHeader = view.getUint32(offset + 2, false);
-                if (exifHeader === 0x45786966) { // "Exif"
+                if (exifHeader === 0x45786966) {
                   app1Offset = offset + 2;
                   break;
                 }
@@ -1487,12 +1622,11 @@ JSON Schema:
       }
     }
 
-    function InteractivePhotoViewer({ photo, onClose, onUpdatePhoto, onSaveToVault, onDeletePhoto, userApiKey, initialLocation = '', onNextPhoto, onPrevPhoto, hasNext = false, hasPrev = false, viewMode = 'lightbox', onViewModeChange }) {
-      const setViewMode = onViewModeChange || (() => {});
-      
+    function InteractivePhotoViewer({ photo, onClose, onUpdatePhoto, onSaveToVault, onDeletePhoto, userApiKey, initialLocation = '', onUpdateLocation, onNextPhoto, onPrevPhoto, hasNext = false, hasPrev = false }) {
       const [loupeImgPos, setLoupeImgPos] = useState({ xPct: 50, yPct: 50 });
       const [loupeScreenPos, setLoupeScreenPos] = useState({ x: 0, y: 0 });
       const [isLoupeActive, setIsLoupeActive] = useState(false);
+      const [isCropToolActive, setIsCropToolActive] = useState(false);
       
       const [zoomLevel, setZoomLevel] = useState(3.0);
       const [showMobileSidebar, setShowMobileSidebar] = useState(false);
@@ -1552,6 +1686,7 @@ JSON Schema:
       const [isDraggingPan, setIsDraggingPan] = useState(false);
       const dragStartRef = useRef({ x: 0, y: 0 });
       const initialTouchDistanceRef = useRef(null);
+      const lastTapRef = useRef(0);
 
       const [cropBox, setCropBox] = useState(photo.cropBox || null);
       const [showCroppedPreview, setShowCroppedPreview] = useState(!!(photo.cropBox && photo.cropBox.width > 0));
@@ -1569,7 +1704,7 @@ JSON Schema:
       const [cameraExif, setCameraExif] = useState(photo.cameraExif || null);
 
       const activeStars = photo.userStars || photo.stars || scoreToStars(photo.sharpness);
-      const isZoomedOrCropped = showCroppedPreview || (viewMode === 'lightbox' && panZoom.scale > 1) || isLoupeActive;
+      const isZoomedOrCropped = showCroppedPreview || panZoom.scale > 1 || isLoupeActive;
 
       useEffect(() => {
         setCropBox(photo.cropBox || null);
@@ -1609,7 +1744,9 @@ JSON Schema:
 
       const handleLocationChange = (newLoc) => {
         setLocationInput(newLoc);
-        if (newLoc) {
+        if (onUpdateLocation) {
+          onUpdateLocation(newLoc);
+        } else if (newLoc) {
           localStorage.setItem('birdvault_user_location', newLoc);
         }
       };
@@ -1652,6 +1789,55 @@ JSON Schema:
         const dx = e.touches[0].clientX - e.touches[1].clientX;
         const dy = e.touches[0].clientY - e.touches[1].clientY;
         return Math.sqrt(dx * dx + dy * dy);
+      };
+
+      const handleTouchStart = (e) => {
+        if (e.touches.length === 2 && !isCropToolActive) {
+          const dist = getTouchDistance(e);
+          initialTouchDistanceRef.current = dist;
+          setIsDraggingPan(false);
+        } else if (e.touches.length === 1 && !isCropToolActive) {
+          const now = Date.now();
+          if (now - lastTapRef.current < 300) {
+            setPanZoom(p => p.scale > 1 ? { scale: 1, x: 0, y: 0 } : { scale: 2.5, x: 0, y: 0 });
+            lastTapRef.current = 0;
+            return;
+          }
+          lastTapRef.current = now;
+
+          if (panZoom.scale > 1) {
+            setIsDraggingPan(true);
+            const touch = e.touches[0];
+            dragStartRef.current = { x: touch.clientX - panZoom.x, y: touch.clientY - panZoom.y };
+          }
+        }
+      };
+
+      const handleTouchMove = (e) => {
+        if (e.touches.length === 2 && !isCropToolActive) {
+          if (e.cancelable) e.preventDefault();
+          const newDist = getTouchDistance(e);
+          if (newDist && initialTouchDistanceRef.current) {
+            const scaleFactor = newDist / initialTouchDistanceRef.current;
+            setPanZoom((p) => {
+              const targetScale = Math.min(8, Math.max(1, p.scale * (scaleFactor > 1 ? 1.04 : 0.96)));
+              return {
+                ...p,
+                scale: targetScale,
+                x: targetScale === 1 ? 0 : p.x,
+                y: targetScale === 1 ? 0 : p.y
+              };
+            });
+            initialTouchDistanceRef.current = newDist;
+          }
+        } else if (e.touches.length === 1 && isDraggingPan && panZoom.scale > 1 && !isCropToolActive) {
+          const touch = e.touches[0];
+          setPanZoom(p => ({
+            ...p,
+            x: touch.clientX - dragStartRef.current.x,
+            y: touch.clientY - dragStartRef.current.y
+          }));
+        }
       };
 
       const renderLoupeCanvasTile = useCallback(() => {
@@ -1723,19 +1909,6 @@ JSON Schema:
       }, [isLoupeActive, loupeImgPos, zoomLevel, loupeImgLoaded, renderLoupeCanvasTile]);
 
       const handlePointerMove = (e) => {
-        if (e.touches && e.touches.length === 2 && viewMode === 'lightbox') {
-          const newDist = getTouchDistance(e);
-          if (newDist && initialTouchDistanceRef.current) {
-            const factor = newDist / initialTouchDistanceRef.current;
-            setPanZoom((p) => {
-              const newScale = Math.min(8, Math.max(1, p.scale * factor));
-              return { ...p, scale: newScale };
-            });
-            initialTouchDistanceRef.current = newDist;
-          }
-          return;
-        }
-
         const containerPos = getContainerPointerPos(e);
         const imgPos = getImagePointerPos(e);
 
@@ -1744,7 +1917,7 @@ JSON Schema:
           setLoupeScreenPos({ x: containerPos.x, y: containerPos.y });
         }
 
-        if (isDrawingCrop && cropStartRef.current) {
+        if (isCropToolActive && isDrawingCrop && cropStartRef.current) {
           const startX = cropStartRef.current.x;
           const startY = cropStartRef.current.y;
           const left = Math.min(startX, imgPos.pctX);
@@ -1755,7 +1928,7 @@ JSON Schema:
           const updatedCrop = { x: left, y: top, width, height };
           currentCropBoxRef.current = updatedCrop;
           setCropBox(updatedCrop);
-        } else if (isDraggingPan && viewMode === 'lightbox') {
+        } else if (isDraggingPan && panZoom.scale > 1) {
           setPanZoom(p => ({
             ...p,
             x: containerPos.clientX - dragStartRef.current.x,
@@ -1765,17 +1938,8 @@ JSON Schema:
       };
 
       const handlePointerDown = (e) => {
-        if (e.preventDefault && typeof e.preventDefault === 'function') {
-          e.preventDefault();
-        }
-
         if (e.target && e.target.setPointerCapture && e.pointerId !== undefined) {
           try { e.target.setPointerCapture(e.pointerId); } catch (err) {}
-        }
-
-        if (e.touches && e.touches.length === 2 && viewMode === 'lightbox') {
-          initialTouchDistanceRef.current = getTouchDistance(e);
-          return;
         }
 
         const containerPos = getContainerPointerPos(e);
@@ -1786,23 +1950,20 @@ JSON Schema:
           setLoupeScreenPos({ x: containerPos.x, y: containerPos.y });
         }
         
-        if (viewMode === 'crop') {
+        if (isCropToolActive) {
           setShowCroppedPreview(false);
           cropStartRef.current = { x: imgPos.pctX, y: imgPos.pctY };
           const initialBox = { x: imgPos.pctX, y: imgPos.pctY, width: 0, height: 0 };
           currentCropBoxRef.current = initialBox;
           setCropBox(initialBox);
           setIsDrawingCrop(true);
-        } else if (viewMode === 'lightbox') {
+        } else if (panZoom.scale > 1) {
           setIsDraggingPan(true);
           dragStartRef.current = { x: containerPos.clientX - panZoom.x, y: containerPos.clientY - panZoom.y };
         }
       };
 
       const handlePointerUp = async (e) => {
-        if (e && e.touches && e.touches.length < 2) {
-          initialTouchDistanceRef.current = null;
-        }
         if (isDrawingCrop) {
           const finalCrop = currentCropBoxRef.current;
           
@@ -1832,13 +1993,18 @@ JSON Schema:
       };
 
       const handleWheelZoom = (e) => {
-        if (viewMode !== 'lightbox') return;
+        if (isCropToolActive) return;
         e.preventDefault();
         const zoomDelta = e.deltaY < 0 ? 0.3 : -0.3;
-        setPanZoom(p => ({
-          ...p,
-          scale: Math.min(8, Math.max(1, p.scale + zoomDelta))
-        }));
+        setPanZoom(p => {
+          const targetScale = Math.min(8, Math.max(1, p.scale + zoomDelta));
+          return {
+            ...p,
+            scale: targetScale,
+            x: targetScale === 1 ? 0 : p.x,
+            y: targetScale === 1 ? 0 : p.y
+          };
+        });
       };
 
       const handleRunAiIdentification = async () => {
@@ -1920,21 +2086,17 @@ JSON Schema:
                 )}
               </div>
 
+              {/* UNIFIED LIGHTBOX TOOLBAR OVERVIEW */}
               <div className="flex items-center space-x-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
                 <button
-                  onClick={() => setViewMode('lightbox')}
-                  className={`px-3 py-1.5 rounded-lg transition font-medium flex items-center space-x-1.5 ${viewMode === 'lightbox' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}
-                >
-                  <Icon name="zoomIn" className="w-3.5 h-3.5" />
-                  <span>Lightbox</span>
-                </button>
-                <button
-                  onClick={() => setViewMode('crop')}
-                  className={`px-3 py-1.5 rounded-lg transition font-medium flex items-center space-x-1.5 ${viewMode === 'crop' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                  onClick={() => setIsCropToolActive(!isCropToolActive)}
+                  className={`px-3 py-1.5 rounded-lg transition font-medium flex items-center space-x-1.5 ${isCropToolActive ? 'bg-emerald-600 text-white shadow-lg border border-emerald-400/50' : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'}`}
+                  title="Toggle Crop Box ROI Selector"
                 >
                   <Icon name="crop" className="w-3.5 h-3.5" />
-                  <span>Crop AI</span>
+                  <span>Crop Box {isCropToolActive ? '(ON)' : '(OFF)'}</span>
                 </button>
+                
                 <button
                   onClick={() => setIsLoupeActive(!isLoupeActive)}
                   className={`px-3 py-1.5 rounded-lg transition font-medium flex items-center space-x-1.5 ${isLoupeActive ? 'bg-emerald-600 text-white shadow-lg border border-emerald-400/50' : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'}`}
@@ -1964,8 +2126,10 @@ JSON Schema:
               onPointerMove={handlePointerMove}
               onPointerUp={handlePointerUp}
               onPointerCancel={handlePointerUp}
+              onTouchStart={handleTouchStart}
+              onTouchMove={handleTouchMove}
               onWheel={handleWheelZoom}
-              className="flex-1 relative flex items-center justify-center p-2 sm:p-4 overflow-hidden select-none cursor-crosshair touch-canvas"
+              className={`flex-1 relative flex items-center justify-center p-2 sm:p-4 overflow-hidden select-none ${isCropToolActive ? 'cursor-crosshair' : 'cursor-default'} touch-canvas`}
             >
               <button
                 onClick={(e) => {
@@ -2034,36 +2198,10 @@ JSON Schema:
                 <Icon name="chevronRight" className="w-5 h-5 sm:w-6 sm:h-6" />
               </button>
 
-              <div 
-                onPointerDown={(e) => e.stopPropagation()}
-                onMouseDown={(e) => e.stopPropagation()}
-                onTouchStart={(e) => e.stopPropagation()}
-                className="sm:hidden absolute bottom-16 sm:bottom-6 left-1/2 -translate-x-1/2 z-40 flex items-center bg-slate-900/90 backdrop-blur-md p-1 rounded-full border border-slate-700 shadow-2xl space-x-1"
-              >
-                <button
-                  onClick={(e) => { e.stopPropagation(); setViewMode('lightbox'); }}
-                  className={`px-3 py-2 rounded-full transition font-medium flex items-center justify-center touch-manipulation ${viewMode === 'lightbox' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}
-                >
-                  <Icon name="zoomIn" className="w-4 h-4" />
-                </button>
-                <button
-                  onClick={(e) => { e.stopPropagation(); setViewMode('crop'); }}
-                  className={`px-3 py-2 rounded-full transition font-medium flex items-center justify-center touch-manipulation ${viewMode === 'crop' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}
-                >
-                  <Icon name="crop" className="w-4 h-4" />
-                </button>
-                <button
-                  onClick={(e) => { e.stopPropagation(); setIsLoupeActive(!isLoupeActive); }}
-                  className={`px-3 py-2 rounded-full transition font-medium flex items-center justify-center touch-manipulation ${isLoupeActive ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}
-                >
-                  <Icon name="search" className="w-4 h-4" />
-                </button>
-              </div>
-
               {showCroppedPreview && hasValidCropBox && !isDrawingCrop ? (
                 <div 
                   className="relative flex items-center justify-center max-h-[calc(100vh-8rem)] max-w-full"
-                  style={viewMode === 'lightbox' ? { transform: `translate(${panZoom.x}px, ${panZoom.y}px) scale(${panZoom.scale})` } : {}}
+                  style={{ transform: `translate(${panZoom.x}px, ${panZoom.y}px) scale(${panZoom.scale})` }}
                 >
                   <CroppedImage
                     innerRef={imgRef}
@@ -2078,7 +2216,7 @@ JSON Schema:
               ) : (
                 <div 
                   className="relative flex items-center justify-center w-full h-full max-w-full max-h-full"
-                  style={viewMode === 'lightbox' ? { transform: `translate(${panZoom.x}px, ${panZoom.y}px) scale(${panZoom.scale})` } : {}}
+                  style={{ transform: `translate(${panZoom.x}px, ${panZoom.y}px) scale(${panZoom.scale})` }}
                 >
                   <CroppedImage
                     innerRef={imgRef}
@@ -2117,7 +2255,7 @@ JSON Schema:
                     )}
                   </CroppedImage>
 
-                  {photo.focusSpot && viewMode !== 'crop' && !isZoomedOrCropped && (
+                  {photo.focusSpot && !isCropToolActive && !isZoomedOrCropped && (
                     <div
                       className="absolute w-12 h-12 -ml-6 -mt-6 border-2 border-sky-400/80 bg-sky-500/10 rounded-full pointer-events-none flex items-center justify-center shadow-lg animate-pulse"
                       style={{ left: `${photo.focusSpot.xPct}%`, top: `${photo.focusSpot.yPct}%` }}
@@ -2184,24 +2322,18 @@ JSON Schema:
                   </div>
                 )}
 
-                {viewMode === 'lightbox' ? (
-                  <div className="flex items-center space-x-1 sm:space-x-2">
-                    <button onClick={() => setPanZoom(p => ({ ...p, scale: Math.max(1, p.scale - 0.5) }))} className="p-2 bg-slate-800 rounded text-slate-300 touch-manipulation">
-                      <Icon name="zoomOut" className="w-4 h-4" />
-                    </button>
-                    <span className="text-xs font-semibold text-slate-300 px-1">{(panZoom.scale * 100).toFixed(0)}%</span>
-                    <button onClick={() => setPanZoom(p => ({ ...p, scale: Math.min(8, p.scale + 0.5) }))} className="p-2 bg-slate-800 rounded text-slate-300 touch-manipulation">
-                      <Icon name="zoomIn" className="w-4 h-4" />
-                    </button>
-                    <button onClick={() => setPanZoom({ scale: 1, x: 0, y: 0 })} className="text-[10px] sm:text-[11px] bg-slate-800 px-3 py-2 rounded text-slate-400 ml-1 touch-manipulation">
-                      Reset
-                    </button>
-                  </div>
-                ) : (
-                  <div className="flex items-center space-x-2">
-                    <span className="text-[11px] text-slate-400 hidden sm:inline">Draw box on image to set Crop ROI</span>
-                  </div>
-                )}
+                <div className="flex items-center space-x-1 sm:space-x-2">
+                  <button onClick={() => setPanZoom(p => ({ ...p, scale: Math.max(1, p.scale - 0.5), x: p.scale <= 1.5 ? 0 : p.x, y: p.scale <= 1.5 ? 0 : p.y }))} className="p-2 bg-slate-800 rounded text-slate-300 touch-manipulation">
+                    <Icon name="zoomOut" className="w-4 h-4" />
+                  </button>
+                  <span className="text-xs font-semibold text-slate-300 px-1">{(panZoom.scale * 100).toFixed(0)}%</span>
+                  <button onClick={() => setPanZoom(p => ({ ...p, scale: Math.min(8, p.scale + 0.5) }))} className="p-2 bg-slate-800 rounded text-slate-300 touch-manipulation">
+                    <Icon name="zoomIn" className="w-4 h-4" />
+                  </button>
+                  <button onClick={() => setPanZoom({ scale: 1, x: 0, y: 0 })} className="text-[10px] sm:text-[11px] bg-slate-800 px-3 py-2 rounded text-slate-400 ml-1 touch-manipulation">
+                    Reset
+                  </button>
+                </div>
               </div>
 
               <div className="flex items-center space-x-2">
@@ -2442,8 +2574,13 @@ JSON Schema:
     function LiferVaultView({ vaultEntries, photos = [], onDeleteSighting, onDeleteSpecies, onSelectPhoto }) {
       const [selectedCategory, setSelectedCategory] = useState('All');
       const [searchQuery, setSearchQuery] = useState('');
+      const [isExportingOpfs, setIsExportingOpfs] = useState(false);
+      const [opfsSupported, setOpfsSupported] = useState(false);
 
-      // Create quick lookup map for workspace photos by fingerprint/id
+      useEffect(() => {
+        isOpfsSupported().then(setOpfsSupported);
+      }, []);
+
       const workspacePhotosMap = useMemo(() => {
         const map = new Map();
         (photos || []).forEach(p => {
@@ -2467,6 +2604,34 @@ JSON Schema:
         });
       }, [vaultEntries, selectedCategory, searchQuery]);
 
+      const handleExportVaultZip = async () => {
+        setIsExportingOpfs(true);
+        try {
+          const zipFile = await exportOpfsVaultToZip();
+          if (navigator.share && navigator.canShare && navigator.canShare({ files: [zipFile] })) {
+            await navigator.share({
+              title: 'BirdVault Lifer Catalog Backup',
+              text: 'Complete physical directory export of BirdVault Pro species catalog and photos.',
+              files: [zipFile]
+            });
+          } else {
+            const downloadUrl = URL.createObjectURL(zipFile);
+            const a = document.createElement('a');
+            a.href = downloadUrl;
+            a.download = zipFile.name;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
+          }
+        } catch (err) {
+          console.warn('Vault Export Error:', err);
+          alert('Vault directory export failed: ' + (err.message || 'OPFS unavailable'));
+        } finally {
+          setIsExportingOpfs(false);
+        }
+      };
+
       return (
         <div className="flex-1 flex flex-col overflow-hidden min-h-0 p-3 sm:p-4 md:p-6 gap-3 sm:gap-4 pb-[calc(5rem+env(safe-area-inset-bottom))] md:pb-4">
           <div className="flex-shrink-0 space-y-3">
@@ -2476,10 +2641,10 @@ JSON Schema:
                   <Icon name="feather" className="w-5 h-5 sm:w-6 sm:h-6 text-emerald-400" />
                   <span>Lifer Species Vault</span>
                 </h2>
-                <p className="hidden sm:block text-[11px] sm:text-xs text-slate-400">Master catalog of verified wildlife species & sighting records</p>
+                <p className="hidden sm:block text-[11px] sm:text-xs text-slate-400">Master physical directory catalog of verified wildlife species & sighting records</p>
               </div>
 
-              <div className="flex items-center space-x-3 w-full md:w-auto">
+              <div className="flex items-center space-x-2 w-full md:w-auto">
                 <div className="relative w-full md:w-64">
                   <Icon name="search" className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
                   <input
@@ -2490,6 +2655,17 @@ JSON Schema:
                     className="bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-4 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500 w-full"
                   />
                 </div>
+
+                <button
+                  onClick={handleExportVaultZip}
+                  disabled={isExportingOpfs || vaultEntries.length === 0}
+                  className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-semibold text-xs rounded-xl shadow-lg transition flex items-center space-x-1.5 flex-shrink-0 touch-manipulation"
+                  title="Export complete physical folder tree as .ZIP to iOS Files or Android Downloads"
+                >
+                  <Icon name="download" className={`w-4 h-4 ${isExportingOpfs ? 'animate-bounce' : ''}`} />
+                  <span className="hidden sm:inline">{isExportingOpfs ? 'Packaging...' : 'Export Directory (.zip)'}</span>
+                  <span className="sm:hidden">{isExportingOpfs ? '...' : 'Export'}</span>
+                </button>
               </div>
             </div>
 
@@ -2514,7 +2690,6 @@ JSON Schema:
                   const savedPhoto = primarySighting.photo || {};
                   const fpId = primarySighting.photoFingerprintId || savedPhoto.fingerprintId || savedPhoto.id;
 
-                  // Re-hydrate dynamically from live workspace photos if present
                   const livePhoto = workspacePhotosMap.get(fpId);
                   const photoObj = livePhoto || savedPhoto;
 
@@ -2551,7 +2726,7 @@ JSON Schema:
                             <div className="flex flex-col items-center justify-center p-4 text-center space-y-2 h-full w-full bg-slate-950">
                               <Icon name="image" className="w-8 h-8 text-slate-600" />
                               <span className="text-[10px] text-emerald-400 font-semibold bg-emerald-950/80 px-2 py-1 rounded border border-emerald-500/30">
-                                📁 Re-select source folder for 1:1 preview
+                                📁 Saved to OPFS physical folder
                               </span>
                             </div>
                           )}
@@ -2625,7 +2800,7 @@ JSON Schema:
 
     function CullingWorkspaceView({
       photos,
-      setPhotos,
+      onUpdatePhotos,
       onSelectPhoto,
       userApiKey,
       filterSharpness,
@@ -2680,8 +2855,10 @@ JSON Schema:
           try { if (photo.fileHandle && typeof photo.fileHandle.remove === 'function') photo.fileHandle.remove(); } catch (err) {}
           try { if (photo.blobUrl) URL.revokeObjectURL(photo.blobUrl); } catch (err) {}
           try { if (photo.thumbnailUrl) URL.revokeObjectURL(photo.thumbnailUrl); } catch (err) {}
+          deleteFingerprintMetadata(photo.fingerprintId || photo.id);
         }
-        setPhotos(prev => prev.filter(p => p.id !== photoId));
+        
+        onUpdatePhotos(prev => prev.filter(p => p.id !== photoId));
         setSelectedIds(prev => {
           const next = new Set(prev);
           next.delete(photoId);
@@ -2742,7 +2919,7 @@ JSON Schema:
           if (i % 20 === 0) await new Promise(r => setTimeout(r, 0));
         }
 
-        setPhotos(prev => {
+        onUpdatePhotos(prev => {
           const existingIds = new Set(prev.map(p => p.id));
           const filteredNew = newPhotoObjs.filter(p => !existingIds.has(p.id));
           return [...filteredNew, ...prev];
@@ -2775,7 +2952,7 @@ JSON Schema:
 
           saveFingerprintMetadata(updated);
 
-          setPhotos(prev => prev.map(p => p.id === target.id ? updated : p));
+          onUpdatePhotos(prev => prev.map(p => p.id === target.id ? updated : p));
           setRatingProgress({ current: i + 1, total: unrated.length });
         }
 
@@ -2783,7 +2960,7 @@ JSON Schema:
       };
 
       const handleCardStarClick = (photoId, newStars) => {
-        setPhotos(prev => prev.map(p => {
+        onUpdatePhotos(prev => prev.map(p => {
           if (p.id === photoId) {
             const updated = {
               ...p,
@@ -2808,8 +2985,9 @@ JSON Schema:
             }
             try { if (photo.blobUrl) URL.revokeObjectURL(photo.blobUrl); } catch (e) {}
             try { if (photo.thumbnailUrl) URL.revokeObjectURL(photo.thumbnailUrl); } catch (e) {}
+            deleteFingerprintMetadata(photo.fingerprintId || photo.id);
           }
-          setPhotos(prev => prev.filter(p => !selectedIds.has(p.id)));
+          onUpdatePhotos(prev => prev.filter(p => !selectedIds.has(p.id)));
           setSelectedIds(new Set());
         } else {
           if (!processedPhotos.length) return;
@@ -2821,9 +2999,10 @@ JSON Schema:
             }
             try { if (photo.blobUrl) URL.revokeObjectURL(photo.blobUrl); } catch (e) {}
             try { if (photo.thumbnailUrl) URL.revokeObjectURL(photo.thumbnailUrl); } catch (e) {}
+            deleteFingerprintMetadata(photo.fingerprintId || photo.id);
           }
 
-          setPhotos(prev => prev.filter(p => !idsToRemove.has(p.id)));
+          onUpdatePhotos(prev => prev.filter(p => !idsToRemove.has(p.id)));
         }
         setCurrentPage(1);
       };
@@ -2847,11 +3026,12 @@ JSON Schema:
                 await writable.close();
                 exportedCount++;
                 exportedIds.add(photo.id);
+                deleteFingerprintMetadata(photo.fingerprintId || photo.id);
               }
             }
             
             if (exportedIds.size > 0) {
-              setPhotos(prev => prev.filter(p => !exportedIds.has(p.id)));
+              onUpdatePhotos(prev => prev.filter(p => !exportedIds.has(p.id)));
               setSelectedIds(prev => {
                 const next = new Set(prev);
                 exportedIds.forEach(id => next.delete(id));
@@ -2878,9 +3058,10 @@ JSON Schema:
             document.body.removeChild(a);
           }, i * 200);
           exportedIds.add(photo.id);
+          deleteFingerprintMetadata(photo.fingerprintId || photo.id);
         });
 
-        setPhotos(prev => prev.filter(p => !exportedIds.has(p.id)));
+        onUpdatePhotos(prev => prev.filter(p => !exportedIds.has(p.id)));
         setSelectedIds(prev => {
           const next = new Set(prev);
           exportedIds.forEach(id => next.delete(id));
@@ -2945,7 +3126,7 @@ JSON Schema:
             needed,
             (batchUpdates) => {
               if (!isMounted) return;
-              setPhotos(prev => {
+              onUpdatePhotos(prev => {
                 const mapUpdates = new Map(batchUpdates.map(u => [u.id, u]));
                 return prev.map(p => {
                   const u = mapUpdates.get(p.id);
@@ -2972,7 +3153,7 @@ JSON Schema:
           setLoadingThumbnails(false);
         }
 
-        setPhotos(prev => {
+        onUpdatePhotos(prev => {
           let hasChanges = false;
           const updated = prev.map(p => {
             let updatedPhoto = p;
@@ -3329,22 +3510,63 @@ JSON Schema:
     }
 
     function BirdVaultApp() {
-      const [activeTab, setActiveTab] = useState('vault');
+      const [activeTab, setActiveTabState] = useState(() => {
+        try { return localStorage.getItem('birdvault_pref_tab') || 'vault'; } catch(e) { return 'vault'; }
+      });
+      
+      const [filterSharpness, setFilterSharpnessState] = useState(() => {
+        try { return localStorage.getItem('birdvault_pref_filter') || 'all'; } catch(e) { return 'all'; }
+      });
+
+      const [sortBy, setSortByState] = useState(() => {
+        try { return localStorage.getItem('birdvault_pref_sort') || 'name'; } catch(e) { return 'name'; }
+      });
+
+      const [userLocation, setUserLocationState] = useState(() => {
+        try { return localStorage.getItem('birdvault_user_location') || 'Auckland, New Zealand'; } catch(e) { return 'Auckland, New Zealand'; }
+      });
+
       const [photos, setPhotos] = useState([]);
       const [vaultEntries, setVaultEntries] = useState([]);
       const [selectedPhoto, setSelectedPhoto] = useState(null);
-      const [inspectorViewMode, setInspectorViewMode] = useState('lightbox');
-
-      const [filterSharpness, setFilterSharpness] = useState('all');
-      const [sortBy, setSortBy] = useState('name');
       const [currentPage, setCurrentPage] = useState(1);
 
       const [userApiKey, setUserApiKey] = useState((localStorage.getItem('birdvault_gemini_token') || '').trim());
-      const [userLocation, setUserLocation] = useState(localStorage.getItem('birdvault_user_location') || '');
       const [showTokenModal, setShowTokenModal] = useState(false);
       const [showAuthModal, setShowAuthModal] = useState(false);
 
       const [tokenUsageState, setTokenUsageState] = useState(getStoredTokenUsage());
+
+      const setActiveTab = (tab) => {
+        setActiveTabState(tab);
+        try { localStorage.setItem('birdvault_pref_tab', tab); } catch(e){}
+      };
+
+      const setFilterSharpness = (filter) => {
+        setFilterSharpnessState(filter);
+        try { localStorage.setItem('birdvault_pref_filter', filter); } catch(e){}
+      };
+
+      const setSortBy = (sort) => {
+        setSortByState(sort);
+        try { localStorage.setItem('birdvault_pref_sort', sort); } catch(e){}
+      };
+
+      const setUserLocation = (loc) => {
+        setUserLocationState(loc);
+        try {
+          if (loc) localStorage.setItem('birdvault_user_location', loc);
+          else localStorage.removeItem('birdvault_user_location');
+        } catch(e){}
+      };
+
+      const updatePhotos = (action) => {
+        setPhotos(prev => {
+          const nextPhotos = typeof action === 'function' ? action(prev) : action;
+          syncFingerprintDbPrune(nextPhotos);
+          return nextPhotos;
+        });
+      };
 
       useEffect(() => {
         window.birdvault_open_auth_modal = () => setShowAuthModal(true);
@@ -3480,7 +3702,6 @@ JSON Schema:
         if (savedVault) {
           try {
             const parsed = JSON.parse(savedVault);
-            // Sanitize any legacy blob: URLs in stored vault entries on startup
             const sanitized = (parsed || []).map(entry => ({
               ...entry,
               sightings: (entry.sightings || []).map(s => ({
@@ -3501,14 +3722,14 @@ JSON Schema:
       const saveVaultToStorage = (entries) => {
         setVaultEntries(entries);
         localStorage.setItem('birdvault_entries_v5', JSON.stringify(entries));
+        updateOpfsMasterManifest(entries);
       };
 
-      const handleSaveToVault = (photoWithAi) => {
+      const handleSaveToVault = async (photoWithAi) => {
         if (!photoWithAi.identification) return;
         const { speciesName, scientificName, category } = photoWithAi.identification;
 
         const fpId = photoWithAi.fingerprintId || photoWithAi.id;
-
         const sanitizeUrl = (u) => (u && typeof u === 'string' && !u.startsWith('blob:')) ? u : null;
 
         const cleanPhotoMeta = {
@@ -3531,8 +3752,9 @@ JSON Schema:
 
         saveFingerprintMetadata(cleanPhotoMeta);
 
+        const sightingId = 'sighting_' + Math.random().toString(36).substring(2, 9);
         const newSighting = {
-          id: 'sighting_' + Math.random().toString(36).substring(2, 9),
+          id: sightingId,
           date: Date.now(),
           photoFingerprintId: fpId,
           photo: cleanPhotoMeta
@@ -3553,6 +3775,20 @@ JSON Schema:
         }
 
         saveVaultToStorage(updatedEntries);
+
+        // Write physical files to OPFS directory
+        if (photoWithAi.file) {
+          const fileName = `${new Date().toISOString().split('T')[0]}_${sightingId}.jpg`;
+          await writeOpfsSightingFile(category, speciesName, fileName, photoWithAi.file);
+        }
+        await writeOpfsSightingFile(category, speciesName, 'species_info.json', {
+          speciesName,
+          scientificName,
+          category,
+          updatedAt: Date.now(),
+          lastSighting: cleanPhotoMeta
+        });
+
         setSelectedPhoto(null);
         setActiveTab('vault');
       };
@@ -3578,16 +3814,17 @@ JSON Schema:
 
       const handleDeletePhotoInViewer = (photoId) => {
         const currentIndex = photos.findIndex(p => p.id === photoId);
-        const updatedPhotos = photos.filter(p => p.id !== photoId);
-
         const photoToDelete = photos.find(p => p.id === photoId);
+        
         if (photoToDelete) {
           try { if (photoToDelete.fileHandle && typeof photoToDelete.fileHandle.remove === 'function') photoToDelete.fileHandle.remove(); } catch (e) {}
           try { if (photoToDelete.blobUrl) URL.revokeObjectURL(photoToDelete.blobUrl); } catch (e) {}
           try { if (photoToDelete.thumbnailUrl) URL.revokeObjectURL(photoToDelete.thumbnailUrl); } catch (e) {}
+          deleteFingerprintMetadata(photoToDelete.fingerprintId || photoToDelete.id);
         }
 
-        setPhotos(updatedPhotos);
+        const updatedPhotos = photos.filter(p => p.id !== photoId);
+        updatePhotos(updatedPhotos);
 
         if (updatedPhotos.length > 0) {
           const nextIndex = currentIndex < updatedPhotos.length ? currentIndex : updatedPhotos.length - 1;
@@ -3662,7 +3899,7 @@ JSON Schema:
             ) : (
               <CullingWorkspaceView
                 photos={photos}
-                setPhotos={setPhotos}
+                onUpdatePhotos={updatePhotos}
                 onSelectPhoto={(photo) => setSelectedPhoto(photo)}
                 userApiKey={userApiKey}
                 filterSharpness={filterSharpness}
@@ -3704,11 +3941,9 @@ JSON Schema:
               <InteractivePhotoViewer
                 key={selectedPhoto.id}
                 photo={selectedPhoto}
-                viewMode={inspectorViewMode}
-                onViewModeChange={setInspectorViewMode}
                 onClose={() => setSelectedPhoto(null)}
                 onUpdatePhoto={(updated) => {
-                  setPhotos(prev => prev.map(p => p.id === updated.id ? updated : p));
+                  updatePhotos(prev => prev.map(p => p.id === updated.id ? updated : p));
                   setSelectedPhoto(updated);
                   saveFingerprintMetadata(updated);
                 }}
@@ -3716,6 +3951,7 @@ JSON Schema:
                 onDeletePhoto={handleDeletePhotoInViewer}
                 userApiKey={userApiKey}
                 initialLocation={userLocation}
+                onUpdateLocation={setUserLocation}
                 onNextPhoto={() => hasNext && setSelectedPhoto(processedPhotos[selectedIndex + 1])}
                 onPrevPhoto={() => hasPrev && setSelectedPhoto(processedPhotos[selectedIndex - 1])}
                 hasNext={hasNext}
