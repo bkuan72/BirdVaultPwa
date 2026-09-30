@@ -400,7 +400,7 @@
         if (!file || !(file instanceof File)) return resolve(null);
         
         const reader = new FileReader();
-        const slice = file.slice(0, 262144);
+        const slice = file.slice(0, 524288);
         
         reader.onload = (e) => {
           try {
@@ -472,9 +472,29 @@
 
             const getValue = (type, count, valueOffset, entryOffset) => {
               if (type === 3) {
-                return view.getUint16(entryOffset + 8, littleEndian);
+                if (count === 1) {
+                  return view.getUint16(entryOffset + 8, littleEndian);
+                }
+                const arr = [];
+                const arrOffset = count * 2 > 4 ? tiffOffset + valueOffset : entryOffset + 8;
+                for (let k = 0; k < count; k++) {
+                  if (arrOffset + k * 2 + 2 <= view.byteLength) {
+                    arr.push(view.getUint16(arrOffset + k * 2, littleEndian));
+                  }
+                }
+                return arr;
               } else if (type === 4) {
-                return view.getUint32(entryOffset + 8, littleEndian);
+                if (count === 1) {
+                  return view.getUint32(entryOffset + 8, littleEndian);
+                }
+                const arr = [];
+                const arrOffset = count * 4 > 4 ? tiffOffset + valueOffset : entryOffset + 8;
+                for (let k = 0; k < count; k++) {
+                  if (arrOffset + k * 4 + 4 <= view.byteLength) {
+                    arr.push(view.getUint32(arrOffset + k * 4, littleEndian));
+                  }
+                }
+                return arr;
               } else if (type === 5 || type === 10) {
                 return getRational(tiffOffset + valueOffset);
               } else if (type === 2) {
@@ -514,8 +534,12 @@
               lens: null,
               shutterSpeed: null,
               aperture: null,
+              apertureValue: null,
               iso: null,
-              focalLength: null
+              focalLength: null,
+              focalLengthValue: null,
+              subjectDistance: null,
+              focusArea: null
             };
 
             const exifSubIFDOffset = ifd0Tags[0x8769];
@@ -525,6 +549,7 @@
               if (exifTags[0x920A] !== undefined) {
                 const fl = parseFloat(exifTags[0x920A]);
                 if (!isNaN(fl) && fl > 0) {
+                  cameraData.focalLengthValue = fl;
                   cameraData.focalLength = `${Math.round(fl)}mm`;
                   if (exifTags[0xA405]) {
                     cameraData.focalLength += ` (${exifTags[0xA405]}mm eq)`;
@@ -546,7 +571,15 @@
               if (exifTags[0x829D] !== undefined) {
                 const fnum = parseFloat(exifTags[0x829D]);
                 if (!isNaN(fnum) && fnum > 0) {
+                  cameraData.apertureValue = fnum;
                   cameraData.aperture = `f/${fnum.toFixed(1)}`;
+                }
+              }
+
+              if (exifTags[0x9206] !== undefined) {
+                const dist = parseFloat(exifTags[0x9206]);
+                if (!isNaN(dist) && dist > 0) {
+                  cameraData.subjectDistance = dist;
                 }
               }
 
@@ -558,9 +591,38 @@
               if (exifTags[0xA434]) {
                 cameraData.lens = exifTags[0xA434];
               }
+
+              const imgW = exifTags[0xA002] || ifd0Tags[0x0100] || null;
+              const imgH = exifTags[0xA003] || ifd0Tags[0x0101] || null;
+              const subjectArea = exifTags[0x9214] || ifd0Tags[0x9214] || null;
+
+              if (Array.isArray(subjectArea) && imgW && imgH && imgW > 0 && imgH > 0) {
+                const cx = subjectArea[0];
+                const cy = subjectArea[1];
+                let w = imgW * 0.2;
+                let h = imgH * 0.2;
+
+                if (subjectArea.length === 4) {
+                  w = subjectArea[2];
+                  h = subjectArea[3];
+                } else if (subjectArea.length === 3) {
+                  w = subjectArea[2] * 2;
+                  h = subjectArea[2] * 2;
+                }
+
+                if (cx > 0 && cy > 0) {
+                  cameraData.focusArea = {
+                    xPct: Math.max(0, Math.min(100, (cx / imgW) * 100)),
+                    yPct: Math.max(0, Math.min(100, (cy / imgH) * 100)),
+                    widthPct: Math.max(5, Math.min(100, (w / imgW) * 100)),
+                    heightPct: Math.max(5, Math.min(100, (h / imgH) * 100)),
+                    source: 'Camera EXIF AF Point (SubjectArea Tag 0x9214)'
+                  };
+                }
+              }
             }
 
-            if (cameraData.make || cameraData.model || cameraData.focalLength || cameraData.shutterSpeed || cameraData.aperture || cameraData.iso || cameraData.lens) {
+            if (cameraData.make || cameraData.model || cameraData.focalLength || cameraData.shutterSpeed || cameraData.aperture || cameraData.iso || cameraData.lens || cameraData.focusArea) {
               resolve(cameraData);
             } else {
               resolve(null);
@@ -700,7 +762,7 @@
       });
     }
 
-    async function evaluatePhotoFocus(fileOrBlobUrl, targetRoi = null) {
+    async function evaluatePhotoFocus(fileOrBlobUrl, targetRoi = null, cameraExif = null) {
       return new Promise(async (resolve) => {
         let focusSpot = null;
         let cropBoxRoi = null;
@@ -711,6 +773,8 @@
           } else if (targetRoi.xPct !== undefined) {
             focusSpot = targetRoi;
           }
+        } else if (cameraExif?.focusArea) {
+          focusSpot = cameraExif.focusArea;
         }
 
         let srcToRevoke = null;
@@ -729,15 +793,36 @@
         img.onload = () => {
           try {
             const canvas = document.createElement('canvas');
-            const sampleSize = 300;
-            const scale = Math.min(1, sampleSize / Math.max(img.width, img.height));
-            const w = Math.round(img.width * scale);
-            const h = Math.round(img.height * scale);
+
+            // Determine evaluation region on native image dimensions
+            let cropX = 0, cropY = 0, cropW = img.width, cropH = img.height;
+
+            if (cropBoxRoi && cropBoxRoi.width > 0 && cropBoxRoi.height > 0) {
+              cropX = Math.round((cropBoxRoi.x / 100) * img.width);
+              cropY = Math.round((cropBoxRoi.y / 100) * img.height);
+              cropW = Math.round((cropBoxRoi.width / 100) * img.width);
+              cropH = Math.round((cropBoxRoi.height / 100) * img.height);
+            } else if (focusSpot && focusSpot.xPct !== undefined) {
+              const cx = (focusSpot.xPct / 100) * img.width;
+              const cy = (focusSpot.yPct / 100) * img.height;
+              const rw = ((focusSpot.widthPct || 25) / 100) * img.width;
+              const rh = ((focusSpot.heightPct || 25) / 100) * img.height;
+              cropX = Math.max(0, Math.round(cx - rw / 2));
+              cropY = Math.max(0, Math.round(cy - rh / 2));
+              cropW = Math.min(img.width - cropX, Math.round(rw));
+              cropH = Math.min(img.height - cropY, Math.round(rh));
+            }
+
+            // Draw crop ROI directly at high resolution (max 600px dimension for the crop itself)
+            const evalMaxDim = 600;
+            const scale = Math.min(1, evalMaxDim / Math.max(cropW, cropH));
+            const w = Math.max(10, Math.round(cropW * scale));
+            const h = Math.max(10, Math.round(cropH * scale));
 
             canvas.width = w;
             canvas.height = h;
             const ctx = canvas.getContext('2d', { willReadFrequently: true });
-            ctx.drawImage(img, 0, 0, w, h);
+            ctx.drawImage(img, cropX, cropY, cropW, cropH, 0, 0, w, h);
 
             const imgData = ctx.getImageData(0, 0, w, h);
             const data = imgData.data;
@@ -747,102 +832,79 @@
               gray[i / 4] = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
             }
 
-            let minX = 1, maxX = w - 1, minY = 1, maxY = h - 1;
+            // High-Frequency Micro-Edge Density & High-Pass Laplacian Analysis
+            const coreMinX = w * 0.25, coreMaxX = w * 0.75;
+            const coreMinY = h * 0.25, coreMaxY = h * 0.75;
 
-            if (cropBoxRoi && cropBoxRoi.width > 0 && cropBoxRoi.height > 0) {
-              minX = Math.max(1, Math.round((cropBoxRoi.x / 100) * w));
-              maxX = Math.min(w - 1, Math.round(((cropBoxRoi.x + cropBoxRoi.width) / 100) * w));
-              minY = Math.max(1, Math.round((cropBoxRoi.y / 100) * h));
-              maxY = Math.min(h - 1, Math.round(((cropBoxRoi.y + cropBoxRoi.height) / 100) * h));
-            } else if (focusSpot && focusSpot.xPct) {
-              const cx = (focusSpot.xPct / 100) * w;
-              const cy = (focusSpot.yPct / 100) * h;
-              const rw = ((focusSpot.widthPct || 20) / 100) * w;
-              const rh = ((focusSpot.heightPct || 20) / 100) * h;
+            let coreMicroCount = 0, coreTotal = 0;
+            let bgMicroCount = 0, bgTotal = 0;
+            let coreLapSqSum = 0;
+            let maxCoreLap = 0;
 
-              minX = Math.max(1, Math.round(cx - rw / 2));
-              maxX = Math.min(w - 1, Math.round(cx + rw / 2));
-              minY = Math.max(1, Math.round(cy - rh / 2));
-              maxY = Math.min(h - 1, Math.round(cy + rh / 2));
-            } else {
-              let maxVar = -1;
-              let bestX = 50, bestY = 50;
-              const gridCols = 5, gridRows = 5;
-              const tileW = Math.floor(w / gridCols);
-              const tileH = Math.floor(h / gridRows);
+            const MICRO_EDGE_THRESHOLD = 45; // True sharp micro-detail spike
 
-              for (let gy = 0; gy < gridRows; gy++) {
-                for (let gx = 0; gx < gridCols; gx++) {
-                  let lSum = 0, lSqSum = 0, count = 0;
-                  const startX = Math.max(1, gx * tileW);
-                  const endX = Math.min(w - 1, (gx + 1) * tileW);
-                  const startY = Math.max(1, gy * tileH);
-                  const endY = Math.min(h - 1, (gy + 1) * tileH);
+            for (let y = 1; y < h - 1; y++) {
+              for (let x = 1; x < w - 1; x++) {
+                const idx = y * w + x;
+                const lap = Math.abs(
+                  8 * gray[idx] - (
+                    gray[idx - w - 1] + gray[idx - w] + gray[idx - w + 1] +
+                    gray[idx - 1]     +                 gray[idx + 1] +
+                    gray[idx + w - 1] + gray[idx + w] + gray[idx + w + 1]
+                  )
+                );
 
-                  for (let y = startY; y < endY; y++) {
-                    for (let x = startX; x < endX; x++) {
-                      const idx = y * w + x;
-                      const lap = (-4 * gray[idx] + gray[idx - 1] + gray[idx + 1] + gray[idx - w] + gray[idx + w]);
-                      lSum += lap;
-                      lSqSum += lap * lap;
-                      count++;
-                    }
+                const isCore = (x >= coreMinX && x <= coreMaxX && y >= coreMinY && y <= coreMaxY);
+
+                if (isCore) {
+                  coreTotal++;
+                  if (lap > maxCoreLap) maxCoreLap = lap;
+                  if (lap >= MICRO_EDGE_THRESHOLD) {
+                    coreMicroCount++;
+                    coreLapSqSum += lap * lap;
                   }
-                  const mean = count > 0 ? lSum / count : 0;
-                  const v = count > 0 ? (lSqSum / count) - (mean * mean) : 0;
-                  if (v > maxVar) {
-                    maxVar = v;
-                    bestX = Math.round(((gx + 0.5) / gridCols) * 100);
-                    bestY = Math.round(((gy + 0.5) / gridRows) * 100);
+                } else {
+                  bgTotal++;
+                  if (lap >= MICRO_EDGE_THRESHOLD) {
+                    bgMicroCount++;
                   }
                 }
               }
-
-              focusSpot = {
-                xPct: bestX,
-                yPct: bestY,
-                widthPct: 20,
-                heightPct: 20,
-                source: 'Spatial Laplacian Micro-Contrast Peak'
-              };
-
-              const cx = (focusSpot.xPct / 100) * w;
-              const cy = (focusSpot.yPct / 100) * h;
-              const rw = ((focusSpot.widthPct || 20) / 100) * w;
-              const rh = ((focusSpot.heightPct || 20) / 100) * h;
-
-              minX = Math.max(1, Math.round(cx - rw / 2));
-              maxX = Math.min(w - 1, Math.round(cx + rw / 2));
-              minY = Math.max(1, Math.round(cy - rh / 2));
-              maxY = Math.min(h - 1, Math.round(cy + rh / 2));
             }
 
-            if (maxX <= minX) maxX = Math.min(w - 1, minX + 5);
-            if (maxY <= minY) maxY = Math.min(h - 1, minY + 5);
+            const microDensityCore = coreTotal > 0 ? coreMicroCount / coreTotal : 0;
+            const microDensityBg = bgTotal > 0 ? bgMicroCount / bgTotal : 0;
+            const highPassVar = coreMicroCount > 0 ? coreLapSqSum / coreMicroCount : 0;
 
-            let laplacianSum = 0;
-            let laplacianSqSum = 0;
-            let count = 0;
+            // Suppression Rule 1: Absence of Micro-Detail (Completely Blurry)
+            // If peak Laplacian < 35 or less than 0.1% of core pixels hit the micro-edge threshold,
+            // the subject core contains zero sharp edges.
+            let isCompletelyBlurry = (maxCoreLap < 35 || microDensityCore < 0.001);
 
-            for (let y = minY; y < maxY; y++) {
-              for (let x = minX; x < maxX; x++) {
-                const idx = y * w + x;
-                const lap = (
-                  -4 * gray[idx] +
-                  gray[idx - 1] + gray[idx + 1] +
-                  gray[idx - w] + gray[idx + w]
-                );
-                laplacianSum += lap;
-                laplacianSqSum += lap * lap;
-                count++;
-              }
+            // Suppression Rule 2: Low-Contrast Soft Blur Ramp
+            let isSeverelySoft = (maxCoreLap < 65 && microDensityCore < 0.005);
+
+            // Suppression Rule 3: Missed-Focus Background
+            let isMissedFocusOnBg = (bgTotal > 0 && microDensityBg >= 3 * microDensityCore && microDensityCore < 0.008);
+
+            let score = 1;
+            if (isCompletelyBlurry) {
+              score = 1;
+            } else if (isSeverelySoft || isMissedFocusOnBg) {
+              score = 2;
+            } else {
+              if (microDensityCore >= 0.035 && highPassVar >= 900) score = 10;
+              else if (microDensityCore >= 0.025 && highPassVar >= 700) score = 9;
+              else if (microDensityCore >= 0.018 && highPassVar >= 500) score = 8;
+              else if (microDensityCore >= 0.012 && highPassVar >= 350) score = 7;
+              else if (microDensityCore >= 0.008 && highPassVar >= 250) score = 6;
+              else if (microDensityCore >= 0.005 && highPassVar >= 180) score = 5;
+              else if (microDensityCore >= 0.003 && highPassVar >= 120) score = 4;
+              else if (microDensityCore >= 0.001) score = 3;
+              else score = 2;
             }
 
-            const mean = count > 0 ? laplacianSum / count : 0;
-            const variance = count > 0 ? (laplacianSqSum / count) - (mean * mean) : 0;
-
-            let score = Math.min(10, Math.max(1, Math.round(Math.log2(Math.max(1, variance / 25)) * 2.2)));
-            if (isNaN(score)) score = 5;
+            if (isNaN(score)) score = 1;
 
             const stars = scoreToStars(score);
 
@@ -1714,7 +1776,7 @@ JSON Schema:
       useEffect(() => {
         if (photo.sharpness === null && !evaluatingFocus) {
           setEvaluatingFocus(true);
-          evaluatePhotoFocus(photo.file || photo.blobUrl || photo.thumbnailUrl || photo.url, photo.cropBox || photo.focusSpot).then((res) => {
+          evaluatePhotoFocus(photo.file || photo.blobUrl || photo.thumbnailUrl || photo.url, photo.cropBox || photo.focusSpot, cameraExif || photo.cameraExif).then((res) => {
             const updated = {
               ...photo,
               sharpness: res.score,
@@ -1726,7 +1788,7 @@ JSON Schema:
             setEvaluatingFocus(false);
           });
         }
-      }, [photo]);
+      }, [photo, cameraExif]);
 
       useEffect(() => {
         if (!cameraExif && photo.file) {
@@ -1968,7 +2030,7 @@ JSON Schema:
           
           if (finalCrop && finalCrop.width >= MIN_CROP_DIMENSION_PCT && finalCrop.height >= MIN_CROP_DIMENSION_PCT) {
             setEvaluatingFocus(true);
-            const evalRes = await evaluatePhotoFocus(photo.file || photo.blobUrl || photo.thumbnailUrl || photo.url, finalCrop);
+            const evalRes = await evaluatePhotoFocus(photo.file || photo.blobUrl || photo.thumbnailUrl || photo.url, finalCrop, cameraExif || photo.cameraExif);
             
             const updated = {
               ...photo,
@@ -2010,7 +2072,7 @@ JSON Schema:
         let currentPhoto = photo;
         if (currentPhoto.sharpness === null) {
           setEvaluatingFocus(true);
-          const evalRes = await evaluatePhotoFocus(photo.file || photo.blobUrl || photo.thumbnailUrl || photo.url, photo.cropBox || photo.focusSpot);
+          const evalRes = await evaluatePhotoFocus(photo.file || photo.blobUrl || photo.thumbnailUrl || photo.url, photo.cropBox || photo.focusSpot, cameraExif || photo.cameraExif);
           currentPhoto = { ...photo, sharpness: evalRes.score, stars: evalRes.stars, focusSpot: evalRes.focusSpot };
           onUpdatePhoto(currentPhoto);
           saveFingerprintMetadata(currentPhoto);
@@ -2030,7 +2092,30 @@ JSON Schema:
         setIdentifying(false);
         setShowMobileSidebar(true);
         
-        const updated = { ...currentPhoto, identification: result, cropBox: cropBox, locationText: locationInput };
+        let updatedFocusSpot = currentPhoto.focusSpot;
+        if (result && result.heatmapPoints && result.heatmapPoints.length > 0) {
+          const eyePt = result.heatmapPoints.find(p => p.label && p.label.toLowerCase().includes('eye')) || result.heatmapPoints[0];
+          if (eyePt && eyePt.x !== undefined && eyePt.y !== undefined) {
+            updatedFocusSpot = {
+              xPct: eyePt.x,
+              yPct: eyePt.y,
+              widthPct: 20,
+              heightPct: 20,
+              source: 'AI Feature Anchor (' + (eyePt.label || 'Subject Core') + ')'
+            };
+            setEvaluatingFocus(true);
+            const aiFocusRes = await evaluatePhotoFocus(currentPhoto.file || currentPhoto.blobUrl || currentPhoto.thumbnailUrl || currentPhoto.url, updatedFocusSpot, cameraExif || currentPhoto.cameraExif);
+            currentPhoto = {
+              ...currentPhoto,
+              sharpness: aiFocusRes.score,
+              stars: aiFocusRes.stars,
+              focusSpot: updatedFocusSpot
+            };
+            setEvaluatingFocus(false);
+          }
+        }
+
+        const updated = { ...currentPhoto, identification: result, cropBox: cropBox, locationText: locationInput, focusSpot: updatedFocusSpot };
         onUpdatePhoto(updated);
         saveFingerprintMetadata(updated);
       };
@@ -2041,7 +2126,7 @@ JSON Schema:
         setShowCroppedPreview(false);
 
         setEvaluatingFocus(true);
-        const evalRes = await evaluatePhotoFocus(photo.file || photo.blobUrl || photo.thumbnailUrl || photo.url, null);
+        const evalRes = await evaluatePhotoFocus(photo.file || photo.blobUrl || photo.thumbnailUrl || photo.url, null, cameraExif || photo.cameraExif);
         
         const updated = {
           ...photo,
@@ -2069,6 +2154,8 @@ JSON Schema:
       const loupeDiameter = loupeRadius * 2;
 
       const hasValidCropBox = cropBox && cropBox.width >= MIN_CROP_DIMENSION_PCT && cropBox.height >= MIN_CROP_DIMENSION_PCT;
+
+      const activeFocusSpot = photo.focusSpot || cameraExif?.focusArea;
 
       return (
         <div className="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-md flex flex-col md:flex-row overflow-hidden select-none">
@@ -2253,10 +2340,10 @@ JSON Schema:
                     )}
                   </CroppedImage>
 
-                  {photo.focusSpot && !isCropToolActive && !isZoomedOrCropped && (
+                  {activeFocusSpot && !isCropToolActive && !isZoomedOrCropped && (
                     <div
                       className="absolute w-12 h-12 -ml-6 -mt-6 border-2 border-sky-400/80 bg-sky-500/10 rounded-full pointer-events-none flex items-center justify-center shadow-lg animate-pulse"
-                      style={{ left: `${photo.focusSpot.xPct}%`, top: `${photo.focusSpot.yPct}%` }}
+                      style={{ left: `${activeFocusSpot.xPct}%`, top: `${activeFocusSpot.yPct}%` }}
                     >
                       <span className="w-1.5 h-1.5 rounded-full bg-sky-300"></span>
                     </div>
@@ -2391,7 +2478,7 @@ JSON Schema:
               badge={
                 photo.sharpness !== null ? (
                   <span className="text-[9px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full">
-                    {photo.sharpness}/10 Grade {photo.cropBox ? '(ROI)' : ''}
+                    {photo.sharpness}/10 Grade {photo.cropBox ? '(ROI)' : photo.focusSpot?.source ? '(AF Spot)' : cameraExif?.focusArea ? '(EXIF AF)' : ''}
                   </span>
                 ) : null
               }
@@ -2432,9 +2519,13 @@ JSON Schema:
                     <div className="flex items-center justify-between pt-1">
                       <span className="text-slate-400 text-[11px] flex items-center space-x-1">
                         <span>Focus Score:</span>
-                        {photo.cropBox && (
-                          <span className="text-[9px] text-emerald-400 bg-emerald-950 px-1 py-0.5 rounded border border-emerald-500/30">Cropped ROI</span>
-                        )}
+                        {photo.cropBox ? (
+                          <span className="text-[9px] text-emerald-400 bg-emerald-950 px-1 py-0.5 rounded border border-emerald-500/30">User Crop ROI</span>
+                        ) : photo.focusSpot?.source ? (
+                          <span className="text-[9px] text-sky-400 bg-sky-950 px-1 py-0.5 rounded border border-sky-500/30">{photo.focusSpot.source}</span>
+                        ) : cameraExif?.focusArea ? (
+                          <span className="text-[9px] text-sky-400 bg-sky-950 px-1 py-0.5 rounded border border-sky-500/30">Camera EXIF AF</span>
+                        ) : null}
                       </span>
                       <span className="text-xs font-bold font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
                         {photo.sharpness} / 10
@@ -2475,6 +2566,12 @@ JSON Schema:
                         <span className="text-slate-500 block">FOCAL LENGTH</span>
                         <span className="text-slate-200 font-bold">{cameraExif.focalLength || 'N/A'}</span>
                       </div>
+                      {cameraExif.focusArea && (
+                        <div className="col-span-2 bg-sky-950/40 p-1.5 rounded border border-sky-500/30 flex justify-between items-center">
+                          <span className="text-sky-400 font-sans font-semibold">EXIF AF POINT</span>
+                          <span className="text-sky-200 font-bold">Detected ({cameraExif.focusArea.xPct.toFixed(0)}%, {cameraExif.focusArea.yPct.toFixed(0)}%)</span>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -2556,7 +2653,7 @@ JSON Schema:
                 </p>
                 <button
                   disabled={!aiResult || !!aiResult.error}
-                  onClick={() => onSaveToVault({ ...photo, identification: aiResult, cropBox, focusSpot: photo.focusSpot, locationText: locationInput, stars: activeStars })}
+                  onClick={() => onSaveToVault({ ...photo, identification: aiResult, cropBox, focusSpot: photo.focusSpot || cameraExif?.focusArea, locationText: locationInput, stars: activeStars })}
                   className="w-full py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow transition flex items-center justify-center space-x-1 touch-manipulation"
                 >
                   <Icon name="check" className="w-4 h-4" />
@@ -2933,6 +3030,11 @@ JSON Schema:
                 const fpId = generateFingerprintId(file);
                 const savedMeta = fpDb[fpId] || {};
 
+                let cameraExif = savedMeta.cameraExif || null;
+                if (!cameraExif) {
+                  cameraExif = await extractCameraExif(file);
+                }
+
                 const photoObj = {
                   id: fpId,
                   fingerprintId: fpId,
@@ -2949,8 +3051,8 @@ JSON Schema:
                   sharpness: savedMeta.sharpness !== undefined ? savedMeta.sharpness : null,
                   stars: savedMeta.stars !== undefined ? savedMeta.stars : null,
                   userStars: savedMeta.userStars !== undefined ? savedMeta.userStars : null,
-                  focusSpot: savedMeta.focusSpot || null,
-                  cameraExif: savedMeta.cameraExif || null,
+                  focusSpot: savedMeta.focusSpot || cameraExif?.focusArea || null,
+                  cameraExif: cameraExif,
                   identification: savedMeta.identification || null,
                   cropBox: savedMeta.cropBox || null,
                   locationText: savedMeta.locationText || null,
@@ -3035,6 +3137,11 @@ JSON Schema:
             const fpId = generateFingerprintId(file);
             const savedMeta = fpDb[fpId] || {};
 
+            let cameraExif = savedMeta.cameraExif || null;
+            if (!cameraExif) {
+              cameraExif = await extractCameraExif(file);
+            }
+
             const photoObj = {
               id: fpId,
               fingerprintId: fpId,
@@ -3051,8 +3158,8 @@ JSON Schema:
               sharpness: savedMeta.sharpness !== undefined ? savedMeta.sharpness : null,
               stars: savedMeta.stars !== undefined ? savedMeta.stars : null,
               userStars: savedMeta.userStars !== undefined ? savedMeta.userStars : null,
-              focusSpot: savedMeta.focusSpot || null,
-              cameraExif: savedMeta.cameraExif || null,
+              focusSpot: savedMeta.focusSpot || cameraExif?.focusArea || null,
+              cameraExif: cameraExif,
               identification: savedMeta.identification || null,
               cropBox: savedMeta.cropBox || null,
               locationText: savedMeta.locationText || null,
@@ -3113,7 +3220,7 @@ JSON Schema:
             sharpness: savedMeta.sharpness !== undefined ? savedMeta.sharpness : null,
             stars: savedMeta.stars !== undefined ? savedMeta.stars : null,
             userStars: savedMeta.userStars !== undefined ? savedMeta.userStars : null,
-            focusSpot: savedMeta.focusSpot || null,
+            focusSpot: savedMeta.focusSpot || cameraExif?.focusArea || null,
             cameraExif: cameraExif,
             identification: savedMeta.identification || null,
             cropBox: savedMeta.cropBox || null,
@@ -3150,10 +3257,16 @@ JSON Schema:
           if (abortRatingRef.current) break;
 
           const target = unrated[i];
-          const evalResult = await evaluatePhotoFocus(target.file || target.url, target.cropBox || target.focusSpot);
+          let cameraExif = target.cameraExif;
+          if (!cameraExif && target.file) {
+            cameraExif = await extractCameraExif(target.file);
+          }
+
+          const evalResult = await evaluatePhotoFocus(target.file || target.url, target.cropBox || target.focusSpot, cameraExif || target.cameraExif);
 
           const updated = { 
             ...target, 
+            cameraExif: cameraExif || target.cameraExif,
             sharpness: evalResult.score,
             stars: evalResult.stars,
             focusSpot: evalResult.focusSpot 
@@ -3918,7 +4031,7 @@ JSON Schema:
                 sharpness: savedMeta.sharpness !== undefined ? savedMeta.sharpness : null,
                 stars: savedMeta.stars !== undefined ? savedMeta.stars : null,
                 userStars: savedMeta.userStars !== undefined ? savedMeta.userStars : null,
-                focusSpot: savedMeta.focusSpot || null,
+                focusSpot: savedMeta.focusSpot || savedMeta.cameraExif?.focusArea || null,
                 cameraExif: savedMeta.cameraExif || null,
                 identification: savedMeta.identification || null,
                 cropBox: savedMeta.cropBox || null,
@@ -4053,7 +4166,7 @@ JSON Schema:
           sharpness: photoWithAi.sharpness,
           stars: photoWithAi.stars,
           userStars: photoWithAi.userStars,
-          focusSpot: photoWithAi.focusSpot,
+          focusSpot: photoWithAi.focusSpot || photoWithAi.cameraExif?.focusArea,
           cameraExif: photoWithAi.cameraExif,
           identification: photoWithAi.identification,
           cropBox: photoWithAi.cropBox,
