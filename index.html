@@ -2649,34 +2649,34 @@ JSON Schema:
       return (
         <div className="flex-1 flex flex-col overflow-hidden min-h-0 p-3 sm:p-4 md:p-6 gap-3 sm:gap-4 pb-[calc(5rem+env(safe-area-inset-bottom))] md:pb-4">
           <div className="flex-shrink-0 space-y-3">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 bg-slate-900 border border-slate-800 p-3.5 sm:p-4 rounded-2xl shadow-xl">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-3 bg-slate-900 border border-slate-800 p-3 sm:p-4 rounded-2xl shadow-xl">
               <div>
-                <h2 className="text-lg sm:text-xl font-extrabold text-white flex items-center space-x-2">
+                <h2 className="text-base sm:text-xl font-extrabold text-white flex items-center space-x-2">
                   <Icon name="feather" className="w-5 h-5 sm:w-6 sm:h-6 text-emerald-400" />
                   <span>Lifer Species Vault</span>
                 </h2>
                 <p className="hidden sm:block text-[11px] sm:text-xs text-slate-400">Master physical directory catalog of verified wildlife species & sighting records</p>
               </div>
 
-              <div className="flex items-center space-x-2 w-full md:w-auto">
-                <div className="relative w-full md:w-64">
-                  <Icon name="search" className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+              <div className="flex items-center space-x-2 w-full sm:w-auto">
+                <div className="relative flex-1 sm:w-64">
+                  <Icon name="search" className="w-3.5 h-3.5 sm:w-4 sm:h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
                   <input
                     type="text"
                     placeholder="Search species or scientific name..."
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    className="bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-4 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500 w-full"
+                    className="bg-slate-950 border border-slate-800 rounded-xl pl-8 sm:pl-9 pr-3 sm:pr-4 py-1.5 sm:py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500 w-full"
                   />
                 </div>
 
                 <button
                   onClick={handleExportVaultZip}
                   disabled={isExportingOpfs || vaultEntries.length === 0}
-                  className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-semibold text-xs rounded-xl shadow-lg transition flex items-center space-x-1.5 flex-shrink-0 touch-manipulation"
+                  className="px-3 sm:px-3.5 py-1.5 sm:py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-semibold text-xs rounded-xl shadow-lg transition flex items-center space-x-1.5 flex-shrink-0 touch-manipulation"
                   title="Export complete physical folder tree as .ZIP to iOS Files or Android Downloads"
                 >
-                  <Icon name="download" className={`w-4 h-4 ${isExportingOpfs ? 'animate-bounce' : ''}`} />
+                  <Icon name="download" className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${isExportingOpfs ? 'animate-bounce' : ''}`} />
                   <span className="hidden sm:inline">{isExportingOpfs ? 'Packaging...' : 'Export Directory (.zip)'}</span>
                   <span className="sm:hidden">{isExportingOpfs ? '...' : 'Export'}</span>
                 </button>
@@ -2688,7 +2688,7 @@ JSON Schema:
                 <button
                   key={cat}
                   onClick={() => setSelectedCategory(cat)}
-                  className={`px-4 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition flex-shrink-0 touch-manipulation ${selectedCategory === cat ? 'bg-emerald-600 text-white shadow-md' : 'bg-slate-900 text-slate-400 hover:bg-slate-800 border border-slate-800'}`}
+                  className={`px-3.5 sm:px-4 py-1 sm:py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition flex-shrink-0 touch-manipulation ${selectedCategory === cat ? 'bg-emerald-600 text-white shadow-md' : 'bg-slate-900 text-slate-400 hover:bg-slate-800 border border-slate-800'}`}
                 >
                   {cat}
                 </button>
@@ -2698,7 +2698,7 @@ JSON Schema:
 
           <div className="flex-1 overflow-y-auto min-h-0 pr-1 pb-4">
             {filteredEntries.length > 0 ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-5">
                 {filteredEntries.map(entry => {
                   const primarySighting = entry.sightings[0] || {};
                   const savedPhoto = primarySighting.photo || {};
@@ -2720,7 +2720,7 @@ JSON Schema:
                     <div key={entry.speciesName} className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl hover:border-slate-700 transition flex flex-col justify-between">
                       <div>
                         <div 
-                          className="h-48 relative bg-slate-950 overflow-hidden cursor-pointer flex items-center justify-center p-1 touch-manipulation" 
+                          className="h-40 sm:h-48 relative bg-slate-950 overflow-hidden cursor-pointer flex items-center justify-center p-1 touch-manipulation" 
                           onClick={() => hasActiveFile && onSelectPhoto(photoObj)}
                         >
                           {activeSrc ? (
@@ -2743,19 +2743,19 @@ JSON Schema:
                           )}
 
                           <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-transparent to-transparent pointer-events-none"></div>
-                          <span className="absolute top-3 right-3 bg-emerald-600/90 backdrop-blur-md text-white font-bold text-[10px] px-2 py-0.5 rounded-full shadow">
+                          <span className="absolute top-2 sm:top-3 right-2 sm:right-3 bg-emerald-600/90 backdrop-blur-md text-white font-bold text-[10px] px-2 py-0.5 rounded-full shadow">
                             {entry.category}
                           </span>
-                          <span className="absolute bottom-3 left-3 text-xs font-semibold text-slate-300 pointer-events-none">
+                          <span className="absolute bottom-2 sm:bottom-3 left-2 sm:left-3 text-xs font-semibold text-slate-300 pointer-events-none">
                             {entry.sightings.length} Sighting{entry.sightings.length > 1 ? 's' : ''}
                           </span>
                         </div>
 
-                        <div className="p-4 space-y-3">
+                        <div className="p-3 sm:p-4 space-y-2 sm:space-y-3">
                           <div className="flex items-start justify-between">
                             <div>
-                              <h3 className="font-extrabold text-white text-base leading-snug">{entry.speciesName}</h3>
-                              <p className="text-xs text-slate-400 italic font-mono">{entry.scientificName}</p>
+                              <h3 className="font-extrabold text-white text-sm sm:text-base leading-snug">{entry.speciesName}</h3>
+                              <p className="text-[11px] sm:text-xs text-slate-400 italic font-mono">{entry.scientificName}</p>
                             </div>
                             <button
                               onClick={() => onDeleteSpecies(entry.speciesName)}
@@ -2767,13 +2767,13 @@ JSON Schema:
 
                           <div className="space-y-1.5 border-t border-slate-800 pt-2">
                             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Sightings History</span>
-                            <div className="space-y-1 max-h-32 overflow-y-auto">
+                            <div className="space-y-1 max-h-28 sm:max-h-32 overflow-y-auto">
                               {entry.sightings.map(s => {
                                 const sPhoto = s.photo || {};
                                 return (
-                                  <div key={s.id} className="flex items-center justify-between bg-slate-950 p-2 rounded-lg text-xs border border-slate-800/80">
-                                    <span className="text-slate-300 font-mono text-[11px]">{new Date(s.date).toLocaleDateString()}</span>
-                                    <div className="flex items-center space-x-2">
+                                  <div key={s.id} className="flex items-center justify-between bg-slate-950 p-1.5 sm:p-2 rounded-lg text-xs border border-slate-800/80">
+                                    <span className="text-slate-300 font-mono text-[10px] sm:text-[11px]">{new Date(s.date).toLocaleDateString()}</span>
+                                    <div className="flex items-center space-x-1.5 sm:space-x-2">
                                       <StarRating
                                         rating={sPhoto.userStars || sPhoto.stars || scoreToStars(sPhoto.sharpness)}
                                         readOnly={true}
@@ -2798,10 +2798,10 @@ JSON Schema:
                 })}
               </div>
             ) : (
-              <div className="p-12 text-center bg-slate-900/40 border border-dashed border-slate-800 rounded-3xl space-y-3">
-                <Icon name="feather" className="w-12 h-12 text-slate-600 mx-auto" />
-                <h3 className="text-base font-bold text-slate-300">No Species Records Found</h3>
-                <p className="text-xs text-slate-500 max-w-sm mx-auto">Upload DSLR wildlife photos in the Focus Culling tab to run AI species identification and build your Lifer Vault.</p>
+              <div className="p-8 sm:p-12 text-center bg-slate-900/40 border border-dashed border-slate-800 rounded-3xl space-y-3">
+                <Icon name="feather" className="w-10 h-10 sm:w-12 sm:h-12 text-slate-600 mx-auto" />
+                <h3 className="text-sm sm:text-base font-bold text-slate-300">No Species Records Found</h3>
+                <p className="text-[11px] sm:text-xs text-slate-500 max-w-sm mx-auto">Upload DSLR wildlife photos in the Focus Culling tab to run AI species identification and build your Lifer Vault.</p>
               </div>
             )}
           </div>
@@ -2835,7 +2835,6 @@ JSON Schema:
       const [ratingProgress, setRatingProgress] = useState({ current: 0, total: 0 });
       const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
       
-      // OPTION 3: TOUCH SWIPE GESTURE STATE & AUTO-FADING TOAST
       const [swipeToast, setSwipeToast] = useState(null);
       const touchStartRef = useRef(null);
       const toastTimerRef = useRef(null);
@@ -2870,7 +2869,6 @@ JSON Schema:
 
           const totalP = Math.ceil(processedPhotos.length / pageSize) || 1;
 
-          // Horizontal swipe detection threshold (50px swipe, <80px vertical drift, <500ms time)
           if (Math.abs(dx) > 50 && Math.abs(dy) < 80 && dt < 500) {
             if (dx < 0 && currentPage < totalP) {
               const nextP = currentPage + 1;
@@ -3137,12 +3135,11 @@ JSON Schema:
         return processedPhotos.slice(start, start + pageSize);
       }, [processedPhotos, currentPage]);
 
-      // OPTIMIZED PAGE-BOUND ACTIVE BUFFER (Target size reduced to 17: 12 active page + 5 pre-fetch buffer)
       const bufferedPhotos = useMemo(() => {
         const total = processedPhotos.length;
         if (total === 0) return [];
 
-        const targetBufferSize = 17; // 12 current page + 5 pre-fetch buffer
+        const targetBufferSize = 17;
         const pageStart = (currentPage - 1) * pageSize;
         const pageEnd = Math.min(total, currentPage * pageSize);
         const pageCenter = Math.floor((pageStart + pageEnd) / 2);
@@ -3247,34 +3244,34 @@ JSON Schema:
       const isSelectionActive = selectedIds.size > 0;
       const filterLabel = filterSharpness === '5star' ? '5 Stars' : filterSharpness === '4star' ? '4+ Stars' : filterSharpness === 'soft' ? '1-3 Stars' : filterSharpness === 'unrated' ? 'Unrated' : 'All Photos';
 
-      // Footer bar renders only if background tasks are active
       const showFooterBar = uploading || (loadingThumbnails && !isPreviewOpen) || rating;
 
       return (
-        <div className="flex-1 flex flex-col overflow-hidden min-h-0 p-3 sm:p-4 md:p-6 gap-3 sm:gap-4 pb-[calc(5rem+env(safe-area-inset-bottom))] md:pb-4 relative">
+        <div className="flex-1 flex flex-col overflow-hidden min-h-0 p-2 sm:p-4 md:p-6 gap-2 sm:gap-4 pb-[calc(4.5rem+env(safe-area-inset-bottom))] md:pb-4 relative">
           
-          <div className="flex-shrink-0 bg-slate-900 border border-slate-800 p-3 sm:p-4 rounded-2xl shadow-xl space-y-3">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          {/* RESPONSIVE MOBILE-FRIENDLY CULLING WORKSPACE HEADER TOOLBAR */}
+          <div className="flex-shrink-0 bg-slate-900 border border-slate-800 p-2.5 sm:p-4 rounded-2xl shadow-xl space-y-2.5 sm:space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-3">
               <div>
-                <h2 className="text-lg sm:text-xl font-extrabold text-white flex items-center space-x-2">
+                <h2 className="text-base sm:text-xl font-extrabold text-white flex items-center space-x-2">
                   <Icon name="camera" className="w-5 h-5 sm:w-6 sm:h-6 text-emerald-400" />
                   <span>Focus Culling Workspace</span>
                 </h2>
                 <p className="hidden sm:block text-[11px] sm:text-xs text-slate-400">Grade focus sharpness from 0 (blurry) to 10 (tack sharp) automatically or adjust manually.</p>
               </div>
 
-              <div className="flex items-center space-x-2 overflow-x-auto no-scrollbar py-0.5">
+              <div className="flex items-center space-x-1.5 sm:space-x-2 overflow-x-auto no-scrollbar py-0.5 w-full sm:w-auto">
                 <button
                   onClick={() => setShowFilterBar(!showFilterBar)}
-                  className={`font-semibold text-xs px-3.5 py-2.5 rounded-xl border transition flex items-center space-x-1.5 touch-manipulation ${
+                  className={`font-semibold text-[11px] sm:text-xs px-2.5 sm:px-3.5 py-2 sm:py-2.5 rounded-xl border transition flex items-center space-x-1 sm:space-x-1.5 flex-1 sm:flex-none justify-center touch-manipulation ${
                     showFilterBar || filterSharpness !== 'all' 
                       ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' 
                       : 'bg-slate-800 text-slate-300 border-slate-700 hover:text-white'
                   }`}
                   title="Toggle Filter & Sort Controls"
                 >
-                  <Icon name="filter" className="w-4 h-4 text-emerald-400" />
-                  <span>Filter & Sort</span>
+                  <Icon name="filter" className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-400" />
+                  <span>Filter/Sort</span>
                   {filterSharpness !== 'all' && (
                     <span className="ml-1 bg-emerald-600 text-white font-bold text-[9px] px-1.5 py-0.5 rounded-full">
                       {filterLabel}
@@ -3282,9 +3279,9 @@ JSON Schema:
                   )}
                 </button>
 
-                <label className="cursor-pointer bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs px-3.5 py-2.5 rounded-xl shadow-lg transition flex items-center justify-center space-x-1.5 active:scale-95 touch-manipulation flex-shrink-0">
-                  <Icon name="upload" className="w-4 h-4" />
-                  <span>Upload Photos</span>
+                <label className="cursor-pointer bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-[11px] sm:text-xs px-2.5 sm:px-3.5 py-2 sm:py-2.5 rounded-xl shadow-lg transition flex items-center justify-center space-x-1 sm:space-x-1.5 active:scale-95 touch-manipulation flex-1 sm:flex-none">
+                  <Icon name="upload" className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                  <span>Upload</span>
                   <input
                     ref={fileInputRef}
                     type="file"
@@ -3298,37 +3295,37 @@ JSON Schema:
                 <button
                   onClick={handleBatchRateFocus}
                   disabled={rating || !photos.some(p => p.sharpness === null && p.userStars === null)}
-                  className="bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 font-semibold text-xs px-3.5 py-2.5 rounded-xl border border-slate-700 transition flex items-center justify-center space-x-1.5 active:scale-95 touch-manipulation flex-shrink-0"
+                  className="bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 font-semibold text-[11px] sm:text-xs px-2.5 sm:px-3.5 py-2 sm:py-2.5 rounded-xl border border-slate-700 transition flex items-center justify-center space-x-1 sm:space-x-1.5 active:scale-95 touch-manipulation flex-1 sm:flex-none"
                 >
-                  <Icon name="sparkles" className="w-4 h-4 text-emerald-400" />
-                  <span>Rate photos ({photos.filter(p => p.sharpness === null).length})</span>
+                  <Icon name="sparkles" className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-400" />
+                  <span>Rate ({photos.filter(p => p.sharpness === null).length})</span>
                 </button>
               </div>
             </div>
 
             {showFilterBar && (
-              <div className="flex flex-nowrap items-center overflow-x-auto no-scrollbar gap-2 sm:gap-3 pt-3 border-t border-slate-800 text-xs animate-fadeIn">
+              <div className="flex flex-nowrap items-center overflow-x-auto no-scrollbar gap-2 sm:gap-3 pt-2.5 border-t border-slate-800 text-xs animate-fadeIn">
                 <div className="flex items-center space-x-1.5 flex-shrink-0">
-                  <span className="text-slate-400 font-medium text-[11px] sm:text-xs">Filter:</span>
+                  <span className="text-slate-400 font-medium text-[10px] sm:text-xs">Filter:</span>
                   <select
                     value={filterSharpness}
                     onChange={(e) => { setFilterSharpness(e.target.value); setCurrentPage(1); }}
-                    className="bg-slate-950 border border-slate-800 text-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-emerald-500 text-[11px] sm:text-xs min-w-[130px] touch-manipulation"
+                    className="bg-slate-950 border border-slate-800 text-slate-200 rounded-lg px-2 py-1 focus:outline-none focus:border-emerald-500 text-[10px] sm:text-xs min-w-[110px] touch-manipulation"
                   >
-                    <option value="all">All Photos ({photos.length})</option>
+                    <option value="all">All ({photos.length})</option>
                     <option value="5star">5 Stars (Tack Sharp)</option>
                     <option value="4star">4+ Stars (Sharp)</option>
-                    <option value="soft">1-3 Stars (Blurry / Soft)</option>
+                    <option value="soft">1-3 Stars (Blurry)</option>
                     <option value="unrated">Unrated</option>
                   </select>
                 </div>
 
                 <div className="flex items-center space-x-1.5 flex-shrink-0">
-                  <span className="text-slate-400 font-medium text-[11px] sm:text-xs">Sort:</span>
+                  <span className="text-slate-400 font-medium text-[10px] sm:text-xs">Sort:</span>
                   <select
                     value={sortBy}
                     onChange={(e) => setSortBy(e.target.value)}
-                    className="bg-slate-950 border border-slate-800 text-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-emerald-500 text-[11px] sm:text-xs touch-manipulation"
+                    className="bg-slate-950 border border-slate-800 text-slate-200 rounded-lg px-2 py-1 focus:outline-none focus:border-emerald-500 text-[10px] sm:text-xs touch-manipulation"
                   >
                     <option value="name">File Name</option>
                     <option value="date">Date Captured</option>
@@ -3336,69 +3333,67 @@ JSON Schema:
                   </select>
                 </div>
 
-                <div className="w-px h-5 bg-slate-800 flex-shrink-0 mx-1 hidden sm:block"></div>
+                <div className="w-px h-4 bg-slate-800 flex-shrink-0 mx-0.5"></div>
 
                 <button
                   onClick={handleSelectAll}
                   disabled={!processedPhotos.length}
-                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-semibold rounded-lg transition flex items-center space-x-1 disabled:opacity-50 text-[11px] sm:text-xs flex-shrink-0 touch-manipulation"
+                  className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-semibold rounded-lg transition flex items-center space-x-1 disabled:opacity-50 text-[10px] sm:text-xs flex-shrink-0 touch-manipulation"
                 >
-                  <Icon name="check" className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>{selectedIds.size === processedPhotos.length && processedPhotos.length > 0 ? "Deselect All" : `Select All (${processedPhotos.length})`}</span>
+                  <Icon name="check" className="w-3 h-3 text-emerald-400" />
+                  <span>{selectedIds.size === processedPhotos.length && processedPhotos.length > 0 ? "Deselect" : `Select All (${processedPhotos.length})`}</span>
                 </button>
               </div>
             )}
           </div>
 
           {isSelectionActive && (
-            <div className="bg-emerald-950/90 border border-emerald-500/50 p-2.5 sm:p-3 rounded-2xl shadow-2xl backdrop-blur-md flex items-center justify-between gap-2 z-30 animate-slideUp">
+            <div className="bg-emerald-950/90 border border-emerald-500/50 p-2 sm:p-3 rounded-2xl shadow-2xl backdrop-blur-md flex items-center justify-between gap-2 z-30 animate-slideUp">
               <div className="flex items-center space-x-2 text-xs font-bold text-emerald-300 pl-1">
                 <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
-                <span>{selectedIds.size} Photo{selectedIds.size > 1 ? 's' : ''} Selected</span>
+                <span>{selectedIds.size} Selected</span>
               </div>
 
-              <div className="flex items-center space-x-2">
+              <div className="flex items-center space-x-1.5">
                 <button
                   onClick={handleSelectAll}
-                  className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-slate-300 font-semibold rounded-xl text-xs transition border border-slate-700/80 touch-manipulation"
+                  className="px-2.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-slate-300 font-semibold rounded-xl text-[11px] transition border border-slate-700/80 touch-manipulation"
                 >
                   Deselect
                 </button>
 
                 <button
                   onClick={handleExportFiltered}
-                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-xl text-xs transition shadow flex items-center space-x-1 touch-manipulation"
+                  className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-xl text-[11px] transition shadow flex items-center space-x-1 touch-manipulation"
                 >
                   <Icon name="download" className="w-3.5 h-3.5" />
-                  <span>Save Folder ({selectedIds.size})</span>
+                  <span>Save ({selectedIds.size})</span>
                 </button>
 
                 <button
                   onClick={() => setShowDeleteConfirmModal(true)}
-                  className="px-3 py-1.5 bg-red-600 hover:bg-red-500 text-white font-semibold rounded-xl text-xs transition shadow flex items-center space-x-1 touch-manipulation"
+                  className="px-2.5 py-1.5 bg-red-600 hover:bg-red-500 text-white font-semibold rounded-xl text-[11px] transition shadow flex items-center space-x-1 touch-manipulation"
                 >
                   <Icon name="trash" className="w-3.5 h-3.5" />
-                  <span>Delete Selected ({selectedIds.size})</span>
+                  <span>Delete ({selectedIds.size})</span>
                 </button>
               </div>
             </div>
           )}
 
-          {/* OPTION 3: SWIPE TOAST FEEDBACK NOTIFICATION */}
           {swipeToast && (
             <div className="absolute top-20 left-1/2 -translate-x-1/2 z-40 bg-emerald-900/90 border border-emerald-400 text-white font-bold text-xs px-4 py-2 rounded-full shadow-2xl backdrop-blur-md animate-fadeIn transition-all pointer-events-none">
               {swipeToast}
             </div>
           )}
 
-          {/* THUMBNAIL GRID WITH OPTION 3 TOUCH SWIPE LISTENERS */}
           <div 
             onTouchStart={handleGridTouchStart}
             onTouchEnd={handleGridTouchEnd}
             className="flex-1 overflow-y-auto min-h-0 pr-1 pb-4"
           >
             {paginatedPhotos.length > 0 ? (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-4">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2.5 sm:gap-4">
                 {paginatedPhotos.map(photo => {
                   const currentStars = photo.userStars || photo.stars || scoreToStars(photo.sharpness);
                   const isChecked = selectedIds.has(photo.id);
@@ -3475,13 +3470,12 @@ JSON Schema:
                   );
                 })}
 
-                {/* OPTION 2: INLINE GRID NAVIGATION TILE (SCROLLS WITH GRID, DOES NOT OBSCURA THUMBNAILS) */}
                 {totalPages > 1 && (
-                  <div className="aspect-square bg-slate-900/90 border border-emerald-500/30 rounded-2xl p-3 flex flex-col items-center justify-between shadow-xl text-center">
+                  <div className="aspect-square bg-slate-900/90 border border-emerald-500/30 rounded-2xl p-2.5 sm:p-3 flex flex-col items-center justify-between shadow-xl text-center">
                     <div className="space-y-1 my-auto">
-                      <span className="text-[9px] font-extrabold text-emerald-400 uppercase tracking-widest block">Batch Navigation</span>
+                      <span className="text-[9px] font-extrabold text-emerald-400 uppercase tracking-widest block">Batch Nav</span>
                       <div className="text-xs font-extrabold text-white">Page {currentPage} of {totalPages}</div>
-                      <p className="text-[10px] text-slate-400 leading-tight">Swipe grid left/right or use buttons to switch</p>
+                      <p className="text-[10px] text-slate-400 leading-tight">Swipe grid left/right or use buttons</p>
                     </div>
 
                     <div className="flex items-center space-x-1.5 w-full pt-2 border-t border-slate-800">
@@ -3512,15 +3506,14 @@ JSON Schema:
             )}
           </div>
 
-          {/* BACKGROUND PROCESS STATUS BAR (renders only when background tasks are running) */}
           {showFooterBar && (
-            <div className="flex-shrink-0 flex flex-col sm:flex-row sm:items-center justify-between bg-slate-900 border border-slate-800 p-2.5 sm:p-3 rounded-2xl text-[11px] sm:text-xs gap-2 shadow-xl animate-fadeIn">
+            <div className="flex-shrink-0 flex flex-col sm:flex-row sm:items-center justify-between bg-slate-900 border border-slate-800 p-2 sm:p-3 rounded-2xl text-[11px] sm:text-xs gap-2 shadow-xl animate-fadeIn">
               <div className="flex items-center justify-center sm:justify-start space-x-3 min-w-0 flex-1 px-1">
                 {uploading ? (
                   <div className="flex items-center space-x-2 truncate text-emerald-400 font-medium">
                     <div className="w-3.5 h-3.5 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin flex-shrink-0"></div>
                     <span className="truncate">
-                      Reading & Fingerprinting files: <strong className="font-mono text-white">{uploadProgress.current}</strong>/{uploadProgress.total}
+                      Reading files: <strong className="font-mono text-white">{uploadProgress.current}</strong>/{uploadProgress.total}
                     </span>
                     <button
                       onClick={() => { abortUploadRef.current = true; }}
@@ -3659,10 +3652,8 @@ JSON Schema:
         return () => { delete window.birdvault_open_auth_modal; };
       }, []);
 
-      // Reload & Re-hydration logic: Reload image blobs from OPFS if present, purge unlocatable images
       useEffect(() => {
         async function reloadWorkspaceAndVault() {
-          // 1. Vault Re-hydration & Purge unlocatable
           const savedVault = localStorage.getItem('birdvault_entries_v5');
           if (savedVault) {
             try {
@@ -3714,7 +3705,6 @@ JSON Schema:
             }
           }
 
-          // 2. Workspace Re-hydration & Purge unlocatable
           const fpDb = getStoredFingerprintDb();
           const fingerprintKeys = Object.keys(fpDb);
           const validWorkspacePhotos = [];
@@ -3914,7 +3904,6 @@ JSON Schema:
 
         saveVaultToStorage(updatedEntries);
 
-        // Write physical files to OPFS directory
         if (photoWithAi.file) {
           await writeOpfsSightingFile(category, speciesName, fileName, photoWithAi.file);
         } else if (photoWithAi.blobUrl || photoWithAi.thumbnailUrl || photoWithAi.url) {
@@ -3978,14 +3967,18 @@ JSON Schema:
 
       return (
         <div className="h-full w-full flex flex-col bg-slate-950 text-slate-100 overflow-hidden select-none">
-          <header className="h-14 sm:h-16 border-b border-slate-800 bg-slate-900/90 backdrop-blur-md px-3 sm:px-6 flex items-center justify-between z-30 flex-shrink-0">
-            <div className="flex items-center space-x-2.5">
+          {/* FULLY MOBILE-FRIENDLY RESPONSIVE HEADER TOOLBAR */}
+          <header className="h-14 sm:h-16 border-b border-slate-800 bg-slate-900/90 backdrop-blur-md px-2.5 sm:px-6 flex items-center justify-between z-30 flex-shrink-0 gap-1.5 sm:gap-4">
+            <div className="flex items-center space-x-2 min-w-0">
               <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl sm:rounded-2xl bg-emerald-600/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shadow-lg flex-shrink-0">
-                <Icon name="feather" className="w-5 h-5 sm:w-6 sm:h-6" />
+                <Icon name="feather" className="w-4 h-4 sm:w-6 sm:h-6" />
               </div>
               <div className="truncate">
-                <h1 className="font-extrabold text-white text-sm sm:text-base tracking-tight leading-none">BirdVault <span className="text-emerald-400 font-mono text-[10px] sm:text-xs font-normal">PRO</span></h1>
-                <p className="text-[9px] sm:text-[10px] text-slate-400 truncate">Wildlife AI Assistant</p>
+                <h1 className="font-extrabold text-white text-xs sm:text-base tracking-tight leading-none flex items-center space-x-1">
+                  <span>BirdVault</span>
+                  <span className="text-emerald-400 font-mono text-[9px] sm:text-xs font-normal">PRO</span>
+                </h1>
+                <p className="text-[8px] sm:text-[10px] text-slate-400 truncate">Wildlife AI Assistant</p>
               </div>
             </div>
 
@@ -4006,23 +3999,23 @@ JSON Schema:
               </button>
             </div>
 
-            <div className="flex items-center space-x-2">
+            <div className="flex items-center space-x-1.5 sm:space-x-2">
               <button
                 onClick={() => setShowAuthModal(true)}
-                className={`px-2.5 py-1.5 rounded-xl border text-xs font-semibold flex items-center space-x-1.5 transition touch-manipulation ${userApiKey ? 'bg-slate-950 text-slate-300 border-slate-800 hover:border-emerald-500/50' : 'bg-emerald-600/20 text-emerald-300 border-emerald-500/40 animate-pulse'}`}
+                className={`px-2 sm:px-2.5 py-1.5 rounded-xl border text-[11px] sm:text-xs font-semibold flex items-center space-x-1 transition touch-manipulation ${userApiKey ? 'bg-slate-950 text-slate-300 border-slate-800 hover:border-emerald-500/50' : 'bg-emerald-600/20 text-emerald-300 border-emerald-500/40 animate-pulse'}`}
                 title="Configure Google Gemini API Key"
               >
                 <Icon name="google" className="w-3.5 h-3.5 text-emerald-400" />
-                <span className="text-[11px] font-medium hidden sm:inline">{userApiKey ? 'AI Connected' : 'Connect AI'}</span>
+                <span className="text-[10px] sm:text-[11px] font-medium hidden xs:inline">{userApiKey ? 'AI Connected' : 'Connect AI'}</span>
               </button>
 
               <button
                 onClick={() => setShowTokenModal(true)}
-                className={`px-2.5 py-1.5 rounded-xl border text-xs font-semibold flex items-center space-x-1.5 transition touch-manipulation ${rpmUsedPct > 80 ? 'bg-amber-500/20 text-amber-400 border-amber-500/40 animate-pulse' : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-slate-700'}`}
+                className={`px-2 sm:px-2.5 py-1.5 rounded-xl border text-[11px] sm:text-xs font-semibold flex items-center space-x-1 transition touch-manipulation ${rpmUsedPct > 80 ? 'bg-amber-500/20 text-amber-400 border-amber-500/40 animate-pulse' : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-slate-700'}`}
                 title="View Gemini AI Token & Quota Status"
               >
                 <Icon name="bolt" className={`w-3.5 h-3.5 ${rpmUsedPct > 80 ? 'text-amber-400' : 'text-emerald-400'}`} />
-                <span className="text-[11px] font-mono hidden sm:inline">{100 - rpmUsedPct}% Quota</span>
+                <span className="text-[10px] sm:text-[11px] font-mono hidden xs:inline">{100 - rpmUsedPct}% Quota</span>
               </button>
             </div>
           </header>
@@ -4054,20 +4047,20 @@ JSON Schema:
             )}
           </main>
 
-          <nav className="md:hidden fixed bottom-0 inset-x-0 bg-slate-900/95 border-t border-slate-800 backdrop-blur-lg flex items-center justify-around z-40 px-2 pb-safe shadow-[0_-4px_10px_rgba(0,0,0,0.3)] min-h-[4rem]">
+          <nav className="md:hidden fixed bottom-0 inset-x-0 bg-slate-900/95 border-t border-slate-800 backdrop-blur-lg flex items-center justify-around z-40 px-2 pb-safe shadow-[0_-4px_10px_rgba(0,0,0,0.3)] min-h-[3.8rem]">
             <button
               onClick={() => setActiveTab('vault')}
-              className={`flex flex-col items-center justify-center w-full h-full py-2 space-y-1 transition touch-manipulation ${activeTab === 'vault' ? 'text-emerald-400 font-bold' : 'text-slate-400 hover:text-slate-300'}`}
+              className={`flex flex-col items-center justify-center w-full h-full py-1.5 space-y-0.5 transition touch-manipulation ${activeTab === 'vault' ? 'text-emerald-400 font-bold' : 'text-slate-400 hover:text-slate-300'}`}
             >
-              <Icon name="feather" className="w-5 h-5" />
+              <Icon name="feather" className="w-4 h-4 sm:w-5 sm:h-5" />
               <span className="text-[10px]">Lifer Vault</span>
             </button>
-            <div className="w-px h-8 bg-slate-800"></div>
+            <div className="w-px h-6 bg-slate-800"></div>
             <button
               onClick={() => setActiveTab('culling')}
-              className={`flex flex-col items-center justify-center w-full h-full py-2 space-y-1 transition touch-manipulation ${activeTab === 'culling' ? 'text-emerald-400 font-bold' : 'text-slate-400 hover:text-slate-300'}`}
+              className={`flex flex-col items-center justify-center w-full h-full py-1.5 space-y-0.5 transition touch-manipulation ${activeTab === 'culling' ? 'text-emerald-400 font-bold' : 'text-slate-400 hover:text-slate-300'}`}
             >
-              <Icon name="camera" className="w-5 h-5" />
+              <Icon name="camera" className="w-4 h-4 sm:w-5 sm:h-5" />
               <span className="text-[10px]">Focus Culling</span>
             </button>
           </nav>
