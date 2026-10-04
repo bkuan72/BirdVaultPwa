@@ -1918,6 +1918,19 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
             if (proxyUrl) onUpdatePhoto({ ...photo, blobUrl: proxyUrl });
           });
         }
+        if (!photo.cameraExif && photo.file) {
+          extractCameraExif(photo.file).then((exifData) => {
+            if (exifData) {
+              const updated = {
+                ...photo,
+                cameraExif: exifData,
+                focusSpot: photo.focusSpot || exifData.focusArea || null
+              };
+              onUpdatePhoto(updated);
+              saveFingerprintMetadata(updated);
+            }
+          });
+        }
       }, [photo.id]);
 
       const [panZoom, setPanZoom] = useState({ scale: 1, x: 0, y: 0 });
@@ -3157,26 +3170,51 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
           try {
             const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
             setUploading(true);
-            const newPhotoObjs = [];
             const fpDb = getStoredFingerprintDb();
 
+            // STEP 1: Fast scan for matching image file handles without heavy I/O blocking
+            const fileEntries = [];
             for await (const [name, handle] of dirHandle.entries()) {
               if (handle.kind === 'file' && /\.(jpe?g|png|webp|cr2|nef|arw|dng)$/i.test(name)) {
-                const file = await handle.getFile();
-                file.handle = handle;
+                fileEntries.push({ name, handle });
+              }
+            }
+
+            setUploadProgress({ current: 0, total: fileEntries.length });
+
+            // STEP 2: Quickly collect lightweight File objects
+            const rawPhotoList = [];
+            for (let i = 0; i < fileEntries.length; i++) {
+              try {
+                const file = await fileEntries[i].handle.getFile();
+                file.handle = fileEntries[i].handle;
+                rawPhotoList.push(file);
+              } catch (err) {}
+            }
+
+            // Order files chronologically by creation/last modified timestamp ascending (earliest to latest)
+            rawPhotoList.sort((a, b) => (a.lastModified || 0) - (b.lastModified || 0));
+
+            // Reset workspace list, selection, and page index when a new folder is opened
+            onUpdatePhotos([]);
+            setSelectedIds(new Set());
+            setCurrentPage(1);
+
+            // STEP 3: Stream files into React state in 20-photo chunks so Page 1 renders instantly
+            const total = rawPhotoList.length;
+            const CHUNK_SIZE = 20;
+
+            let isFirstChunk = true;
+            for (let i = 0; i < total; i += CHUNK_SIZE) {
+              const chunkFiles = rawPhotoList.slice(i, i + CHUNK_SIZE);
+              const chunkObjs = chunkFiles.map(file => {
                 const fpId = generateFingerprintId(file);
                 const savedMeta = fpDb[fpId] || {};
-
-                let cameraExif = savedMeta.cameraExif || null;
-                if (!cameraExif) {
-                  cameraExif = await extractCameraExif(file);
-                }
-
                 const photoObj = {
                   id: fpId,
                   fingerprintId: fpId,
                   file: file,
-                  fileHandle: handle,
+                  fileHandle: file.handle || null,
                   name: file.name,
                   size: file.size,
                   lastModified: file.lastModified,
@@ -3188,24 +3226,32 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                   sharpness: savedMeta.sharpness !== undefined ? savedMeta.sharpness : null,
                   stars: savedMeta.stars !== undefined ? savedMeta.stars : null,
                   userStars: savedMeta.userStars !== undefined ? savedMeta.userStars : null,
-                  focusSpot: savedMeta.focusSpot || cameraExif?.focusArea || null,
-                  cameraExif: cameraExif,
+                  focusSpot: savedMeta.focusSpot || savedMeta.cameraExif?.focusArea || null,
+                  cameraExif: savedMeta.cameraExif || null, // Deferred until preview/inspection
                   identification: savedMeta.identification || null,
                   cropBox: savedMeta.cropBox || null,
                   locationText: savedMeta.locationText || null,
                   opfsFileName: savedMeta.opfsFileName || null
                 };
-
                 saveFingerprintMetadata(photoObj);
-                newPhotoObjs.push(photoObj);
-              }
-            }
+                return photoObj;
+              });
 
-            onUpdatePhotos(prev => {
-              const existingIds = new Set(prev.map(p => p.id));
-              const filteredNew = newPhotoObjs.filter(p => !existingIds.has(p.id));
-              return [...filteredNew, ...prev];
-            });
+              if (isFirstChunk) {
+                onUpdatePhotos(chunkObjs);
+                isFirstChunk = false;
+              } else {
+                onUpdatePhotos(prev => {
+                  const existingIds = new Set(prev.map(p => p.id));
+                  const filteredNew = chunkObjs.filter(p => !existingIds.has(p.id));
+                  return [...prev, ...filteredNew];
+                });
+              }
+
+              setUploadProgress({ current: Math.min(i + CHUNK_SIZE, total), total });
+              // Yield UI thread briefly so the user can interact with Page 1 immediately
+              await new Promise(r => setTimeout(r, 10));
+            }
 
             setUploading(false);
             return;
@@ -3228,59 +3274,69 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
 
         setUploading(true);
         abortUploadRef.current = false;
+
+        // Reset workspace list, selection, and page index when new files are opened
+        onUpdatePhotos([]);
+        setSelectedIds(new Set());
+        setCurrentPage(1);
+
+        // Sort by creation/modified date ascending by default
+        files.sort((a, b) => (a.lastModified || 0) - (b.lastModified || 0));
+
         setUploadProgress({ current: 0, total: files.length });
 
         const fpDb = getStoredFingerprintDb();
-        const newPhotoObjs = [];
+        const total = files.length;
+        const CHUNK_SIZE = 20;
 
-        for (let i = 0; i < files.length; i++) {
+        let isFirstChunk = true;
+        for (let i = 0; i < total; i += CHUNK_SIZE) {
           if (abortUploadRef.current) break;
-          const file = files[i];
+          const chunkFiles = files.slice(i, i + CHUNK_SIZE);
+          const chunkObjs = chunkFiles.map(file => {
+            const fpId = generateFingerprintId(file);
+            const savedMeta = fpDb[fpId] || {};
+            const photoObj = {
+              id: fpId,
+              fingerprintId: fpId,
+              file: file,
+              fileHandle: file.handle || null,
+              name: file.name,
+              size: file.size,
+              lastModified: file.lastModified,
+              url: null,
+              blobUrl: null,
+              thumbnailUrl: null,
+              naturalWidth: 1000,
+              naturalHeight: 750,
+              sharpness: savedMeta.sharpness !== undefined ? savedMeta.sharpness : null,
+              stars: savedMeta.stars !== undefined ? savedMeta.stars : null,
+              userStars: savedMeta.userStars !== undefined ? savedMeta.userStars : null,
+              focusSpot: savedMeta.focusSpot || savedMeta.cameraExif?.focusArea || null,
+              cameraExif: savedMeta.cameraExif || null,
+              identification: savedMeta.identification || null,
+              cropBox: savedMeta.cropBox || null,
+              locationText: savedMeta.locationText || null,
+              opfsFileName: savedMeta.opfsFileName || null
+            };
+            saveFingerprintMetadata(photoObj);
+            return photoObj;
+          });
 
-          const fpId = generateFingerprintId(file);
-          const savedMeta = fpDb[fpId] || {};
-
-          let cameraExif = savedMeta.cameraExif || null;
-          if (!cameraExif) {
-            cameraExif = await extractCameraExif(file);
+          if (isFirstChunk) {
+            onUpdatePhotos(chunkObjs);
+            isFirstChunk = false;
+          } else {
+            onUpdatePhotos(prev => {
+              const existingIds = new Set(prev.map(p => p.id));
+              const filteredNew = chunkObjs.filter(p => !existingIds.has(p.id));
+              return [...prev, ...filteredNew];
+            });
           }
 
-          const photoObj = {
-            id: fpId,
-            fingerprintId: fpId,
-            file: file,
-            fileHandle: file.handle || null,
-            name: file.name,
-            size: file.size,
-            lastModified: file.lastModified,
-            url: null,
-            blobUrl: null,
-            thumbnailUrl: null,
-            naturalWidth: 1000,
-            naturalHeight: 750,
-            sharpness: savedMeta.sharpness !== undefined ? savedMeta.sharpness : null,
-            stars: savedMeta.stars !== undefined ? savedMeta.stars : null,
-            userStars: savedMeta.userStars !== undefined ? savedMeta.userStars : null,
-            focusSpot: savedMeta.focusSpot || cameraExif?.focusArea || null,
-            cameraExif: cameraExif,
-            identification: savedMeta.identification || null,
-            cropBox: savedMeta.cropBox || null,
-            locationText: savedMeta.locationText || null,
-            opfsFileName: savedMeta.opfsFileName || null
-          };
-
-          saveFingerprintMetadata(photoObj);
-          newPhotoObjs.push(photoObj);
-
-          setUploadProgress({ current: i + 1, total: files.length });
-          if (i % 20 === 0) await new Promise(r => setTimeout(r, 0));
+          setUploadProgress({ current: Math.min(i + CHUNK_SIZE, total), total });
+          await new Promise(r => setTimeout(r, 10));
         }
-
-        onUpdatePhotos(prev => {
-          const existingIds = new Set(prev.map(p => p.id));
-          const filteredNew = newPhotoObjs.filter(p => !existingIds.has(p.id));
-          return [...filteredNew, ...prev];
-        });
 
         setUploading(false);
         if (fileInputRef.current) fileInputRef.current.value = '';
@@ -3621,8 +3677,10 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                     onChange={(e) => setSortBy(e.target.value)}
                     className="bg-slate-950 border border-slate-800 text-slate-200 rounded-lg px-2 py-1 focus:outline-none focus:border-emerald-500 text-[10px] sm:text-xs touch-manipulation"
                   >
+                    <option value="default">Default Order (Date Ascending)</option>
                     <option value="name">File Name</option>
-                    <option value="date">Captured Date (EXIF / Created)</option>
+                    <option value="date_asc">Captured Date (Oldest First)</option>
+                    <option value="date_desc">Captured Date (Newest First)</option>
                     <option value="sharpness">Sharpness Score</option>
                   </select>
                 </div>
@@ -4067,10 +4125,14 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
           list = list.filter(p => p.sharpness === null && p.userStars === null);
         }
 
-        if (sortBy === 'name') {
+        if (sortBy === 'default') {
+          // Keep natural streaming order (Created Date Ascending)
+        } else if (sortBy === 'name') {
           list.sort((a, b) => a.name.localeCompare(b.name));
-        } else if (sortBy === 'date') {
-          list.sort((a, b) => b.lastModified - a.lastModified);
+        } else if (sortBy === 'date_asc') {
+          list.sort((a, b) => (a.lastModified || 0) - (b.lastModified || 0));
+        } else if (sortBy === 'date_desc') {
+          list.sort((a, b) => (b.lastModified || 0) - (a.lastModified || 0));
         } else if (sortBy === 'sharpness') {
           list.sort((a, b) => {
             const scoreA = a.sharpness !== null ? a.sharpness : (a.userStars ? a.userStars * 2 : 0);
