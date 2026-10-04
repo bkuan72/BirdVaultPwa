@@ -158,6 +158,7 @@
     };
 
     const BATCH_PAGE_SIZE = 20;
+    const TIMELINE_PAGE_SIZE = 10;
     const MIN_CROP_DIMENSION_PCT = 2.0;
 
     function scoreToStars(score) {
@@ -2005,7 +2006,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
       }
     }
 
-    function InteractivePhotoViewer({ photo, onClose, onUpdatePhoto, onSaveToVault, onDeletePhoto, userApiKey, initialLocation = '', onUpdateLocation, onNextPhoto, onPrevPhoto, hasNext = false, hasPrev = false }) {
+    function InteractivePhotoViewer({ photo, onClose, onUpdatePhoto, onSaveToVault, onDeletePhoto, userApiKey, initialLocation = '', onUpdateLocation, onNextPhoto, onPrevPhoto, hasNext = false, hasPrev = false, vaultEntries = [] }) {
       const [loupeImgPos, setLoupeImgPos] = useState({ xPct: 50, yPct: 50 });
       const [loupeScreenPos, setLoupeScreenPos] = useState({ x: 0, y: 0 });
       const [isLoupeActive, setIsLoupeActive] = useState(false);
@@ -2014,6 +2015,9 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
       const [zoomLevel, setZoomLevel] = useState(3.0);
       const [showMobileSidebar, setShowMobileSidebar] = useState(false);
       const [showHeatmapOverlay, setShowHeatmapOverlay] = useState(true);
+
+      const [showCongratModal, setShowCongratModal] = useState(false);
+      const [congratData, setCongratData] = useState(null);
 
       const loupeCanvasRef = useRef(null);
       const cachedLoupeImgRef = useRef(null);
@@ -2395,6 +2399,16 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
         const updated = { ...currentPhoto, identification: result, cropBox: cropBox, locationText: locationInput, focusSpot: updatedFocusSpot };
         onUpdatePhoto(updated);
         saveFingerprintMetadata(updated);
+
+        if (result && !result.error && result.speciesName) {
+          const isLifer = !vaultEntries.some(
+            e => e.speciesName.toLowerCase() === result.speciesName.toLowerCase()
+          );
+          if (isLifer) {
+            setCongratData({ photoMeta: updated, result });
+            setShowCongratModal(true);
+          }
+        }
       };
 
       const formattedDate = useMemo(() => {
@@ -2899,12 +2913,75 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
               </div>
             </Accordion>
           </div>
+
+          {showCongratModal && congratData && (
+            <div className="fixed inset-0 z-[70] bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 animate-fadeIn">
+              <div className="bg-slate-900 border border-emerald-500/40 rounded-3xl p-5 sm:p-6 max-w-md w-full shadow-2xl space-y-4 text-center relative overflow-hidden">
+                <div className="absolute -top-12 -right-12 w-32 h-32 bg-emerald-500/10 rounded-full blur-2xl pointer-events-none"></div>
+                
+                <div className="w-16 h-16 rounded-2xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-3xl mx-auto shadow-lg">
+                  🎉
+                </div>
+
+                <div className="space-y-1">
+                  <span className="text-[10px] uppercase font-extrabold tracking-wider text-emerald-400 bg-emerald-950/80 border border-emerald-500/30 px-2.5 py-1 rounded-full inline-block">
+                    New Lifer Species Discovered!
+                  </span>
+                  <h3 className="text-lg sm:text-xl font-extrabold text-white pt-1">
+                    {congratData.result.speciesName}
+                  </h3>
+                  <p className="text-xs text-slate-400 italic font-mono">
+                    {congratData.result.scientificName}
+                  </p>
+                </div>
+
+                <p className="text-xs text-slate-300 leading-relaxed bg-slate-950/80 p-3.5 rounded-2xl border border-slate-800 text-left">
+                  Congratulations! This bird species is not currently in your Lifer Vault catalog. Would you like to add this sighting to your permanent master life-list?
+                </p>
+
+                <div className="flex flex-col sm:flex-row items-center gap-2 pt-2 border-t border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => setShowCongratModal(false)}
+                    className="w-full sm:w-1/2 py-2.5 px-3 bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs rounded-xl transition touch-manipulation"
+                  >
+                    Do Not Add
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowCongratModal(false);
+                      onSaveToVault(congratData.photoMeta);
+                    }}
+                    className="w-full sm:w-1/2 py-2.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-lg transition flex items-center justify-center space-x-1.5 touch-manipulation"
+                  >
+                    <Icon name="check" className="w-4 h-4" />
+                    <span>Add to Lifer Vault</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       );
     }
 
     function SpeciesVaultCard({ entry, workspacePhotosMap, vaultImageUrls, isExpanded, onToggleExpand, onDeleteSpecies, onDeleteSighting, onSelectPhoto }) {
       const [selectedSightingId, setSelectedSightingId] = useState(entry.sightings[0]?.id || null);
+      const [timelinePage, setTimelinePage] = useState(1);
+
+      const totalTimelinePages = Math.ceil(entry.sightings.length / TIMELINE_PAGE_SIZE) || 1;
+
+      useEffect(() => {
+        if (timelinePage > totalTimelinePages) {
+          setTimelinePage(Math.max(1, totalTimelinePages));
+        }
+      }, [entry.sightings.length, totalTimelinePages, timelinePage]);
+
+      const paginatedSightings = useMemo(() => {
+        const start = (timelinePage - 1) * TIMELINE_PAGE_SIZE;
+        return entry.sightings.slice(start, start + TIMELINE_PAGE_SIZE);
+      }, [entry.sightings, timelinePage]);
 
       const activeSighting = useMemo(() => {
         return entry.sightings.find(s => s.id === selectedSightingId) || entry.sightings[0] || {};
@@ -3042,8 +3119,8 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Sightings Timeline</span>
                   <span className="text-[10px] font-mono text-emerald-400">{entry.sightings.length} Logged</span>
                 </div>
-                <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
-                  {entry.sightings.map(s => {
+                <div className="space-y-1.5 max-h-60 overflow-y-auto pr-1">
+                  {paginatedSightings.map(s => {
                     const sPhoto = s.photo || {};
                     const cameraExif = sPhoto.cameraExif;
                     const isSelected = s.id === activeSighting.id;
@@ -3135,6 +3212,36 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                     );
                   })}
                 </div>
+
+                {totalTimelinePages > 1 && (
+                  <div className="flex items-center justify-between pt-1.5 text-[10px] border-t border-slate-800/80">
+                    <button
+                      type="button"
+                      disabled={timelinePage === 1}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setTimelinePage(p => Math.max(1, p - 1));
+                      }}
+                      className="px-2 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed text-slate-300 rounded font-semibold transition touch-manipulation"
+                    >
+                      ← Prev
+                    </button>
+                    <span className="text-slate-400 font-mono">
+                      Page <strong className="text-slate-200">{timelinePage}</strong> / {totalTimelinePages}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={timelinePage === totalTimelinePages}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setTimelinePage(p => Math.min(totalTimelinePages, p + 1));
+                      }}
+                      className="px-2 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed text-slate-300 rounded font-semibold transition touch-manipulation"
+                    >
+                      Next →
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -4685,6 +4792,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                 onPrevPhoto={() => hasPrev && setSelectedPhoto(processedPhotos[selectedIndex - 1])}
                 hasNext={hasNext}
                 hasPrev={hasPrev}
+                vaultEntries={vaultEntries}
               />
             );
           })()}
