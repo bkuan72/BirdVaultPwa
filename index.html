@@ -2724,6 +2724,30 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
       const [searchQuery, setSearchQuery] = useState('');
       const [expandedSpecies, setExpandedSpecies] = useState(null);
       const [isExportingOpfs, setIsExportingOpfs] = useState(false);
+      const [vaultImageUrls, setVaultImageUrls] = useState({});
+
+      // Auto-hydrate missing sighting thumbnails from OPFS / IndexedDB storage
+      useEffect(() => {
+        let isMounted = true;
+        async function hydrateMissingImages() {
+          for (const entry of vaultEntries) {
+            for (const s of (entry.sightings || [])) {
+              const opfsName = s.opfsFileName || s.photo?.opfsFileName || (s.photo ? `${s.photo.name}` : null);
+              const key = `${entry.category}_${entry.speciesName}_${s.id}`;
+              
+              if (opfsName && !vaultImageUrls[key] && !s.photo?.thumbnailUrl) {
+                const blob = await getOpfsSightingFileBlob(entry.category, entry.speciesName, opfsName);
+                if (blob && isMounted) {
+                  const freshUrl = URL.createObjectURL(blob);
+                  setVaultImageUrls(prev => ({ ...prev, [key]: freshUrl }));
+                }
+              }
+            }
+          }
+        }
+        hydrateMissingImages();
+        return () => { isMounted = false; };
+      }, [vaultEntries]);
 
       const workspacePhotosMap = useMemo(() => {
         const map = new Map();
@@ -2835,11 +2859,16 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                   const fpId = primarySighting.photoFingerprintId || savedPhoto.fingerprintId || savedPhoto.id;
 
                   const livePhoto = workspacePhotosMap.get(fpId);
-                  const photoObj = livePhoto || savedPhoto;
+                  const sightingKey = `${entry.category}_${entry.speciesName}_${primarySighting.id}`;
+                  const hydratedUrl = vaultImageUrls[sightingKey];
+
+                  const photoObj = livePhoto || (hydratedUrl ? { ...savedPhoto, thumbnailUrl: hydratedUrl, blobUrl: hydratedUrl, url: hydratedUrl } : savedPhoto);
 
                   let activeSrc = null;
                   if (livePhoto && (livePhoto.thumbnailUrl || livePhoto.blobUrl || livePhoto.url)) {
                     activeSrc = livePhoto.thumbnailUrl || livePhoto.blobUrl || livePhoto.url;
+                  } else if (hydratedUrl) {
+                    activeSrc = hydratedUrl;
                   } else if (savedPhoto && (savedPhoto.thumbnailUrl || savedPhoto.blobUrl || savedPhoto.url)) {
                     activeSrc = savedPhoto.thumbnailUrl || savedPhoto.blobUrl || savedPhoto.url;
                   }
@@ -4060,6 +4089,27 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
         const sightingId = 'sighting_' + Math.random().toString(36).substring(2, 9);
         const fileName = `${new Date().toISOString().split('T')[0]}_${sightingId}.jpg`;
 
+        // 1. Fetch or prepare the binary blob before state transition
+        let liveBlobUrl = photoWithAi.blobUrl || photoWithAi.thumbnailUrl || photoWithAi.url;
+        let blobToWrite = photoWithAi.file;
+
+        if (!blobToWrite && liveBlobUrl) {
+          try {
+            const res = await fetch(liveBlobUrl);
+            blobToWrite = await res.blob();
+          } catch (err) {
+            console.warn('Could not fetch blob for vault write:', err);
+          }
+        }
+
+        // 2. Commit physical binary to OPFS & IndexedDB vault storage
+        if (blobToWrite) {
+          await writeOpfsSightingFile(category, speciesName, fileName, blobToWrite);
+          if (blobToWrite instanceof Blob || blobToWrite instanceof File) {
+            liveBlobUrl = URL.createObjectURL(blobToWrite);
+          }
+        }
+
         const sanitizeUrl = (u) => (u && typeof u === 'string' && !u.startsWith('blob:')) ? u : null;
 
         const cleanPhotoMeta = {
@@ -4083,7 +4133,23 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
 
         saveFingerprintMetadata(cleanPhotoMeta);
 
-        const newSighting = {
+        // 3. Construct state sighting with live Blob URL for immediate UI display
+        const statePhotoMeta = {
+          ...cleanPhotoMeta,
+          thumbnailUrl: liveBlobUrl,
+          blobUrl: liveBlobUrl,
+          url: liveBlobUrl
+        };
+
+        const newSightingForState = {
+          id: sightingId,
+          date: Date.now(),
+          opfsFileName: fileName,
+          photoFingerprintId: fpId,
+          photo: statePhotoMeta
+        };
+
+        const newSightingForStorage = {
           id: sightingId,
           date: Date.now(),
           opfsFileName: fileName,
@@ -4093,19 +4159,30 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
 
         const existingIdx = vaultEntries.findIndex(e => e.speciesName.toLowerCase() === speciesName.toLowerCase());
 
-        let updatedEntries = [...vaultEntries];
+        let stateEntries = [...vaultEntries];
+        let storageEntries = [...vaultEntries];
+
         if (existingIdx >= 0) {
-          updatedEntries[existingIdx] = {
-            ...updatedEntries[existingIdx],
-            description: idInfo.description || updatedEntries[existingIdx].description || '',
-            habitat: idInfo.habitat || updatedEntries[existingIdx].habitat || '',
-            conservationStatus: idInfo.conservationStatus || updatedEntries[existingIdx].conservationStatus || '',
-            diet: idInfo.diet || updatedEntries[existingIdx].diet || '',
-            keyTraits: idInfo.keyTraits || updatedEntries[existingIdx].keyTraits || '',
-            sightings: [newSighting, ...updatedEntries[existingIdx].sightings]
+          stateEntries[existingIdx] = {
+            ...stateEntries[existingIdx],
+            description: idInfo.description || stateEntries[existingIdx].description || '',
+            habitat: idInfo.habitat || stateEntries[existingIdx].habitat || '',
+            conservationStatus: idInfo.conservationStatus || stateEntries[existingIdx].conservationStatus || '',
+            diet: idInfo.diet || stateEntries[existingIdx].diet || '',
+            keyTraits: idInfo.keyTraits || stateEntries[existingIdx].keyTraits || '',
+            sightings: [newSightingForState, ...stateEntries[existingIdx].sightings]
+          };
+          storageEntries[existingIdx] = {
+            ...storageEntries[existingIdx],
+            description: idInfo.description || storageEntries[existingIdx].description || '',
+            habitat: idInfo.habitat || storageEntries[existingIdx].habitat || '',
+            conservationStatus: idInfo.conservationStatus || storageEntries[existingIdx].conservationStatus || '',
+            diet: idInfo.diet || storageEntries[existingIdx].diet || '',
+            keyTraits: idInfo.keyTraits || storageEntries[existingIdx].keyTraits || '',
+            sightings: [newSightingForStorage, ...storageEntries[existingIdx].sightings]
           };
         } else {
-          updatedEntries.unshift({
+          const newSpeciesState = {
             speciesName,
             scientificName,
             category,
@@ -4114,17 +4191,26 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
             conservationStatus: idInfo.conservationStatus || '',
             diet: idInfo.diet || '',
             keyTraits: idInfo.keyTraits || '',
-            sightings: [newSighting]
-          });
+            sightings: [newSightingForState]
+          };
+          const newSpeciesStorage = {
+            speciesName,
+            scientificName,
+            category,
+            description: idInfo.description || '',
+            habitat: idInfo.habitat || '',
+            conservationStatus: idInfo.conservationStatus || '',
+            diet: idInfo.diet || '',
+            keyTraits: idInfo.keyTraits || '',
+            sightings: [newSightingForStorage]
+          };
+          stateEntries.unshift(newSpeciesState);
+          storageEntries.unshift(newSpeciesStorage);
         }
 
-        saveVaultToStorage(updatedEntries);
-
-        if (photoWithAi.file) {
-          await writeOpfsSightingFile(category, speciesName, fileName, photoWithAi.file);
-        } else if (photoWithAi.blobUrl || photoWithAi.thumbnailUrl || photoWithAi.url) {
-          await writeOpfsSightingFile(category, speciesName, fileName, photoWithAi.blobUrl || photoWithAi.thumbnailUrl || photoWithAi.url);
-        }
+        // 4. Save sanitized version to localStorage and active live version to React state
+        saveVaultToStorage(storageEntries);
+        setVaultEntries(stateEntries);
 
         await writeOpfsSightingFile(category, speciesName, 'species_info.json', {
           speciesName,
