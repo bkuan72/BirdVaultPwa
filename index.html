@@ -173,7 +173,7 @@
 
     const OPFS_VAULT_ROOT = 'BirdVault_Lifer_Catalog';
     const IDB_NAME = 'BirdVault_Storage_DB';
-    const IDB_VERSION = 1;
+    const IDB_VERSION = 2; // Incremented for micro-thumbnail cache support
 
     function openBirdVaultDb() {
       return new Promise((resolve) => {
@@ -183,6 +183,9 @@
           const db = e.target.result;
           if (!db.objectStoreNames.contains('vault_blobs')) {
             db.createObjectStore('vault_blobs');
+          }
+          if (!db.objectStoreNames.contains('birdvault_thumbs')) {
+            db.createObjectStore('birdvault_thumbs');
           }
         };
         request.onsuccess = (e) => resolve(e.target.result);
@@ -223,6 +226,22 @@
         });
       } catch (e) {
         return null;
+      }
+    }
+
+    async function deleteFromIdb(storeName, key) {
+      try {
+        const db = await openBirdVaultDb();
+        if (!db) return false;
+        return new Promise((resolve) => {
+          const tx = db.transaction(storeName, 'readwrite');
+          const store = tx.objectStore(storeName);
+          const req = store.delete(key);
+          req.onsuccess = () => resolve(true);
+          req.onerror = () => resolve(false);
+        });
+      } catch (e) {
+        return false;
       }
     }
 
@@ -410,6 +429,7 @@
           delete db[fpId];
           localStorage.setItem('birdvault_fingerprints_v1', JSON.stringify(db));
         }
+        deleteFromIdb('birdvault_thumbs', fpId);
       } catch (e) {
         console.warn('Fingerprint DB delete warning:', e);
       }
@@ -423,6 +443,7 @@
         Object.keys(db).forEach(fpId => {
           if (!activeIds.has(fpId)) {
             delete db[fpId];
+            deleteFromIdb('birdvault_thumbs', fpId);
             changed = true;
           }
         });
@@ -473,6 +494,99 @@
       localStorage.setItem('birdvault_gemini_usage', JSON.stringify(usage));
       window.dispatchEvent(new Event('birdvault_token_update'));
       return usage;
+    }
+
+    // Phase 1 Optimization: Direct EXIF APP1 Header Embedded Thumbnail Slicing (< 64 KB binary read)
+    async function extractExifEmbeddedThumbnail(file) {
+      if (!file || !(file instanceof File)) return null;
+      const sliceSize = Math.min(65536, file.size);
+      const blobSlice = file.slice(0, sliceSize);
+
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          try {
+            const view = new DataView(e.target.result);
+            if (view.byteLength < 12 || view.getUint16(0, false) !== 0xFFD8) return resolve(null);
+
+            let offset = 2;
+            let app1Offset = -1;
+
+            while (offset < view.byteLength - 4) {
+              const marker = view.getUint16(offset, false);
+              offset += 2;
+              if (marker === 0xFFE1) {
+                const length = view.getUint16(offset, false);
+                if (view.getUint32(offset + 2, false) === 0x45786966) { // 'Exif'
+                  app1Offset = offset + 2;
+                  break;
+                }
+                offset += length;
+              } else if ((marker & 0xFF00) === 0xFF00 && marker !== 0xFF00) {
+                const length = view.getUint16(offset, false);
+                offset += length;
+              } else {
+                break;
+              }
+            }
+
+            if (app1Offset === -1) return resolve(null);
+
+            const tiffOffset = app1Offset + 6;
+            if (tiffOffset + 8 > view.byteLength) return resolve(null);
+
+            const littleEndian = view.getUint16(tiffOffset, false) === 0x4949;
+            if (view.getUint16(tiffOffset + 2, littleEndian) !== 0x002A) return resolve(null);
+
+            const firstIFDOffset = view.getUint32(tiffOffset + 4, littleEndian);
+            if (!firstIFDOffset || tiffOffset + firstIFDOffset + 2 > view.byteLength) return resolve(null);
+
+            const ifd0Entries = view.getUint16(tiffOffset + firstIFDOffset, littleEndian);
+            const ifd0NextPtr = tiffOffset + firstIFDOffset + 2 + (ifd0Entries * 12);
+
+            if (ifd0NextPtr + 4 > view.byteLength) return resolve(null);
+            const ifd1Offset = view.getUint32(ifd0NextPtr, littleEndian);
+            if (!ifd1Offset || tiffOffset + ifd1Offset + 2 > view.byteLength) return resolve(null);
+
+            const ifd1Entries = view.getUint16(tiffOffset + ifd1Offset, littleEndian);
+            let entryOffset = tiffOffset + ifd1Offset + 2;
+
+            let thumbOffset = null;
+            let thumbLength = null;
+
+            for (let i = 0; i < ifd1Entries; i++) {
+              if (entryOffset + 12 > view.byteLength) break;
+              const tag = view.getUint16(entryOffset, littleEndian);
+              const val = view.getUint32(entryOffset + 8, littleEndian);
+              if (tag === 0x0201) thumbOffset = tiffOffset + val;
+              if (tag === 0x0202) thumbLength = val;
+              entryOffset += 12;
+            }
+
+            if (thumbOffset && thumbLength && thumbOffset + thumbLength <= file.size) {
+              if (thumbOffset + thumbLength > view.byteLength) {
+                const fullReader = new FileReader();
+                fullReader.onload = (e2) => {
+                  const thumbBlob = new Blob([e2.target.result], { type: 'image/jpeg' });
+                  resolve(thumbBlob);
+                };
+                fullReader.onerror = () => resolve(null);
+                fullReader.readAsArrayBuffer(file.slice(thumbOffset, thumbOffset + thumbLength));
+              } else {
+                const thumbBytes = new Uint8Array(e.target.result, thumbOffset, thumbLength);
+                const thumbBlob = new Blob([thumbBytes], { type: 'image/jpeg' });
+                resolve(thumbBlob);
+              }
+            } else {
+              resolve(null);
+            }
+          } catch (err) {
+            resolve(null);
+          }
+        };
+        reader.onerror = () => resolve(null);
+        reader.readAsArrayBuffer(blobSlice);
+      });
     }
 
     async function extractCameraExif(file) {
@@ -706,7 +820,42 @@
       });
     }
 
-    async function generateFastThumbnail(file, targetSize = 240) {
+    // Fast Micro-Thumbnail Pipeline (EXIF APP1 slice -> IndexedDB micro-cache -> createImageBitmap fallback)
+    async function generateFastThumbnail(photo, targetSize = 240) {
+      const fpId = photo.fingerprintId || photo.id;
+      const file = photo.file;
+
+      // 1. IndexedDB micro-thumbnail cache check
+      if (fpId) {
+        const cachedBlob = await getBlobFromIdb('birdvault_thumbs', fpId);
+        if (cachedBlob && cachedBlob.size > 50) {
+          return {
+            thumbUrl: URL.createObjectURL(cachedBlob),
+            width: targetSize,
+            height: targetSize
+          };
+        }
+      }
+
+      if (!file) {
+        if (photo.thumbnailUrl) return { thumbUrl: photo.thumbnailUrl, width: 240, height: 240 };
+        return { thumbUrl: photo.url || '', width: 240, height: 240 };
+      }
+
+      // 2. EXIF APP1 header slice (Fast Path: ~2ms extraction)
+      try {
+        const exifThumbBlob = await extractExifEmbeddedThumbnail(file);
+        if (exifThumbBlob && exifThumbBlob.size > 500) {
+          if (fpId) saveBlobToIdb('birdvault_thumbs', fpId, exifThumbBlob);
+          return {
+            thumbUrl: URL.createObjectURL(exifThumbBlob),
+            width: targetSize,
+            height: targetSize
+          };
+        }
+      } catch (e) {}
+
+      // 3. Fallback Path: createImageBitmap scaling & JPEG compression
       try {
         if ('createImageBitmap' in window) {
           const bitmap = await createImageBitmap(file, {
@@ -727,6 +876,7 @@
             canvas.toBlob((blob) => {
               canvas.width = 0; canvas.height = 0;
               if (blob) {
+                if (fpId) saveBlobToIdb('birdvault_thumbs', fpId, blob);
                 resolve({
                   thumbUrl: URL.createObjectURL(blob),
                   width: canvas.width,
@@ -784,7 +934,7 @@
       let index = 0;
       let completed = 0;
       const total = neededPhotos.length;
-      const concurrency = 2;
+      const concurrency = 4; // Parallelized worker queue
 
       let pendingBatch = [];
 
@@ -797,7 +947,7 @@
             const currentPhoto = neededPhotos[index++];
             let thumbUrl = null;
             try {
-              const res = await generateFastThumbnail(currentPhoto.file, 240);
+              const res = await generateFastThumbnail(currentPhoto, 240);
               thumbUrl = res.thumbUrl;
               pendingBatch.push({
                 id: currentPhoto.id,
@@ -2343,7 +2493,6 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                 />
               </div>
 
-              {/* Left-Hand Ergonomic Navigation Controller */}
               <div className="absolute left-3 sm:left-5 top-1/2 -translate-y-1/2 z-30 flex flex-col items-center space-y-2.5 bg-slate-900/90 p-2 sm:p-2.5 rounded-2xl border border-slate-700/90 backdrop-blur-md shadow-2xl">
                 <button
                   onClick={(e) => {
@@ -2356,7 +2505,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                       ? 'bg-slate-800 hover:bg-emerald-600 text-slate-100 border-slate-700 hover:border-emerald-500 shadow-md active:scale-95' 
                       : 'bg-slate-900/50 text-slate-600 border-slate-800/50 opacity-30 cursor-not-allowed'
                   }`}
-                  title="Previous Photo (Left Finger / Thumb)"
+                  title="Previous Photo"
                 >
                   <Icon name="chevronLeft" className="w-5 h-5 sm:w-6 sm:h-6" />
                 </button>
@@ -2374,7 +2523,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                       ? 'bg-slate-800 hover:bg-emerald-600 text-slate-100 border-slate-700 hover:border-emerald-500 shadow-md active:scale-95' 
                       : 'bg-slate-900/50 text-slate-600 border-slate-800/50 opacity-30 cursor-not-allowed'
                   }`}
-                  title="Next Photo (Left Finger / Thumb)"
+                  title="Next Photo"
                 >
                   <Icon name="chevronRight" className="w-5 h-5 sm:w-6 sm:h-6" />
                 </button>
@@ -2759,7 +2908,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
       );
     }
 
-    function LiferVaultView({ vaultEntries, photos = [], onDeleteSighting, onDeleteSpecies, onSelectPhoto, onUpdateSpeciesNotes }) {
+    function LiferVaultView({ vaultEntries, photos = [], onDeleteSighting, onDeleteSpecies, onSelectPhoto }) {
       const [selectedCategory, setSelectedCategory] = useState('All');
       const [searchQuery, setSearchQuery] = useState('');
       const [expandedSpecies, setExpandedSpecies] = useState(null);
@@ -3172,7 +3321,6 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
             setUploading(true);
             const fpDb = getStoredFingerprintDb();
 
-            // STEP 1: Fast scan for matching image file handles without heavy I/O blocking
             const fileEntries = [];
             for await (const [name, handle] of dirHandle.entries()) {
               if (handle.kind === 'file' && /\.(jpe?g|png|webp|cr2|nef|arw|dng)$/i.test(name)) {
@@ -3182,7 +3330,6 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
 
             setUploadProgress({ current: 0, total: fileEntries.length });
 
-            // STEP 2: Quickly collect lightweight File objects
             const rawPhotoList = [];
             for (let i = 0; i < fileEntries.length; i++) {
               try {
@@ -3192,15 +3339,12 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
               } catch (err) {}
             }
 
-            // Order files chronologically by creation/last modified timestamp ascending (earliest to latest)
             rawPhotoList.sort((a, b) => (a.lastModified || 0) - (b.lastModified || 0));
 
-            // Reset workspace list, selection, and page index when a new folder is opened
             onUpdatePhotos([]);
             setSelectedIds(new Set());
             setCurrentPage(1);
 
-            // STEP 3: Stream files into React state in 20-photo chunks so Page 1 renders instantly
             const total = rawPhotoList.length;
             const CHUNK_SIZE = 20;
 
@@ -3227,7 +3371,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                   stars: savedMeta.stars !== undefined ? savedMeta.stars : null,
                   userStars: savedMeta.userStars !== undefined ? savedMeta.userStars : null,
                   focusSpot: savedMeta.focusSpot || savedMeta.cameraExif?.focusArea || null,
-                  cameraExif: savedMeta.cameraExif || null, // Deferred until preview/inspection
+                  cameraExif: savedMeta.cameraExif || null,
                   identification: savedMeta.identification || null,
                   cropBox: savedMeta.cropBox || null,
                   locationText: savedMeta.locationText || null,
@@ -3249,7 +3393,6 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
               }
 
               setUploadProgress({ current: Math.min(i + CHUNK_SIZE, total), total });
-              // Yield UI thread briefly so the user can interact with Page 1 immediately
               await new Promise(r => setTimeout(r, 10));
             }
 
@@ -3275,12 +3418,10 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
         setUploading(true);
         abortUploadRef.current = false;
 
-        // Reset workspace list, selection, and page index when new files are opened
         onUpdatePhotos([]);
         setSelectedIds(new Set());
         setCurrentPage(1);
 
-        // Sort by creation/modified date ascending by default
         files.sort((a, b) => (a.lastModified || 0) - (b.lastModified || 0));
 
         setUploadProgress({ current: 0, total: files.length });
@@ -3504,6 +3645,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
         return processedPhotos.slice(pageStart, pageEnd);
       }, [processedPhotos, currentPage, pageSize]);
 
+      // Phase 3 Optimization: Active Pre-fetching Queue
       useEffect(() => {
         if (isPreviewOpen) {
           setLoadingThumbnails(false);
@@ -3519,7 +3661,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
         }
 
         const bufferedIds = new Set(bufferedPhotos.map(p => p.id));
-        const needed = bufferedPhotos.filter(p => !p.thumbnailUrl && p.file);
+        const needed = bufferedPhotos.filter(p => !p.thumbnailUrl);
 
         if (needed.length > 0) {
           setLoadingThumbnails(true);
@@ -3562,13 +3704,13 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
             let updatedPhoto = p;
             let changed = false;
 
-            if (!bufferedIds.has(p.id) && p.thumbnailUrl) {
+            if (!bufferedIds.has(p.id) && p.thumbnailUrl && !p.thumbnailUrl.startsWith('blob:')) {
               try { URL.revokeObjectURL(p.thumbnailUrl); } catch(e){}
               updatedPhoto = { ...updatedPhoto, thumbnailUrl: null };
               changed = true;
             }
 
-            if (p.blobUrl) {
+            if (p.blobUrl && !p.file) {
               try { URL.revokeObjectURL(p.blobUrl); } catch(e){}
               updatedPhoto = { ...updatedPhoto, blobUrl: null };
               changed = true;
@@ -4126,7 +4268,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
         }
 
         if (sortBy === 'default') {
-          // Keep natural streaming order (Created Date Ascending)
+          // Keep natural streaming order
         } else if (sortBy === 'name') {
           list.sort((a, b) => a.name.localeCompare(b.name));
         } else if (sortBy === 'date_asc') {
