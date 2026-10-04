@@ -358,30 +358,59 @@
       }
     }
 
-    async function exportOpfsVaultToZip() {
+    async function exportOpfsVaultToZip(vaultEntriesFallback = []) {
       if (typeof JSZip === 'undefined') {
         throw new Error('JSZip library is not loaded');
       }
 
-      const root = await getOpfsRootHandle();
-      if (!root) throw new Error('OPFS physical storage is not accessible on this device');
-
       const zip = new JSZip();
       const vaultFolder = zip.folder(OPFS_VAULT_ROOT);
+      let opfsSuccess = false;
 
-      async function traverseDirectory(dirHandle, currentZipFolder) {
-        for await (const [name, handle] of dirHandle.entries()) {
-          if (handle.kind === 'file') {
-            const file = await handle.getFile();
-            currentZipFolder.file(name, file);
-          } else if (handle.kind === 'directory') {
-            const subFolder = currentZipFolder.folder(name);
-            await traverseDirectory(handle, subFolder);
+      try {
+        const root = await getOpfsRootHandle();
+        if (root) {
+          async function traverseDirectory(dirHandle, currentZipFolder) {
+            for await (const [name, handle] of dirHandle.entries()) {
+              if (handle.kind === 'file') {
+                const file = await handle.getFile();
+                currentZipFolder.file(name, file);
+              } else if (handle.kind === 'directory') {
+                const subFolder = currentZipFolder.folder(name);
+                await traverseDirectory(handle, subFolder);
+              }
+            }
+          }
+
+          await traverseDirectory(root, vaultFolder);
+          opfsSuccess = true;
+        }
+      } catch (err) {
+        console.warn('OPFS traversal warning during ZIP export:', err);
+      }
+
+      // Fallback: If OPFS is restricted by sandbox policies or empty, construct ZIP directly from memory & IDB
+      if (!opfsSuccess || (vaultFolder.files && Object.keys(vaultFolder.files).length <= 1)) {
+        vaultFolder.file('vault_manifest.json', JSON.stringify(vaultEntriesFallback, null, 2));
+        for (const entry of (vaultEntriesFallback || [])) {
+          const catName = await sanitizeDirectoryName(entry.category || 'Other');
+          const speciesName = await sanitizeDirectoryName(entry.speciesName);
+          const catFolder = vaultFolder.folder(catName);
+          const speciesFolder = catFolder.folder(speciesName);
+          speciesFolder.file('species_info.json', JSON.stringify(entry, null, 2));
+
+          for (const s of (entry.sightings || [])) {
+            const fileName = s.opfsFileName || (s.photo ? s.photo.name : null);
+            if (fileName) {
+              const blob = await getOpfsSightingFileBlob(entry.category, entry.speciesName, fileName);
+              if (blob) {
+                speciesFolder.file(fileName, blob);
+              }
+            }
           }
         }
       }
 
-      await traverseDirectory(root, vaultFolder);
       const zipBlob = await zip.generateAsync({ type: 'blob' });
       return new File([zipBlob], `${OPFS_VAULT_ROOT}_Export.zip`, { type: 'application/zip' });
     }
@@ -3325,25 +3354,38 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
       const handleExportVaultZip = async () => {
         setIsExportingOpfs(true);
         try {
-          const zipFile = await exportOpfsVaultToZip();
-          if (navigator.share && navigator.canShare && navigator.canShare({ files: [zipFile] })) {
-            await navigator.share({
-              title: 'BirdVault Lifer Catalog Backup',
-              text: 'Complete species catalog and photos.',
-              files: [zipFile]
-            });
-          } else {
-            const downloadUrl = URL.createObjectURL(zipFile);
+          const zipFile = await exportOpfsVaultToZip(vaultEntries);
+          const zipBlobUrl = URL.createObjectURL(zipFile);
+
+          let sharedSuccessfully = false;
+          if (navigator.share && navigator.canShare) {
+            try {
+              if (navigator.canShare({ files: [zipFile] })) {
+                await navigator.share({
+                  title: 'BirdVault Lifer Catalog Backup',
+                  text: 'Complete species catalog and photos.',
+                  files: [zipFile]
+                });
+                sharedSuccessfully = true;
+              }
+            } catch (shareErr) {
+              console.warn('Web Share API permission or gesture expiration error; falling back to direct download:', shareErr);
+            }
+          }
+
+          if (!sharedSuccessfully) {
             const a = document.createElement('a');
-            a.href = downloadUrl;
+            a.href = zipBlobUrl;
             a.download = zipFile.name;
+            a.style.display = 'none';
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
-            setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
+            setTimeout(() => URL.revokeObjectURL(zipBlobUrl), 10000);
           }
         } catch (err) {
-          alert('Vault directory export failed: ' + (err.message || 'OPFS unavailable'));
+          console.error('Vault export error:', err);
+          alert('Vault directory export failed: ' + (err.message || 'Permission or storage error'));
         } finally {
           setIsExportingOpfs(false);
         }
@@ -3822,6 +3864,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
             return;
           } catch (err) {
             if (err.name === 'AbortError') return;
+            console.warn('Directory Picker permission or support error, falling back to direct download:', err);
           }
         }
 
