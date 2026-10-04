@@ -159,6 +159,7 @@
 
     const BATCH_PAGE_SIZE = 20;
     const TIMELINE_PAGE_SIZE = 10;
+    const VAULT_PAGE_SIZE = 5;
     const MIN_CROP_DIMENSION_PCT = 2.0;
 
     function scoreToStars(score) {
@@ -3255,6 +3256,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
       const [expandedSpecies, setExpandedSpecies] = useState(null);
       const [isExportingOpfs, setIsExportingOpfs] = useState(false);
       const [vaultImageUrls, setVaultImageUrls] = useState({});
+      const [vaultPage, setVaultPage] = useState(1);
 
       useEffect(() => {
         let isMounted = true;
@@ -3264,7 +3266,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
               const opfsName = s.opfsFileName || s.photo?.opfsFileName || (s.photo ? `${s.photo.name}` : null);
               const key = `${entry.category}_${entry.speciesName}_${s.id}`;
               
-              if (opfsName && !vaultImageUrls[key] && !s.photo?.thumbnailUrl) {
+              if (opfsName && !vaultImageUrls[key] && (!s.photo?.thumbnailUrl || s.photo.thumbnailUrl.startsWith('blob:'))) {
                 const blob = await getOpfsSightingFileBlob(entry.category, entry.speciesName, opfsName);
                 if (blob && isMounted) {
                   const freshUrl = URL.createObjectURL(blob);
@@ -3302,6 +3304,23 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
           return matchesCat && matchesSearch;
         });
       }, [vaultEntries, selectedCategory, searchQuery]);
+
+      useEffect(() => {
+        setVaultPage(1);
+      }, [selectedCategory, searchQuery]);
+
+      const totalVaultPages = Math.ceil(filteredEntries.length / VAULT_PAGE_SIZE) || 1;
+
+      useEffect(() => {
+        if (vaultPage > totalVaultPages) {
+          setVaultPage(Math.max(1, totalVaultPages));
+        }
+      }, [filteredEntries.length, totalVaultPages, vaultPage]);
+
+      const paginatedVaultEntries = useMemo(() => {
+        const start = (vaultPage - 1) * VAULT_PAGE_SIZE;
+        return filteredEntries.slice(start, start + VAULT_PAGE_SIZE);
+      }, [filteredEntries, vaultPage]);
 
       const handleExportVaultZip = async () => {
         setIsExportingOpfs(true);
@@ -3381,20 +3400,47 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
 
           <div className="flex-1 overflow-y-auto min-h-0 pr-1 pb-4">
             {filteredEntries.length > 0 ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
-                {filteredEntries.map(entry => (
-                  <SpeciesVaultCard
-                    key={entry.speciesName}
-                    entry={entry}
-                    workspacePhotosMap={workspacePhotosMap}
-                    vaultImageUrls={vaultImageUrls}
-                    isExpanded={expandedSpecies === entry.speciesName}
-                    onToggleExpand={() => setExpandedSpecies(expandedSpecies === entry.speciesName ? null : entry.speciesName)}
-                    onDeleteSpecies={onDeleteSpecies}
-                    onDeleteSighting={onDeleteSighting}
-                    onSelectPhoto={onSelectPhoto}
-                  />
-                ))}
+              <div className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
+                  {paginatedVaultEntries.map(entry => (
+                    <SpeciesVaultCard
+                      key={entry.speciesName}
+                      entry={entry}
+                      workspacePhotosMap={workspacePhotosMap}
+                      vaultImageUrls={vaultImageUrls}
+                      isExpanded={expandedSpecies === entry.speciesName}
+                      onToggleExpand={() => setExpandedSpecies(expandedSpecies === entry.speciesName ? null : entry.speciesName)}
+                      onDeleteSpecies={onDeleteSpecies}
+                      onDeleteSighting={onDeleteSighting}
+                      onSelectPhoto={onSelectPhoto}
+                    />
+                  ))}
+                </div>
+
+                {totalVaultPages > 1 && (
+                  <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3 sm:p-4 flex items-center justify-between shadow-xl">
+                    <span className="text-xs font-semibold text-slate-300">
+                      Page <strong className="text-white">{vaultPage}</strong> of <strong className="text-white">{totalVaultPages}</strong> ({filteredEntries.length} Species total)
+                    </span>
+
+                    <div className="flex items-center space-x-2">
+                      <button
+                        onClick={() => setVaultPage(p => Math.max(1, p - 1))}
+                        disabled={vaultPage === 1}
+                        className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed text-slate-200 rounded-xl text-xs font-semibold transition touch-manipulation"
+                      >
+                        ← Previous 5
+                      </button>
+                      <button
+                        onClick={() => setVaultPage(p => Math.min(totalVaultPages, p + 1))}
+                        disabled={vaultPage === totalVaultPages}
+                        className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-30 disabled:cursor-not-allowed text-white rounded-xl text-xs font-semibold transition shadow touch-manipulation"
+                      >
+                        Next 5 →
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="p-8 sm:p-12 text-center bg-slate-900/40 border border-dashed border-slate-800 rounded-3xl space-y-3">
