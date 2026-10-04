@@ -2330,31 +2330,42 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                 />
               </div>
 
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (hasPrev && onPrevPhoto) onPrevPhoto();
-                }}
-                disabled={!hasPrev}
-                className={`absolute left-2 sm:left-4 top-1/2 -translate-y-1/2 z-30 p-2 sm:p-3 rounded-full border shadow-2xl backdrop-blur-md transition-all touch-manipulation ${
-                  hasPrev ? 'bg-slate-900/80 hover:bg-emerald-600 text-slate-200 hover:text-white border-slate-700/80' : 'bg-slate-900/40 text-slate-600 border-slate-800/40 opacity-40'
-                }`}
-              >
-                <Icon name="chevronLeft" className="w-5 h-5 sm:w-6 sm:h-6" />
-              </button>
+              {/* Left-Hand Ergonomic Navigation Controller */}
+              <div className="absolute left-3 sm:left-5 top-1/2 -translate-y-1/2 z-30 flex flex-col items-center space-y-2.5 bg-slate-900/90 p-2 sm:p-2.5 rounded-2xl border border-slate-700/90 backdrop-blur-md shadow-2xl">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (hasPrev && onPrevPhoto) onPrevPhoto();
+                  }}
+                  disabled={!hasPrev}
+                  className={`p-2.5 sm:p-3 rounded-xl border transition-all touch-manipulation flex items-center justify-center ${
+                    hasPrev 
+                      ? 'bg-slate-800 hover:bg-emerald-600 text-slate-100 border-slate-700 hover:border-emerald-500 shadow-md active:scale-95' 
+                      : 'bg-slate-900/50 text-slate-600 border-slate-800/50 opacity-30 cursor-not-allowed'
+                  }`}
+                  title="Previous Photo (Left Finger / Thumb)"
+                >
+                  <Icon name="chevronLeft" className="w-5 h-5 sm:w-6 sm:h-6" />
+                </button>
 
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (hasNext && onNextPhoto) onNextPhoto();
-                }}
-                disabled={!hasNext}
-                className={`absolute right-2 sm:right-4 top-1/2 -translate-y-1/2 z-30 p-2 sm:p-3 rounded-full border shadow-2xl backdrop-blur-md transition-all touch-manipulation ${
-                  hasNext ? 'bg-slate-900/80 hover:bg-emerald-600 text-slate-200 hover:text-white border-slate-700/80' : 'bg-slate-900/40 text-slate-600 border-slate-800/40 opacity-40'
-                }`}
-              >
-                <Icon name="chevronRight" className="w-5 h-5 sm:w-6 sm:h-6" />
-              </button>
+                <div className="w-6 h-px bg-slate-700/60"></div>
+
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (hasNext && onNextPhoto) onNextPhoto();
+                  }}
+                  disabled={!hasNext}
+                  className={`p-2.5 sm:p-3 rounded-xl border transition-all touch-manipulation flex items-center justify-center ${
+                    hasNext 
+                      ? 'bg-slate-800 hover:bg-emerald-600 text-slate-100 border-slate-700 hover:border-emerald-500 shadow-md active:scale-95' 
+                      : 'bg-slate-900/50 text-slate-600 border-slate-800/50 opacity-30 cursor-not-allowed'
+                  }`}
+                  title="Next Photo (Left Finger / Thumb)"
+                >
+                  <Icon name="chevronRight" className="w-5 h-5 sm:w-6 sm:h-6" />
+                </button>
+              </div>
 
               <div 
                 className="relative flex items-center justify-center w-full h-full max-w-full max-h-full transition-transform duration-75 ease-out"
