@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes, viewport-fit=cover">
-  <title>BirdVault Pro - Wildlife Photography Assistant</title>
+  <title>BirdVault Pro - Wildlife Photography & Culling Assistant</title>
   
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -126,7 +126,7 @@
     .pb-safe {
       padding-bottom: env(safe-area-inset-bottom, 20px);
     }
-    button, input, select {
+    button, input, select, textarea {
       touch-action: manipulation;
     }
     img {
@@ -157,6 +157,7 @@
       MAX_RPD: 1500
     };
 
+    const BATCH_PAGE_SIZE = 20;
     const MIN_CROP_DIMENSION_PCT = 2.0;
 
     function scoreToStars(score) {
@@ -171,6 +172,59 @@
     }
 
     const OPFS_VAULT_ROOT = 'BirdVault_Lifer_Catalog';
+    const IDB_NAME = 'BirdVault_Storage_DB';
+    const IDB_VERSION = 1;
+
+    function openBirdVaultDb() {
+      return new Promise((resolve) => {
+        if (typeof indexedDB === 'undefined') return resolve(null);
+        const request = indexedDB.open(IDB_NAME, IDB_VERSION);
+        request.onupgradeneeded = (e) => {
+          const db = e.target.result;
+          if (!db.objectStoreNames.contains('vault_blobs')) {
+            db.createObjectStore('vault_blobs');
+          }
+        };
+        request.onsuccess = (e) => resolve(e.target.result);
+        request.onerror = (e) => {
+          console.warn('IndexedDB Open Warning:', e);
+          resolve(null);
+        };
+      });
+    }
+
+    async function saveBlobToIdb(storeName, key, blob) {
+      try {
+        const db = await openBirdVaultDb();
+        if (!db) return false;
+        return new Promise((resolve) => {
+          const tx = db.transaction(storeName, 'readwrite');
+          const store = tx.objectStore(storeName);
+          const req = store.put(blob, key);
+          req.onsuccess = () => resolve(true);
+          req.onerror = () => resolve(false);
+        });
+      } catch (e) {
+        console.warn('IDB Save Error:', e);
+        return false;
+      }
+    }
+
+    async function getBlobFromIdb(storeName, key) {
+      try {
+        const db = await openBirdVaultDb();
+        if (!db) return null;
+        return new Promise((resolve) => {
+          const tx = db.transaction(storeName, 'readonly');
+          const store = tx.objectStore(storeName);
+          const req = store.get(key);
+          req.onsuccess = () => resolve(req.result || null);
+          req.onerror = () => resolve(null);
+        });
+      } catch (e) {
+        return null;
+      }
+    }
 
     async function isOpfsSupported() {
       return typeof navigator !== 'undefined' && 
@@ -195,51 +249,75 @@
 
     async function writeOpfsSightingFile(category, speciesName, fileName, blobOrFile) {
       try {
-        const root = await getOpfsRootHandle();
-        if (!root) return false;
-
-        const catDirName = await sanitizeDirectoryName(category || 'Other');
-        const speciesDirName = await sanitizeDirectoryName(speciesName);
-
-        const catHandle = await root.getDirectoryHandle(catDirName, { create: true });
-        const speciesHandle = await catHandle.getDirectoryHandle(speciesDirName, { create: true });
-
-        const fileHandle = await speciesHandle.getFileHandle(fileName, { create: true });
-        const writable = await fileHandle.createWritable();
-        
+        let blobToWrite = null;
         if (blobOrFile instanceof File || blobOrFile instanceof Blob) {
-          await writable.write(blobOrFile);
-        } else if (typeof blobOrFile === 'string' && blobOrFile.startsWith('data:')) {
-          const res = await fetch(blobOrFile);
-          const blob = await res.blob();
-          await writable.write(blob);
-        } else {
-          await writable.write(new Blob([JSON.stringify(blobOrFile, null, 2)], { type: 'application/json' }));
+          blobToWrite = blobOrFile;
+        } else if (typeof blobOrFile === 'string') {
+          try {
+            const res = await fetch(blobOrFile);
+            blobToWrite = await res.blob();
+          } catch (err) {
+            console.warn('Could not fetch URL for OPFS write:', err);
+          }
         }
-        await writable.close();
+
+        if (!blobToWrite) {
+          blobToWrite = new Blob([JSON.stringify(blobOrFile, null, 2)], { type: 'application/json' });
+        }
+
+        const root = await getOpfsRootHandle();
+        if (root) {
+          const catDirName = await sanitizeDirectoryName(category || 'Other');
+          const speciesDirName = await sanitizeDirectoryName(speciesName);
+
+          const catHandle = await root.getDirectoryHandle(catDirName, { create: true });
+          const speciesHandle = await catHandle.getDirectoryHandle(speciesDirName, { create: true });
+
+          const fileHandle = await speciesHandle.getFileHandle(fileName, { create: true });
+          if (typeof fileHandle.createWritable === 'function') {
+            const writable = await fileHandle.createWritable();
+            await writable.write(blobToWrite);
+            await writable.close();
+          }
+        }
+
+        if (blobToWrite instanceof Blob && fileName.toLowerCase().endsWith('.jpg')) {
+          await saveBlobToIdb('vault_blobs', fileName, blobToWrite);
+        }
+
         return true;
       } catch (err) {
-        console.warn('OPFS File Write Error:', err);
+        console.warn('OPFS File Write Warning:', err);
         return false;
       }
     }
 
     async function getOpfsSightingFileBlob(category, speciesName, fileName) {
+      if (!fileName) return null;
+
       try {
         const root = await getOpfsRootHandle();
-        if (!root || !fileName) return null;
+        if (root) {
+          const catDirName = await sanitizeDirectoryName(category || 'Other');
+          const speciesDirName = await sanitizeDirectoryName(speciesName);
 
-        const catDirName = await sanitizeDirectoryName(category || 'Other');
-        const speciesDirName = await sanitizeDirectoryName(speciesName);
+          const catHandle = await root.getDirectoryHandle(catDirName, { create: false });
+          const speciesHandle = await catHandle.getDirectoryHandle(speciesDirName, { create: false });
+          const fileHandle = await speciesHandle.getFileHandle(fileName, { create: false });
 
-        const catHandle = await root.getDirectoryHandle(catDirName, { create: false });
-        const speciesHandle = await catHandle.getDirectoryHandle(speciesDirName, { create: false });
-        const fileHandle = await speciesHandle.getFileHandle(fileName, { create: false });
+          const file = await fileHandle.getFile();
+          if (file && file.size > 100) {
+            return file;
+          }
+        }
+      } catch (err) {}
 
-        return await fileHandle.getFile();
-      } catch (err) {
-        return null;
+      const idbBlob = await getBlobFromIdb('vault_blobs', fileName);
+      if (idbBlob && idbBlob.size > 100) {
+        return idbBlob;
       }
+
+      return null;
     }
 
     async function updateOpfsMasterManifest(manifestData) {
@@ -247,9 +325,11 @@
         const root = await getOpfsRootHandle();
         if (!root) return false;
         const fileHandle = await root.getFileHandle('vault_manifest.json', { create: true });
-        const writable = await fileHandle.createWritable();
-        await writable.write(JSON.stringify(manifestData, null, 2));
-        await writable.close();
+        if (typeof fileHandle.createWritable === 'function') {
+          const writable = await fileHandle.createWritable();
+          await writable.write(JSON.stringify(manifestData, null, 2));
+          await writable.close();
+        }
         return true;
       } catch (err) {
         console.warn('OPFS Manifest Update Error:', err);
@@ -472,9 +552,7 @@
 
             const getValue = (type, count, valueOffset, entryOffset) => {
               if (type === 3) {
-                if (count === 1) {
-                  return view.getUint16(entryOffset + 8, littleEndian);
-                }
+                if (count === 1) return view.getUint16(entryOffset + 8, littleEndian);
                 const arr = [];
                 const arrOffset = count * 2 > 4 ? tiffOffset + valueOffset : entryOffset + 8;
                 for (let k = 0; k < count; k++) {
@@ -484,9 +562,7 @@
                 }
                 return arr;
               } else if (type === 4) {
-                if (count === 1) {
-                  return view.getUint32(entryOffset + 8, littleEndian);
-                }
+                if (count === 1) return view.getUint32(entryOffset + 8, littleEndian);
                 const arr = [];
                 const arrOffset = count * 4 > 4 ? tiffOffset + valueOffset : entryOffset + 8;
                 for (let k = 0; k < count; k++) {
@@ -573,13 +649,6 @@
                 if (!isNaN(fnum) && fnum > 0) {
                   cameraData.apertureValue = fnum;
                   cameraData.aperture = `f/${fnum.toFixed(1)}`;
-                }
-              }
-
-              if (exifTags[0x9206] !== undefined) {
-                const dist = parseFloat(exifTags[0x9206]);
-                if (!isNaN(dist) && dist > 0) {
-                  cameraData.subjectDistance = dist;
                 }
               }
 
@@ -787,14 +856,25 @@
           srcToRevoke = URL.createObjectURL(fileOrBlobUrl);
           img.src = srcToRevoke;
         } else {
-          return resolve({ score: 5, stars: 3, focusSpot: null });
+          return resolve({
+            score: 1,
+            stars: 1,
+            focusSpot: null,
+            debugDetails: {
+              peakGradient: 0,
+              closedShapesCount: 0,
+              sharpEdgeRatioPct: 0,
+              avgAcutance: 0,
+              rule: "No valid image blob",
+              reason: "Empty or missing source file URL."
+            }
+          });
         }
 
         img.onload = () => {
           try {
             const canvas = document.createElement('canvas');
 
-            // Determine evaluation region on native image dimensions
             let cropX = 0, cropY = 0, cropW = img.width, cropH = img.height;
 
             if (cropBoxRoi && cropBoxRoi.width > 0 && cropBoxRoi.height > 0) {
@@ -813,11 +893,10 @@
               cropH = Math.min(img.height - cropY, Math.round(rh));
             }
 
-            // Draw crop ROI directly at high resolution (max 600px dimension for the crop itself)
             const evalMaxDim = 600;
             const scale = Math.min(1, evalMaxDim / Math.max(cropW, cropH));
-            const w = Math.max(10, Math.round(cropW * scale));
-            const h = Math.max(10, Math.round(cropH * scale));
+            const w = Math.max(16, Math.round(cropW * scale));
+            const h = Math.max(16, Math.round(cropH * scale));
 
             canvas.width = w;
             canvas.height = h;
@@ -827,99 +906,214 @@
             const imgData = ctx.getImageData(0, 0, w, h);
             const data = imgData.data;
 
-            const gray = new Float32Array(w * h);
+            const luminance = new Float32Array(w * h);
             for (let i = 0; i < data.length; i += 4) {
-              gray[i / 4] = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+              luminance[i / 4] = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
             }
 
-            // High-Frequency Micro-Edge Density & High-Pass Laplacian Analysis
-            const coreMinX = w * 0.25, coreMaxX = w * 0.75;
-            const coreMinY = h * 0.25, coreMaxY = h * 0.75;
+            const gradMag = new Float32Array(w * h);
+            const isEdge = new Uint8Array(w * h);
 
-            let coreMicroCount = 0, coreTotal = 0;
-            let bgMicroCount = 0, bgTotal = 0;
-            let coreLapSqSum = 0;
-            let maxCoreLap = 0;
-
-            const MICRO_EDGE_THRESHOLD = 45; // True sharp micro-detail spike
+            const LOWER_GRADIENT_THRESHOLD = 20;
+            let peakGrad = 0;
 
             for (let y = 1; y < h - 1; y++) {
               for (let x = 1; x < w - 1; x++) {
                 const idx = y * w + x;
-                const lap = Math.abs(
-                  8 * gray[idx] - (
-                    gray[idx - w - 1] + gray[idx - w] + gray[idx - w + 1] +
-                    gray[idx - 1]     +                 gray[idx + 1] +
-                    gray[idx + w - 1] + gray[idx + w] + gray[idx + w + 1]
-                  )
+                const gx = (
+                  -1 * luminance[(y - 1) * w + (x - 1)] + 1 * luminance[(y - 1) * w + (x + 1)] +
+                  -2 * luminance[y * w + (x - 1)]       + 2 * luminance[y * w + (x + 1)] +
+                  -1 * luminance[(y + 1) * w + (x - 1)] + 1 * luminance[(y + 1) * w + (x + 1)]
+                );
+                const gy = (
+                  -1 * luminance[(y - 1) * w + (x - 1)] - 2 * luminance[(y - 1) * w + x] - 1 * luminance[(y - 1) * w + (x + 1)] +
+                   1 * luminance[(y + 1) * w + (x - 1)] + 2 * luminance[(y + 1) * w + x] + 1 * luminance[(y + 1) * w + (x + 1)]
                 );
 
-                const isCore = (x >= coreMinX && x <= coreMaxX && y >= coreMinY && y <= coreMaxY);
+                const mag = Math.sqrt(gx * gx + gy * gy);
+                gradMag[idx] = mag;
+                if (mag > peakGrad) peakGrad = mag;
 
-                if (isCore) {
-                  coreTotal++;
-                  if (lap > maxCoreLap) maxCoreLap = lap;
-                  if (lap >= MICRO_EDGE_THRESHOLD) {
-                    coreMicroCount++;
-                    coreLapSqSum += lap * lap;
+                if (mag >= LOWER_GRADIENT_THRESHOLD) {
+                  isEdge[idx] = 1;
+                }
+              }
+            }
+
+            const visited = new Uint8Array(w * h);
+            let closedShapePixels = 0;
+            let sharpClosedShapePixels = 0;
+            let totalClosedAcutance = 0;
+            let closedShapesCount = 0;
+
+            for (let y = 2; y < h - 2; y++) {
+              for (let x = 2; x < w - 2; x++) {
+                const startIdx = y * w + x;
+                if (isEdge[startIdx] && !visited[startIdx]) {
+                  const queue = [startIdx];
+                  visited[startIdx] = 1;
+                  const componentIndices = [];
+
+                  let minX = x, maxX = x, minY = y, maxY = y;
+
+                  let head = 0;
+                  while (head < queue.length) {
+                    const curr = queue[head++];
+                    componentIndices.push(curr);
+
+                    const cy = Math.floor(curr / w);
+                    const cx = curr % w;
+
+                    if (cx < minX) minX = cx;
+                    if (cx > maxX) maxX = cx;
+                    if (cy < minY) minY = cy;
+                    if (cy > maxY) maxY = cy;
+
+                    for (let dy = -1; dy <= 1; dy++) {
+                      for (let dx = -1; dx <= 1; dx++) {
+                        if (dx === 0 && dy === 0) continue;
+                        const nx = cx + dx;
+                        const ny = cy + dy;
+                        if (nx >= 1 && nx < w - 1 && ny >= 1 && ny < h - 1) {
+                          const nIdx = ny * w + nx;
+                          if (isEdge[nIdx] && !visited[nIdx]) {
+                            visited[nIdx] = 1;
+                            queue.push(nIdx);
+                          }
+                        }
+                      }
+                    }
                   }
-                } else {
-                  bgTotal++;
-                  if (lap >= MICRO_EDGE_THRESHOLD) {
-                    bgMicroCount++;
+
+                  const compSize = componentIndices.length;
+                  const boxW = maxX - minX + 1;
+                  const boxH = maxY - minY + 1;
+                  const boxArea = boxW * boxH;
+
+                  const compactness = boxArea > 0 ? compSize / boxArea : 0;
+                  const isClosedOrEnclosedShape = compSize >= 12 && (compactness >= 0.18 || (boxW >= 5 && boxH >= 5 && compSize >= (boxW + boxH) * 1.2));
+
+                  if (isClosedOrEnclosedShape) {
+                    closedShapesCount++;
+                    for (let k = 0; k < compSize; k++) {
+                      const idx = componentIndices[k];
+                      const mag = gradMag[idx];
+                      closedShapePixels++;
+
+                      const cy = Math.floor(idx / w);
+                      const cx = idx % w;
+                      let localMin = luminance[idx];
+                      let localMax = luminance[idx];
+                      for (let dy = -1; dy <= 1; dy++) {
+                        for (let dx = -1; dx <= 1; dx++) {
+                          const lumVal = luminance[(cy + dy) * w + (cx + dx)];
+                          if (lumVal < localMin) localMin = lumVal;
+                          if (lumVal > localMax) localMax = lumVal;
+                        }
+                      }
+                      const contrastStep = localMax - localMin;
+                      
+                      let acutance = 0;
+                      if (mag >= 45 && contrastStep >= 20) {
+                        acutance = (mag * mag) / (contrastStep + 1);
+                      }
+
+                      if (acutance >= 16.0) {
+                        sharpClosedShapePixels++;
+                        totalClosedAcutance += acutance;
+                      }
+                    }
                   }
                 }
               }
             }
 
-            const microDensityCore = coreTotal > 0 ? coreMicroCount / coreTotal : 0;
-            const microDensityBg = bgTotal > 0 ? bgMicroCount / bgTotal : 0;
-            const highPassVar = coreMicroCount > 0 ? coreLapSqSum / coreMicroCount : 0;
-
-            // Suppression Rule 1: Absence of Micro-Detail (Completely Blurry)
-            // If peak Laplacian < 35 or less than 0.1% of core pixels hit the micro-edge threshold,
-            // the subject core contains zero sharp edges.
-            let isCompletelyBlurry = (maxCoreLap < 35 || microDensityCore < 0.001);
-
-            // Suppression Rule 2: Low-Contrast Soft Blur Ramp
-            let isSeverelySoft = (maxCoreLap < 65 && microDensityCore < 0.005);
-
-            // Suppression Rule 3: Missed-Focus Background
-            let isMissedFocusOnBg = (bgTotal > 0 && microDensityBg >= 3 * microDensityCore && microDensityCore < 0.008);
+            const sharpRatio = closedShapePixels > 0 ? sharpClosedShapePixels / closedShapePixels : 0;
+            const avgAcutance = sharpClosedShapePixels > 0 ? totalClosedAcutance / sharpClosedShapePixels : 0;
 
             let score = 1;
-            if (isCompletelyBlurry) {
+            let ruleReason = "";
+
+            if (closedShapePixels === 0 || sharpClosedShapePixels === 0) {
               score = 1;
-            } else if (isSeverelySoft || isMissedFocusOnBg) {
-              score = 2;
+              ruleReason = "No closed subject shapes found, or shape edges are broad and blurry.";
+            } else if (sharpRatio >= 0.28 && avgAcutance >= 45) {
+              score = 10;
+              ruleReason = `Tack sharp closed shape contours (${(sharpRatio * 100).toFixed(1)}% sharp ratio, ${avgAcutance.toFixed(0)} avg acutance).`;
+            } else if (sharpRatio >= 0.22 && avgAcutance >= 35) {
+              score = 9;
+              ruleReason = `Very sharp closed shape contours (${(sharpRatio * 100).toFixed(1)}% sharp ratio).`;
+            } else if (sharpRatio >= 0.16 && avgAcutance >= 28) {
+              score = 8;
+              ruleReason = `Sharp shape contours with crisp contrast.`;
+            } else if (sharpRatio >= 0.12 && avgAcutance >= 22) {
+              score = 7;
+              ruleReason = `Good edge steepness across closed shapes.`;
+            } else if (sharpRatio >= 0.08 && avgAcutance >= 18) {
+              score = 6;
+              ruleReason = `Acceptable subject focus on closed shape boundaries.`;
+            } else if (sharpRatio >= 0.05) {
+              score = 5;
+              ruleReason = `Moderate edge steepness; subject slightly soft.`;
+            } else if (sharpRatio >= 0.025) {
+              score = 4;
+              ruleReason = `Low shape boundary acutance; soft subject.`;
+            } else if (sharpRatio >= 0.01) {
+              score = 3;
+              ruleReason = `Very soft closed shapes.`;
             } else {
-              if (microDensityCore >= 0.035 && highPassVar >= 900) score = 10;
-              else if (microDensityCore >= 0.025 && highPassVar >= 700) score = 9;
-              else if (microDensityCore >= 0.018 && highPassVar >= 500) score = 8;
-              else if (microDensityCore >= 0.012 && highPassVar >= 350) score = 7;
-              else if (microDensityCore >= 0.008 && highPassVar >= 250) score = 6;
-              else if (microDensityCore >= 0.005 && highPassVar >= 180) score = 5;
-              else if (microDensityCore >= 0.003 && highPassVar >= 120) score = 4;
-              else if (microDensityCore >= 0.001) score = 3;
-              else score = 2;
+              score = 2;
+              ruleReason = `Barely detectable micro-contrast on closed shape contours.`;
             }
 
             if (isNaN(score)) score = 1;
-
             const stars = scoreToStars(score);
+
+            const debugDetails = {
+              peakGradient: Math.round(peakGrad),
+              closedShapesCount,
+              sharpEdgeRatioPct: Math.round(sharpRatio * 100),
+              avgAcutance: Math.round(avgAcutance),
+              rule: `Grade ${score}/10 (${stars} Stars)`,
+              reason: ruleReason
+            };
 
             if (srcToRevoke) URL.revokeObjectURL(srcToRevoke);
             canvas.width = 0; canvas.height = 0;
-            resolve({ score, stars, focusSpot });
+            resolve({ score, stars, focusSpot, debugDetails });
           } catch (err) {
             if (srcToRevoke) URL.revokeObjectURL(srcToRevoke);
-            resolve({ score: 5, stars: 3, focusSpot: null });
+            resolve({
+              score: 1,
+              stars: 1,
+              focusSpot: null,
+              debugDetails: {
+                peakGradient: 0,
+                closedShapesCount: 0,
+                sharpEdgeRatioPct: 0,
+                avgAcutance: 0,
+                rule: "Error fallback",
+                reason: err.message || "Canvas execution error"
+              }
+            });
           }
         };
 
         img.onerror = () => {
           if (srcToRevoke) URL.revokeObjectURL(srcToRevoke);
-          resolve({ score: 5, stars: 3, focusSpot: null });
+          resolve({
+            score: 1,
+            stars: 1,
+            focusSpot: null,
+            debugDetails: {
+              peakGradient: 0,
+              closedShapesCount: 0,
+              sharpEdgeRatioPct: 0,
+              avgAcutance: 0,
+              rule: "Image load failed",
+              reason: "Could not load image resource."
+            }
+          });
         };
       });
     }
@@ -952,7 +1146,8 @@
         chevronLeft: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7"/>,
         chevronRight: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7"/>,
         chevronDown: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"/>,
-        info: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        info: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>,
+        book: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/>
       };
       return (
         <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -1238,9 +1433,9 @@
               <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 space-y-1 text-[11px] text-slate-400">
                 <p className="font-semibold text-slate-300 flex items-center space-x-1">
                   <Icon name="shield" className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Privacy & State Persistence Notice</span>
+                  <span>Privacy Notice</span>
                 </p>
-                <p>All photo metadata is mapped strictly to deterministic file fingerprints. Zero image blobs are stored in application state.</p>
+                <p>Vault images are saved directly to physical OPFS storage and IndexedDB binary cache so they load instantly on every app reload.</p>
               </div>
 
               <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between pt-2 border-t border-slate-800 gap-3">
@@ -1324,7 +1519,7 @@
           <div className={`relative overflow-hidden flex flex-col items-center justify-center bg-slate-950 p-4 text-center select-none ${className}`} style={frameStyle}>
             <Icon name="image" className="w-8 h-8 text-slate-600 mb-1" />
             <span className="text-[10px] text-emerald-400 font-semibold bg-emerald-950/80 px-2 py-1 rounded border border-emerald-500/30">
-              📁 Image blob unavailable (purged or relocated)
+              📁 Re-select folder for preview
             </span>
           </div>
         );
@@ -1431,7 +1626,7 @@
 
       const handleDetectGPS = () => {
         if (!navigator.geolocation) {
-          onChange("GPS unavailable (Browser unsupported)");
+          onChange("GPS unavailable");
           return;
         }
 
@@ -1455,7 +1650,7 @@
           },
           (error) => {
             console.warn('GPS Error:', error);
-            onChange("Auckland, New Zealand (GPS Fallback)");
+            onChange("Auckland, New Zealand (Fallback)");
             setGettingGps(false);
           },
           { enableHighAccuracy: true, timeout: 8000 }
@@ -1467,7 +1662,7 @@
           <label className="text-[11px] font-medium text-slate-400 flex items-center justify-between">
             <span className="flex items-center space-x-1">
               <Icon name="mapPin" className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Sighting Location & GPS Context:</span>
+              <span>Location Context:</span>
             </span>
             <button
               type="button"
@@ -1488,7 +1683,7 @@
               onChange={handleInputChange}
               onFocus={() => setIsOpen(true)}
               onBlur={() => setTimeout(() => setIsOpen(false), 200)}
-              placeholder="Type address or search birding hotspot..."
+              placeholder="Address or birding hotspot..."
               className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500 pr-10"
             />
             {value && (
@@ -1569,33 +1764,29 @@
           img.src = photo.blobUrl || photo.thumbnailUrl || photo.url;
         });
 
-        const systemPrompt = `You are a world-class ornithologist and computer vision expert. Identify the bird species in the full-resolution cropped image provided.
-GEOGRAPHIC CONTEXT: The photo was taken in or near "${locationText}".
-CRITICAL: Restrict your identification and candidates strictly to species native, introduced, or vagrant to "${locationText}". Do NOT identify species from incorrect continents or incompatible biomes.
+        const systemPrompt = `You are an expert ornithologist and wildlife biology taxonomist. Identify the bird species in the photo.
+Geographic Location Context: "${locationText}". Restrict species identification to birds native, introduced, or vagrant to "${locationText}".
 
-UNIDENTIFIED / LOW QUALITY RULE:
-If the image does NOT contain a bird, or the subject is too blurry/unclear/obscured to identify with reasonable confidence, return a JSON object with an "error" property set to "UNIDENTIFIED" and a "message" explaining the optical or visual reason why species identification is not possible.
+Provide detailed species metadata records suitable for a professional bird life-list catalog.
 
-Return STRICT JSON ONLY without markdown fences.
-JSON Schema:
+Return STRICT JSON ONLY without markdown fences or code blocks:
 {
   "speciesName": "Common Name",
-  "scientificName": "Scientific Name",
+  "scientificName": "Genus species",
   "category": "Songbirds" | "Raptors" | "Waterfowl" | "Seabirds" | "Waders" | "Parrots" | "Other",
   "confidence": 0.95,
-  "description": "Short diagnostic description of key visual identification traits.",
-  "habitat": "Primary habitat preferences.",
-  "candidates": [
-    { "name": "Alternative Species 1", "confidence": 0.4 },
-    { "name": "Alternative Species 2", "confidence": 0.2 }
-  ],
+  "description": "Comprehensive diagnostic description of plumage, bill shape, size, and plumage variation.",
+  "habitat": "Primary ecosystem, elevation range, nesting preferences, and geographic distribution.",
+  "conservationStatus": "e.g. Least Concern / Vulnerable / Endangered / Near Threatened / Endemic",
+  "diet": "Primary diet, foraging strategy, and feeding behaviors.",
+  "keyTraits": "3-4 distinct field marks or visual diagnostic traits (e.g., distinctive eye stripe, crest, bill color, wing bars).",
   "heatmapPoints": [
-    { "x": 45, "y": 30, "intensity": 0.9, "label": "Sharp Eye Contrast" },
+    { "x": 45, "y": 30, "intensity": 0.9, "label": "Eye Contrast" },
     { "x": 52, "y": 42, "intensity": 0.8, "label": "Beak Morphology" }
   ]
 }`;
 
-        const userPrompt = `Geographic Location Context: ${locationText}. Identify this bird photo, analyze regional species distributions for location "${locationText}", analyze focus points for heatmap, and return strict JSON.`;
+        const userPrompt = `Geographic Location Context: ${locationText}. Identify this bird photo, extract complete species metadata parameters, analyze diagnostic focus points for heatmap, and return strict JSON.`;
 
         const payload = {
           contents: [{
@@ -1624,28 +1815,21 @@ JSON Schema:
             }
           } catch (e) {}
 
-          if (response.status === 402) {
-            return {
-              error: 'PAYMENT_REQUIRED',
-              message: 'Payment Required (HTTP 402): Your Gemini API project has run out of prepaid credits or requires active billing setup in Google AI Studio.'
-            };
-          }
-
           if (response.status === 429) {
             return {
               error: 'RATE_LIMIT_EXCEEDED',
-              message: 'Gemini API Rate Limit reached (15 Requests/Min or Daily Quota). Allowance resets automatically on minute/daily schedule.'
+              message: 'Gemini API Rate Limit reached (15 Requests/Min or Daily Quota).'
             };
           }
           if (response.status === 400 || response.status === 401 || response.status === 403) {
             return { 
               error: 'INVALID_KEY', 
-              message: `Gemini API Key rejected (${serverMessage}). Please verify your key at Google AI Studio and ensure there are no trailing space characters.` 
+              message: `Gemini API Key rejected (${serverMessage}).` 
             };
           }
           return {
             error: 'API_ERROR',
-            message: `Gemini API returned an error: ${serverMessage}`
+            message: `Gemini API error: ${serverMessage}`
           };
         }
 
@@ -1659,7 +1843,7 @@ JSON Schema:
         } catch (jsonErr) {
           return {
             error: 'UNPARSABLE_RESPONSE',
-            message: 'AI returned an unparseable response structure. Please adjust the crop framing or try again.'
+            message: 'AI returned an unparseable response structure.'
           };
         }
 
@@ -1667,18 +1851,11 @@ JSON Schema:
           return parsed;
         }
 
-        if (parsed.confidence && parsed.confidence < 0.35) {
-          return {
-            error: 'LOW_CONFIDENCE',
-            message: `Identification confidence is too low (${Math.round(parsed.confidence * 100)}%). Try drawing a tighter crop box around diagnostic features like the head or plumage.`
-          };
-        }
-
         return parsed;
       } catch (err) {
         return {
           error: 'API_ERROR',
-          message: err.message || 'An unexpected error occurred while communicating with Gemini.'
+          message: err.message || 'An unexpected error occurred.'
         };
       }
     }
@@ -1746,8 +1923,8 @@ JSON Schema:
       const [panZoom, setPanZoom] = useState({ scale: 1, x: 0, y: 0 });
       const [isDraggingPan, setIsDraggingPan] = useState(false);
       const dragStartRef = useRef({ x: 0, y: 0 });
-      const initialTouchDistanceRef = useRef(null);
-      const lastTapRef = useRef(0);
+      const pinchStartDistRef = useRef(null);
+      const pinchStartScaleRef = useRef(1);
 
       const [cropBox, setCropBox] = useState(photo.cropBox || null);
       const [showCroppedPreview, setShowCroppedPreview] = useState(!!(photo.cropBox && photo.cropBox.width > 0));
@@ -1762,229 +1939,156 @@ JSON Schema:
       const [locationInput, setLocationInput] = useState(photo.locationText || initialLocation || 'Auckland, New Zealand');
 
       const [evaluatingFocus, setEvaluatingFocus] = useState(false);
-      const [cameraExif, setCameraExif] = useState(photo.cameraExif || null);
+      const [debugData, setDebugData] = useState(null);
+      const cameraExif = photo?.cameraExif || null;
 
       const activeStars = photo.userStars || photo.stars || scoreToStars(photo.sharpness);
-      const isZoomedOrCropped = showCroppedPreview || panZoom.scale > 1 || isLoupeActive;
-
-      useEffect(() => {
-        setCropBox(photo.cropBox || null);
-        currentCropBoxRef.current = photo.cropBox || null;
-        setShowCroppedPreview(!!(photo.cropBox && photo.cropBox.width > 0));
-      }, [photo.id]);
-
-      useEffect(() => {
-        if (photo.sharpness === null && !evaluatingFocus) {
-          setEvaluatingFocus(true);
-          evaluatePhotoFocus(photo.file || photo.blobUrl || photo.thumbnailUrl || photo.url, photo.cropBox || photo.focusSpot, cameraExif || photo.cameraExif).then((res) => {
-            const updated = {
-              ...photo,
-              sharpness: res.score,
-              stars: res.stars,
-              focusSpot: res.focusSpot
-            };
-            onUpdatePhoto(updated);
-            saveFingerprintMetadata(updated);
-            setEvaluatingFocus(false);
-          });
-        }
-      }, [photo, cameraExif]);
-
-      useEffect(() => {
-        if (!cameraExif && photo.file) {
-          extractCameraExif(photo.file).then((data) => {
-            if (data) {
-              setCameraExif(data);
-              const updated = { ...photo, cameraExif: data };
-              onUpdatePhoto(updated);
-              saveFingerprintMetadata(updated);
-            }
-          });
-        }
-      }, [photo.file]);
-
-      const handleLocationChange = (newLoc) => {
-        setLocationInput(newLoc);
-        if (onUpdateLocation) {
-          onUpdateLocation(newLoc);
-        } else if (newLoc) {
-          localStorage.setItem('birdvault_user_location', newLoc);
-        }
-      };
 
       const handleRatingChange = (newStars) => {
-        const updatedPhoto = {
+        const updated = {
           ...photo,
           userStars: newStars,
           stars: newStars
         };
-        onUpdatePhoto(updatedPhoto);
-        saveFingerprintMetadata(updatedPhoto);
+        onUpdatePhoto(updated);
+        saveFingerprintMetadata(updated);
       };
 
-      const getImagePointerPos = useCallback((e) => {
+      const handleLocationChange = (newLoc) => {
+        setLocationInput(newLoc);
+        if (onUpdateLocation) onUpdateLocation(newLoc);
+        const updated = {
+          ...photo,
+          locationText: newLoc
+        };
+        onUpdatePhoto(updated);
+        saveFingerprintMetadata(updated);
+      };
+
+      const getContainerPointerPos = (e) => {
+        if (!containerRef.current) return { x: 0, y: 0, clientX: 0, clientY: 0 };
+        const rect = containerRef.current.getBoundingClientRect();
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+        return {
+          x: clientX - rect.left,
+          y: clientY - rect.top,
+          clientX,
+          clientY
+        };
+      };
+
+      const getImagePointerPos = (e) => {
         if (!imgRef.current) return { pctX: 50, pctY: 50 };
         const rect = imgRef.current.getBoundingClientRect();
-        if (!rect.width || !rect.height) return { pctX: 50, pctY: 50 };
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
 
-        const clientX = e.clientX !== undefined ? e.clientX : (e.touches && e.touches[0] ? e.touches[0].clientX : 0);
-        const clientY = e.clientY !== undefined ? e.clientY : (e.touches && e.touches[0] ? e.touches[0].clientY : 0);
+        const x = clientX - rect.left;
+        const y = clientY - rect.top;
 
-        const pctX = Math.max(0, Math.min(100, ((clientX - rect.left) / rect.width) * 100));
-        const pctY = Math.max(0, Math.min(100, ((clientY - rect.top) / rect.height) * 100));
-        return { pctX, pctY, clientX, clientY };
-      }, []);
+        const pctX = Math.max(0, Math.min(100, (x / rect.width) * 100));
+        const pctY = Math.max(0, Math.min(100, (y / rect.height) * 100));
 
-      const getContainerPointerPos = useCallback((e) => {
-        if (!containerRef.current) return { x: 0, y: 0, pctX: 50, pctY: 50 };
-        const rect = containerRef.current.getBoundingClientRect();
-        const clientX = e.clientX !== undefined ? e.clientX : (e.touches && e.touches[0] ? e.touches[0].clientX : 0);
-        const clientY = e.clientY !== undefined ? e.clientY : (e.touches && e.touches[0] ? e.touches[0].clientY : 0);
-        const pctX = Math.max(0, Math.min(100, ((clientX - rect.left) / rect.width) * 100));
-        const pctY = Math.max(0, Math.min(100, ((clientY - rect.top) / rect.height) * 100));
-        return { x: clientX - rect.left, y: clientY - rect.top, pctX, pctY, clientX, clientY };
-      }, []);
-
-      const getTouchDistance = (e) => {
-        if (!e.touches || e.touches.length < 2) return null;
-        const dx = e.touches[0].clientX - e.touches[1].clientX;
-        const dy = e.touches[0].clientY - e.touches[1].clientY;
-        return Math.sqrt(dx * dx + dy * dy);
+        return { pctX, pctY };
       };
 
-      const handleTouchStart = (e) => {
-        if (e.touches.length === 2 && !isCropToolActive) {
-          const dist = getTouchDistance(e);
-          initialTouchDistanceRef.current = dist;
-          setIsDraggingPan(false);
-        } else if (e.touches.length === 1 && !isCropToolActive) {
-          const now = Date.now();
-          if (now - lastTapRef.current < 300) {
-            setPanZoom(p => p.scale > 1 ? { scale: 1, x: 0, y: 0 } : { scale: 2.5, x: 0, y: 0 });
-            lastTapRef.current = 0;
-            return;
-          }
-          lastTapRef.current = now;
-
-          if (panZoom.scale > 1) {
-            setIsDraggingPan(true);
-            const touch = e.touches[0];
-            dragStartRef.current = { x: touch.clientX - panZoom.x, y: touch.clientY - panZoom.y };
-          }
-        }
-      };
-
-      const handleTouchMove = (e) => {
-        if (e.touches.length === 2 && !isCropToolActive) {
-          if (e.cancelable) e.preventDefault();
-          const newDist = getTouchDistance(e);
-          if (newDist && initialTouchDistanceRef.current) {
-            const scaleFactor = newDist / initialTouchDistanceRef.current;
-            setPanZoom((p) => {
-              const targetScale = Math.min(8, Math.max(1, p.scale * (scaleFactor > 1 ? 1.04 : 0.96)));
-              return {
-                ...p,
-                scale: targetScale,
-                x: targetScale === 1 ? 0 : p.x,
-                y: targetScale === 1 ? 0 : p.y
-              };
-            });
-            initialTouchDistanceRef.current = newDist;
-          }
-        } else if (e.touches.length === 1 && isDraggingPan && panZoom.scale > 1 && !isCropToolActive) {
-          const touch = e.touches[0];
-          setPanZoom(p => ({
-            ...p,
-            x: touch.clientX - dragStartRef.current.x,
-            y: touch.clientY - dragStartRef.current.y
-          }));
-        }
-      };
-
-      const renderLoupeCanvasTile = useCallback(() => {
-        if (!isLoupeActive || !loupeCanvasRef.current) return;
-
+      const drawLoupeLens = useCallback(() => {
         const canvas = loupeCanvasRef.current;
-        const ctx = canvas.getContext('2d', { alpha: false });
-        const canvasSize = canvas.width || 192;
-
         const img = cachedLoupeImgRef.current;
+        if (!canvas || !img || !loupeImgLoaded) return;
 
-        if (!img || !img.complete || img.naturalWidth === 0) {
-          ctx.fillStyle = '#090d16';
-          ctx.fillRect(0, 0, canvasSize, canvasSize);
-          ctx.fillStyle = '#10b981';
-          ctx.font = '10px sans-serif';
-          ctx.textAlign = 'center';
-          ctx.fillText('Decoding image...', canvasSize / 2, canvasSize / 2);
-          return;
-        }
+        const ctx = canvas.getContext('2d', { alpha: false });
+        const size = canvas.width;
+        const radius = size / 2;
 
-        const naturalW = img.naturalWidth;
-        const naturalH = img.naturalHeight;
+        ctx.clearRect(0, 0, size, size);
 
-        let normX = (loupeImgPos.xPct !== undefined ? loupeImgPos.xPct : 50) / 100;
-        let normY = (loupeImgPos.yPct !== undefined ? loupeImgPos.yPct : 50) / 100;
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(radius, radius, radius - 1, 0, Math.PI * 2);
+        ctx.clip();
 
-        if (showCroppedPreview && cropBox && cropBox.width > 0) {
-          normX = (cropBox.x / 100) + (normX * (cropBox.width / 100));
-          normY = (cropBox.y / 100) + (normY * (cropBox.height / 100));
-        }
+        const srcX = (loupeImgPos.xPct / 100) * img.naturalWidth;
+        const srcY = (loupeImgPos.yPct / 100) * img.naturalHeight;
 
-        const cx = normX * naturalW;
-        const cy = normY * naturalH;
+        const sw = img.naturalWidth / zoomLevel;
+        const sh = img.naturalHeight / zoomLevel;
 
-        let screenWidth = 800;
-        if (imgRef.current) {
-          const rect = imgRef.current.getBoundingClientRect();
-          if (rect.width > 0) screenWidth = rect.width;
-        }
-        const displayScale = naturalW / screenWidth;
+        const sx = Math.max(0, Math.min(img.naturalWidth - sw, srcX - sw / 2));
+        const sy = Math.max(0, Math.min(img.naturalHeight - sh, srcY - sh / 2));
 
-        const sourceW = (canvasSize / Math.max(0.5, zoomLevel)) * displayScale;
-        const sourceH = (canvasSize / Math.max(0.5, zoomLevel)) * displayScale;
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, size, size);
 
-        const sx = Math.max(0, Math.min(naturalW - sourceW, cx - sourceW / 2));
-        const sy = Math.max(0, Math.min(naturalH - sourceH, cy - sourceH / 2));
+        ctx.strokeStyle = '#10b981';
+        ctx.lineWidth = 1.5;
 
-        ctx.fillStyle = '#040711';
-        ctx.fillRect(0, 0, canvasSize, canvasSize);
+        ctx.beginPath();
+        ctx.moveTo(radius - 12, radius); ctx.lineTo(radius + 12, radius);
+        ctx.moveTo(radius, radius - 12); ctx.lineTo(radius, radius + 12);
+        ctx.stroke();
 
-        ctx.drawImage(
-          img,
-          sx,
-          sy,
-          Math.min(sourceW, naturalW - sx),
-          Math.min(sourceH, naturalH - sy),
-          0,
-          0,
-          canvasSize,
-          canvasSize
-        );
-      }, [isLoupeActive, loupeImgPos, zoomLevel, showCroppedPreview, cropBox, loupeImgLoaded]);
+        ctx.restore();
+      }, [loupeImgPos, zoomLevel, loupeImgLoaded]);
 
       useEffect(() => {
         if (isLoupeActive) {
-          requestAnimationFrame(renderLoupeCanvasTile);
+          drawLoupeLens();
         }
-      }, [isLoupeActive, loupeImgPos, zoomLevel, loupeImgLoaded, renderLoupeCanvasTile]);
+      }, [isLoupeActive, loupeImgPos, zoomLevel, loupeImgLoaded, drawLoupeLens]);
+
+      const handleWheelZoom = (e) => {
+        if (isLoupeActive || isCropToolActive) return;
+        e.preventDefault();
+        const delta = e.deltaY < 0 ? 0.25 : -0.25;
+        setPanZoom(prev => {
+          const nextScale = Math.max(1, Math.min(8, prev.scale + delta));
+          return {
+            ...prev,
+            scale: nextScale,
+            x: nextScale === 1 ? 0 : prev.x,
+            y: nextScale === 1 ? 0 : prev.y
+          };
+        });
+      };
 
       const handlePointerMove = (e) => {
+        if (e.touches && e.touches.length === 2) {
+          const t1 = e.touches[0];
+          const t2 = e.touches[1];
+          const currentDist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+          if (pinchStartDistRef.current && pinchStartDistRef.current > 0) {
+            const factor = currentDist / pinchStartDistRef.current;
+            const newScale = Math.max(1, Math.min(8, pinchStartScaleRef.current * factor));
+            setPanZoom(prev => ({
+              ...prev,
+              scale: newScale,
+              x: newScale === 1 ? 0 : prev.x,
+              y: newScale === 1 ? 0 : prev.y
+            }));
+          }
+          return;
+        }
+
         const containerPos = getContainerPointerPos(e);
         const imgPos = getImagePointerPos(e);
+        const pctX = imgPos.pctX;
+        const pctY = imgPos.pctY;
 
         if (isLoupeActive) {
-          setLoupeImgPos({ xPct: imgPos.pctX, yPct: imgPos.pctY });
+          setLoupeImgPos({ xPct: pctX, yPct: pctY });
           setLoupeScreenPos({ x: containerPos.x, y: containerPos.y });
         }
 
         if (isCropToolActive && isDrawingCrop && cropStartRef.current) {
           const startX = cropStartRef.current.x;
           const startY = cropStartRef.current.y;
-          const left = Math.min(startX, imgPos.pctX);
-          const top = Math.min(startY, imgPos.pctY);
-          const width = Math.abs(imgPos.pctX - startX);
-          const height = Math.abs(imgPos.pctY - startY);
+          const left = Math.min(startX, pctX);
+          const top = Math.min(startY, pctY);
+          const width = Math.abs(pctX - startX);
+          const height = Math.abs(pctY - startY);
 
           const updatedCrop = { x: left, y: top, width, height };
           currentCropBoxRef.current = updatedCrop;
@@ -1999,22 +2103,28 @@ JSON Schema:
       };
 
       const handlePointerDown = (e) => {
-        if (e.target && e.target.setPointerCapture && e.pointerId !== undefined) {
-          try { e.target.setPointerCapture(e.pointerId); } catch (err) {}
+        if (e.touches && e.touches.length === 2) {
+          const t1 = e.touches[0];
+          const t2 = e.touches[1];
+          pinchStartDistRef.current = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+          pinchStartScaleRef.current = panZoom.scale;
+          return;
         }
 
         const containerPos = getContainerPointerPos(e);
         const imgPos = getImagePointerPos(e);
+        const pctX = imgPos.pctX;
+        const pctY = imgPos.pctY;
 
         if (isLoupeActive) {
-          setLoupeImgPos({ xPct: imgPos.pctX, yPct: imgPos.pctY });
+          setLoupeImgPos({ xPct: pctX, yPct: pctY });
           setLoupeScreenPos({ x: containerPos.x, y: containerPos.y });
         }
         
         if (isCropToolActive) {
           setShowCroppedPreview(false);
-          cropStartRef.current = { x: imgPos.pctX, y: imgPos.pctY };
-          const initialBox = { x: imgPos.pctX, y: imgPos.pctY, width: 0, height: 0 };
+          cropStartRef.current = { x: pctX, y: pctY };
+          const initialBox = { x: pctX, y: pctY, width: 0, height: 0 };
           currentCropBoxRef.current = initialBox;
           setCropBox(initialBox);
           setIsDrawingCrop(true);
@@ -2025,12 +2135,16 @@ JSON Schema:
       };
 
       const handlePointerUp = async (e) => {
+        if (e.touches && e.touches.length < 2) {
+          pinchStartDistRef.current = null;
+        }
+
         if (isDrawingCrop) {
           const finalCrop = currentCropBoxRef.current;
           
           if (finalCrop && finalCrop.width >= MIN_CROP_DIMENSION_PCT && finalCrop.height >= MIN_CROP_DIMENSION_PCT) {
             setEvaluatingFocus(true);
-            const evalRes = await evaluatePhotoFocus(photo.file || photo.blobUrl || photo.thumbnailUrl || photo.url, finalCrop, cameraExif || photo.cameraExif);
+            const evalRes = await evaluatePhotoFocus(photo.file || photo.blobUrl || photo.thumbnailUrl || photo.url, finalCrop, cameraExif);
             
             const updated = {
               ...photo,
@@ -2038,6 +2152,7 @@ JSON Schema:
               sharpness: evalRes.score,
               stars: evalRes.stars
             };
+            if (evalRes.debugDetails) setDebugData(evalRes.debugDetails);
             onUpdatePhoto(updated);
             saveFingerprintMetadata(updated);
             setEvaluatingFocus(false);
@@ -2049,31 +2164,18 @@ JSON Schema:
             }
           }
           setIsDrawingCrop(false);
+          setIsCropToolActive(false);
         }
         setIsDraggingPan(false);
-      };
-
-      const handleWheelZoom = (e) => {
-        if (isCropToolActive) return;
-        e.preventDefault();
-        const zoomDelta = e.deltaY < 0 ? 0.3 : -0.3;
-        setPanZoom(p => {
-          const targetScale = Math.min(8, Math.max(1, p.scale + zoomDelta));
-          return {
-            ...p,
-            scale: targetScale,
-            x: targetScale === 1 ? 0 : p.x,
-            y: targetScale === 1 ? 0 : p.y
-          };
-        });
       };
 
       const handleRunAiIdentification = async () => {
         let currentPhoto = photo;
         if (currentPhoto.sharpness === null) {
           setEvaluatingFocus(true);
-          const evalRes = await evaluatePhotoFocus(photo.file || photo.blobUrl || photo.thumbnailUrl || photo.url, photo.cropBox || photo.focusSpot, cameraExif || photo.cameraExif);
+          const evalRes = await evaluatePhotoFocus(photo.file || photo.blobUrl || photo.thumbnailUrl || photo.url, photo.cropBox || photo.focusSpot, cameraExif);
           currentPhoto = { ...photo, sharpness: evalRes.score, stars: evalRes.stars, focusSpot: evalRes.focusSpot };
+          if (evalRes.debugDetails) setDebugData(evalRes.debugDetails);
           onUpdatePhoto(currentPhoto);
           saveFingerprintMetadata(currentPhoto);
           setEvaluatingFocus(false);
@@ -2101,16 +2203,17 @@ JSON Schema:
               yPct: eyePt.y,
               widthPct: 20,
               heightPct: 20,
-              source: 'AI Feature Anchor (' + (eyePt.label || 'Subject Core') + ')'
+              source: 'AI Heatmap Anchor'
             };
             setEvaluatingFocus(true);
-            const aiFocusRes = await evaluatePhotoFocus(currentPhoto.file || currentPhoto.blobUrl || currentPhoto.thumbnailUrl || currentPhoto.url, updatedFocusSpot, cameraExif || currentPhoto.cameraExif);
+            const aiFocusRes = await evaluatePhotoFocus(currentPhoto.file || currentPhoto.blobUrl || currentPhoto.thumbnailUrl || currentPhoto.url, updatedFocusSpot, cameraExif);
             currentPhoto = {
               ...currentPhoto,
               sharpness: aiFocusRes.score,
               stars: aiFocusRes.stars,
               focusSpot: updatedFocusSpot
             };
+            if (aiFocusRes.debugDetails) setDebugData(aiFocusRes.debugDetails);
             setEvaluatingFocus(false);
           }
         }
@@ -2118,26 +2221,6 @@ JSON Schema:
         const updated = { ...currentPhoto, identification: result, cropBox: cropBox, locationText: locationInput, focusSpot: updatedFocusSpot };
         onUpdatePhoto(updated);
         saveFingerprintMetadata(updated);
-      };
-
-      const handleClearCrop = async () => {
-        setCropBox(null);
-        currentCropBoxRef.current = null;
-        setShowCroppedPreview(false);
-
-        setEvaluatingFocus(true);
-        const evalRes = await evaluatePhotoFocus(photo.file || photo.blobUrl || photo.thumbnailUrl || photo.url, null, cameraExif || photo.cameraExif);
-        
-        const updated = {
-          ...photo,
-          cropBox: null,
-          sharpness: evalRes.score,
-          stars: evalRes.stars,
-          focusSpot: evalRes.focusSpot
-        };
-        onUpdatePhoto(updated);
-        saveFingerprintMetadata(updated);
-        setEvaluatingFocus(false);
       };
 
       const formattedDate = useMemo(() => {
@@ -2150,12 +2233,8 @@ JSON Schema:
         return (photo.size / (1024 * 1024)).toFixed(2) + ' MB';
       }, [photo.size]);
 
-      const loupeRadius = window.innerWidth < 640 ? 72 : 96;
-      const loupeDiameter = loupeRadius * 2;
-
+      const loupeDiameter = 192;
       const hasValidCropBox = cropBox && cropBox.width >= MIN_CROP_DIMENSION_PCT && cropBox.height >= MIN_CROP_DIMENSION_PCT;
-
-      const activeFocusSpot = photo.focusSpot || cameraExif?.focusArea;
 
       return (
         <div className="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-md flex flex-col md:flex-row overflow-hidden select-none">
@@ -2175,8 +2254,7 @@ JSON Schema:
               <div className="flex items-center space-x-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
                 <button
                   onClick={() => setIsCropToolActive(!isCropToolActive)}
-                  className={`px-3 py-1.5 rounded-lg transition font-medium flex items-center space-x-1.5 ${isCropToolActive ? 'bg-emerald-600 text-white shadow-lg border border-emerald-400/50' : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'}`}
-                  title="Toggle Crop Box ROI Selector"
+                  className={`px-3 py-1.5 rounded-lg transition font-medium flex items-center space-x-1.5 ${isCropToolActive ? 'bg-emerald-600 text-white shadow-lg' : 'bg-slate-900 text-slate-400 hover:text-white'}`}
                 >
                   <Icon name="crop" className="w-3.5 h-3.5" />
                   <span>Crop Box {isCropToolActive ? '(ON)' : '(OFF)'}</span>
@@ -2184,8 +2262,7 @@ JSON Schema:
                 
                 <button
                   onClick={() => setIsLoupeActive(!isLoupeActive)}
-                  className={`px-3 py-1.5 rounded-lg transition font-medium flex items-center space-x-1.5 ${isLoupeActive ? 'bg-emerald-600 text-white shadow-lg border border-emerald-400/50' : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'}`}
-                  title="Toggle 1:1 Loupe Magnifier Tool"
+                  className={`px-3 py-1.5 rounded-lg transition font-medium flex items-center space-x-1.5 ${isLoupeActive ? 'bg-emerald-600 text-white shadow-lg' : 'bg-slate-900 text-slate-400 hover:text-white'}`}
                 >
                   <Icon name="search" className="w-3.5 h-3.5" />
                   <span>Loupe Tool {isLoupeActive ? '(ON)' : '(OFF)'}</span>
@@ -2207,36 +2284,28 @@ JSON Schema:
 
             <div
               ref={containerRef}
+              onWheel={handleWheelZoom}
+              onTouchStart={handlePointerDown}
+              onTouchMove={handlePointerMove}
+              onTouchEnd={handlePointerUp}
               onPointerDown={handlePointerDown}
               onPointerMove={handlePointerMove}
               onPointerUp={handlePointerUp}
               onPointerCancel={handlePointerUp}
-              onTouchStart={handleTouchStart}
-              onTouchMove={handleTouchMove}
-              onWheel={handleWheelZoom}
-              className={`flex-1 relative flex items-center justify-center p-2 sm:p-4 overflow-hidden select-none ${isCropToolActive ? 'cursor-crosshair' : 'cursor-default'} touch-canvas`}
+              className={`flex-1 relative flex items-center justify-center p-2 sm:p-4 overflow-hidden select-none ${isCropToolActive ? 'cursor-crosshair' : panZoom.scale > 1 ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'} touch-canvas`}
             >
               <button
                 onClick={(e) => {
                   e.stopPropagation();
                   if (onDeletePhoto) onDeletePhoto(photo.id);
                 }}
-                onPointerDown={(e) => e.stopPropagation()}
-                onMouseDown={(e) => e.stopPropagation()}
-                onTouchStart={(e) => e.stopPropagation()}
-                className="absolute top-3 left-3 sm:top-4 sm:left-4 z-30 p-2 sm:p-2.5 bg-slate-900/80 hover:bg-red-600 text-slate-300 hover:text-white rounded-full border border-slate-700/80 shadow-xl backdrop-blur-md transition-all active:scale-95 flex items-center justify-center touch-manipulation"
+                className="absolute top-3 left-3 sm:top-4 sm:left-4 z-30 p-2 sm:p-2.5 bg-slate-900/80 hover:bg-red-600 text-slate-300 hover:text-white rounded-full border border-slate-700/80 shadow-xl backdrop-blur-md transition-all touch-manipulation"
                 title="Delete photo"
               >
                 <Icon name="trash" className="w-4 h-4 sm:w-5 sm:h-5 text-red-400 hover:text-white" />
               </button>
 
-              <div 
-                onClick={(e) => e.stopPropagation()}
-                onPointerDown={(e) => e.stopPropagation()}
-                onMouseDown={(e) => e.stopPropagation()}
-                onTouchStart={(e) => e.stopPropagation()}
-                className="absolute bottom-3 sm:bottom-5 left-1/2 -translate-x-1/2 z-30 px-3.5 py-1.5 sm:px-4 sm:py-2 bg-slate-900/90 hover:bg-slate-900 backdrop-blur-md border border-slate-700/80 rounded-full shadow-2xl flex items-center space-x-2 transition-all"
-              >
+              <div className="absolute bottom-3 sm:bottom-5 left-1/2 -translate-x-1/2 z-30 px-3.5 py-1.5 sm:px-4 sm:py-2 bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-full shadow-2xl flex items-center space-x-2">
                 <span className="text-[10px] sm:text-xs font-bold text-slate-300">Rating:</span>
                 <StarRating
                   rating={activeStars}
@@ -2250,16 +2319,10 @@ JSON Schema:
                   e.stopPropagation();
                   if (hasPrev && onPrevPhoto) onPrevPhoto();
                 }}
-                onPointerDown={(e) => e.stopPropagation()}
-                onMouseDown={(e) => e.stopPropagation()}
-                onTouchStart={(e) => e.stopPropagation()}
                 disabled={!hasPrev}
-                className={`absolute left-2 sm:left-4 top-1/2 -translate-y-1/2 z-30 p-2 sm:p-3 rounded-full border shadow-2xl backdrop-blur-md transition-all active:scale-95 flex items-center justify-center touch-manipulation ${
-                  hasPrev
-                    ? 'bg-slate-900/80 hover:bg-emerald-600 text-slate-200 hover:text-white border-slate-700/80 cursor-pointer'
-                    : 'bg-slate-900/40 text-slate-600 border-slate-800/40 cursor-not-allowed opacity-40'
+                className={`absolute left-2 sm:left-4 top-1/2 -translate-y-1/2 z-30 p-2 sm:p-3 rounded-full border shadow-2xl backdrop-blur-md transition-all touch-manipulation ${
+                  hasPrev ? 'bg-slate-900/80 hover:bg-emerald-600 text-slate-200 hover:text-white border-slate-700/80' : 'bg-slate-900/40 text-slate-600 border-slate-800/40 opacity-40'
                 }`}
-                title={hasPrev ? "Previous photo (Left Arrow)" : "No previous photo"}
               >
                 <Icon name="chevronLeft" className="w-5 h-5 sm:w-6 sm:h-6" />
               </button>
@@ -2269,87 +2332,63 @@ JSON Schema:
                   e.stopPropagation();
                   if (hasNext && onNextPhoto) onNextPhoto();
                 }}
-                onPointerDown={(e) => e.stopPropagation()}
-                onMouseDown={(e) => e.stopPropagation()}
-                onTouchStart={(e) => e.stopPropagation()}
                 disabled={!hasNext}
-                className={`absolute right-2 sm:right-4 top-1/2 -translate-y-1/2 z-30 p-2 sm:p-3 rounded-full border shadow-2xl backdrop-blur-md transition-all active:scale-95 flex items-center justify-center touch-manipulation ${
-                  hasNext
-                    ? 'bg-slate-900/80 hover:bg-emerald-600 text-slate-200 hover:text-white border-slate-700/80 cursor-pointer'
-                    : 'bg-slate-900/40 text-slate-600 border-slate-800/40 cursor-not-allowed opacity-40'
+                className={`absolute right-2 sm:right-4 top-1/2 -translate-y-1/2 z-30 p-2 sm:p-3 rounded-full border shadow-2xl backdrop-blur-md transition-all touch-manipulation ${
+                  hasNext ? 'bg-slate-900/80 hover:bg-emerald-600 text-slate-200 hover:text-white border-slate-700/80' : 'bg-slate-900/40 text-slate-600 border-slate-800/40 opacity-40'
                 }`}
-                title={hasNext ? "Next photo (Right Arrow)" : "No next photo"}
               >
                 <Icon name="chevronRight" className="w-5 h-5 sm:w-6 sm:h-6" />
               </button>
 
-              {showCroppedPreview && hasValidCropBox && !isDrawingCrop ? (
-                <div 
-                  className="relative flex items-center justify-center max-h-[calc(100vh-8rem)] max-w-full"
-                  style={{ transform: `translate(${panZoom.x}px, ${panZoom.y}px) scale(${panZoom.scale})` }}
-                >
-                  <CroppedImage
-                    innerRef={imgRef}
-                    src={activeBlobUrl}
-                    alt={photo.name}
-                    cropBox={cropBox}
-                    photo={photo}
-                    fitMode="contain"
-                    className="rounded-2xl border border-slate-700 shadow-2xl overflow-hidden"
-                  />
-                </div>
-              ) : (
-                <div 
-                  className="relative flex items-center justify-center w-full h-full max-w-full max-h-full"
-                  style={{ transform: `translate(${panZoom.x}px, ${panZoom.y}px) scale(${panZoom.scale})` }}
-                >
-                  <CroppedImage
-                    innerRef={imgRef}
-                    src={activeBlobUrl}
-                    alt={photo.name}
-                    cropBox={null}
-                    photo={photo}
-                    fitMode="contain"
-                    className="rounded-2xl border border-slate-800 shadow-2xl overflow-hidden"
-                  >
-                    {cropBox && cropBox.width > 0 && (
-                      <div
-                        className="absolute border-2 border-emerald-400 bg-emerald-500/20 pointer-events-none z-20 shadow-[0_0_0_9999px_rgba(0,0,0,0.6)]"
-                        style={{
-                          left: `${cropBox.x}%`,
-                          top: `${cropBox.y}%`,
-                          width: `${cropBox.width}%`,
-                          height: `${cropBox.height}%`
-                        }}
-                      >
-                        <div className="absolute inset-0 grid grid-cols-3 grid-rows-3 pointer-events-none opacity-40">
-                          <div className="border-r border-b border-emerald-300"></div>
-                          <div className="border-r border-b border-emerald-300"></div>
-                          <div className="border-b border-emerald-300"></div>
-                          <div className="border-r border-b border-emerald-300"></div>
-                          <div className="border-r border-b border-emerald-300"></div>
-                          <div className="border-b border-emerald-300"></div>
-                          <div className="border-r border-emerald-300"></div>
-                          <div className="border-r border-emerald-300"></div>
-                          <div></div>
-                        </div>
-                        <span className="absolute -top-6 left-0 bg-emerald-600 text-white text-[9px] sm:text-[10px] font-bold px-1.5 py-0.5 rounded whitespace-nowrap shadow flex items-center space-x-1">
-                          <span>Crop ROI ({cropBox.width.toFixed(0)}% × {cropBox.height.toFixed(0)}%)</span>
-                        </span>
-                      </div>
-                    )}
-                  </CroppedImage>
-
-                  {activeFocusSpot && !isCropToolActive && !isZoomedOrCropped && (
-                    <div
-                      className="absolute w-12 h-12 -ml-6 -mt-6 border-2 border-sky-400/80 bg-sky-500/10 rounded-full pointer-events-none flex items-center justify-center shadow-lg animate-pulse"
-                      style={{ left: `${activeFocusSpot.xPct}%`, top: `${activeFocusSpot.yPct}%` }}
+              <div 
+                className="relative flex items-center justify-center w-full h-full max-w-full max-h-full transition-transform duration-75 ease-out"
+                style={{
+                  transform: `scale(${panZoom.scale}) translate(${panZoom.x / panZoom.scale}px, ${panZoom.y / panZoom.scale}px)`,
+                  transformOrigin: 'center center'
+                }}
+              >
+                {showCroppedPreview && hasValidCropBox && !isDrawingCrop ? (
+                  <div className="relative flex items-center justify-center max-h-[calc(100vh-8rem)] max-w-full">
+                    <CroppedImage
+                      innerRef={imgRef}
+                      src={activeBlobUrl}
+                      alt={photo.name}
+                      cropBox={cropBox}
+                      photo={photo}
+                      fitMode="contain"
+                      className="rounded-2xl border border-slate-700 shadow-2xl overflow-hidden"
+                    />
+                  </div>
+                ) : (
+                  <div className="relative flex items-center justify-center w-full h-full max-w-full max-h-full">
+                    <CroppedImage
+                      innerRef={imgRef}
+                      src={activeBlobUrl}
+                      alt={photo.name}
+                      cropBox={null}
+                      photo={photo}
+                      fitMode="contain"
+                      className="rounded-2xl border border-slate-800 shadow-2xl overflow-hidden"
                     >
-                      <span className="w-1.5 h-1.5 rounded-full bg-sky-300"></span>
-                    </div>
-                  )}
-                </div>
-              )}
+                      {cropBox && cropBox.width > 0 && (
+                        <div
+                          className="absolute border-2 border-emerald-400 bg-emerald-500/20 pointer-events-none z-20 shadow-[0_0_0_9999px_rgba(0,0,0,0.6)]"
+                          style={{
+                            left: `${cropBox.x}%`,
+                            top: `${cropBox.y}%`,
+                            width: `${cropBox.width}%`,
+                            height: `${cropBox.height}%`
+                          }}
+                        >
+                          <span className="absolute -top-6 left-0 bg-emerald-600 text-white text-[9px] sm:text-[10px] font-bold px-1.5 py-0.5 rounded whitespace-nowrap shadow">
+                            Crop ROI ({cropBox.width.toFixed(0)}% × {cropBox.height.toFixed(0)}%)
+                          </span>
+                        </div>
+                      )}
+                    </CroppedImage>
+                  </div>
+                )}
+              </div>
 
               {isLoupeActive && (
                 <div
@@ -2387,7 +2426,7 @@ JSON Schema:
 
             <div className="h-14 bg-slate-900/90 border-t border-slate-800 px-3 sm:px-4 flex items-center justify-between z-20 gap-2 pb-safe sm:pb-0">
               <div className="flex items-center space-x-2">
-                {isLoupeActive && (
+                {isLoupeActive ? (
                   <div className="flex items-center space-x-1.5 sm:space-x-2 border-r border-slate-800 pr-3 mr-1">
                     <span className="text-[10px] sm:text-xs font-semibold text-emerald-400 flex-shrink-0">
                       Loupe:
@@ -2405,20 +2444,35 @@ JSON Schema:
                       {zoomLevel.toFixed(1)}x
                     </span>
                   </div>
+                ) : (
+                  <div className="flex items-center space-x-1 bg-slate-950 p-1 rounded-xl border border-slate-800">
+                    <button
+                      onClick={() => setPanZoom(prev => ({ ...prev, scale: Math.min(8, prev.scale + 0.5) }))}
+                      className="p-1.5 text-slate-300 hover:text-white rounded-lg hover:bg-slate-800 touch-manipulation"
+                      title="Zoom In"
+                    >
+                      <Icon name="zoomIn" className="w-3.5 h-3.5" />
+                    </button>
+                    <span className="text-[11px] font-mono text-emerald-400 px-1 font-bold">
+                      {panZoom.scale.toFixed(1)}x
+                    </span>
+                    <button
+                      onClick={() => setPanZoom(prev => ({ ...prev, scale: Math.max(1, prev.scale - 0.5), x: prev.scale <= 1.5 ? 0 : prev.x, y: prev.scale <= 1.5 ? 0 : prev.y }))}
+                      className="p-1.5 text-slate-300 hover:text-white rounded-lg hover:bg-slate-800 touch-manipulation"
+                      title="Zoom Out"
+                    >
+                      <Icon name="zoomOut" className="w-3.5 h-3.5" />
+                    </button>
+                    {panZoom.scale > 1 && (
+                      <button
+                        onClick={() => setPanZoom({ scale: 1, x: 0, y: 0 })}
+                        className="px-1.5 py-0.5 text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 rounded font-semibold touch-manipulation"
+                      >
+                        Reset
+                      </button>
+                    )}
+                  </div>
                 )}
-
-                <div className="flex items-center space-x-1 sm:space-x-2">
-                  <button onClick={() => setPanZoom(p => ({ ...p, scale: Math.max(1, p.scale - 0.5), x: p.scale <= 1.5 ? 0 : p.x, y: p.scale <= 1.5 ? 0 : p.y }))} className="p-2 bg-slate-800 rounded text-slate-300 touch-manipulation">
-                    <Icon name="zoomOut" className="w-4 h-4" />
-                  </button>
-                  <span className="text-xs font-semibold text-slate-300 px-1">{(panZoom.scale * 100).toFixed(0)}%</span>
-                  <button onClick={() => setPanZoom(p => ({ ...p, scale: Math.min(8, p.scale + 0.5) }))} className="p-2 bg-slate-800 rounded text-slate-300 touch-manipulation">
-                    <Icon name="zoomIn" className="w-4 h-4" />
-                  </button>
-                  <button onClick={() => setPanZoom({ scale: 1, x: 0, y: 0 })} className="text-[10px] sm:text-[11px] bg-slate-800 px-3 py-2 rounded text-slate-400 ml-1 touch-manipulation">
-                    Reset
-                  </button>
-                </div>
               </div>
 
               <div className="flex items-center space-x-2">
@@ -2430,23 +2484,12 @@ JSON Schema:
                       ? 'bg-slate-800/50 text-slate-600 border border-slate-800/80 cursor-not-allowed' 
                       : showCroppedPreview 
                         ? 'bg-emerald-600 text-white shadow-lg' 
-                        : 'bg-slate-800 text-slate-200 border border-slate-700 hover:bg-slate-700'
+                        : 'bg-slate-800 text-slate-200 border border-slate-700'
                   }`}
-                  title={!hasValidCropBox ? "Draw a crop box first" : showCroppedPreview ? "Switch to full image view with crop overlay" : "Switch to isolated crop preview"}
                 >
                   <Icon name="crop" className="w-3.5 h-3.5" />
                   <span>{showCroppedPreview ? 'View Full Image' : 'Cropped Preview'}</span>
                 </button>
-
-                {hasValidCropBox && (
-                  <button
-                    onClick={handleClearCrop}
-                    className="p-2 bg-red-600/20 hover:bg-red-600/30 text-red-400 text-xs rounded-xl font-semibold transition touch-manipulation"
-                    title="Clear crop ROI"
-                  >
-                    <Icon name="trash" className="w-4 h-4" />
-                  </button>
-                )}
 
                 <button
                   onClick={handleRunAiIdentification}
@@ -2478,7 +2521,7 @@ JSON Schema:
               badge={
                 photo.sharpness !== null ? (
                   <span className="text-[9px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full">
-                    {photo.sharpness}/10 Grade {photo.cropBox ? '(ROI)' : photo.focusSpot?.source ? '(AF Spot)' : cameraExif?.focusArea ? '(EXIF AF)' : ''}
+                    {photo.sharpness}/10 Focus Score
                   </span>
                 ) : null
               }
@@ -2517,16 +2560,7 @@ JSON Schema:
                   </div>
                   {photo.sharpness !== null && (
                     <div className="flex items-center justify-between pt-1">
-                      <span className="text-slate-400 text-[11px] flex items-center space-x-1">
-                        <span>Focus Score:</span>
-                        {photo.cropBox ? (
-                          <span className="text-[9px] text-emerald-400 bg-emerald-950 px-1 py-0.5 rounded border border-emerald-500/30">User Crop ROI</span>
-                        ) : photo.focusSpot?.source ? (
-                          <span className="text-[9px] text-sky-400 bg-sky-950 px-1 py-0.5 rounded border border-sky-500/30">{photo.focusSpot.source}</span>
-                        ) : cameraExif?.focusArea ? (
-                          <span className="text-[9px] text-sky-400 bg-sky-950 px-1 py-0.5 rounded border border-sky-500/30">Camera EXIF AF</span>
-                        ) : null}
-                      </span>
+                      <span className="text-slate-400 text-[11px]">Focus Score:</span>
                       <span className="text-xs font-bold font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
                         {photo.sharpness} / 10
                       </span>
@@ -2566,12 +2600,6 @@ JSON Schema:
                         <span className="text-slate-500 block">FOCAL LENGTH</span>
                         <span className="text-slate-200 font-bold">{cameraExif.focalLength || 'N/A'}</span>
                       </div>
-                      {cameraExif.focusArea && (
-                        <div className="col-span-2 bg-sky-950/40 p-1.5 rounded border border-sky-500/30 flex justify-between items-center">
-                          <span className="text-sky-400 font-sans font-semibold">EXIF AF POINT</span>
-                          <span className="text-sky-200 font-bold">Detected ({cameraExif.focusArea.xPct.toFixed(0)}%, {cameraExif.focusArea.yPct.toFixed(0)}%)</span>
-                        </div>
-                      )}
                     </div>
                   </div>
                 )}
@@ -2579,7 +2607,7 @@ JSON Schema:
             </Accordion>
 
             <Accordion 
-              title="AI Identification & Heatmap" 
+              title="AI Identification & Species Traits" 
               icon="sparkles" 
               defaultOpen={true}
               badge={
@@ -2598,7 +2626,7 @@ JSON Schema:
 
                 {aiResult && aiResult.heatmapPoints && (
                   <div className="flex items-center justify-between pt-1">
-                    <span className="text-[11px] font-medium text-slate-400">Diagnostic Feature Heatmap:</span>
+                    <span className="text-[11px] font-medium text-slate-400">Heatmap Overlay:</span>
                     <button
                       type="button"
                       onClick={() => setShowHeatmapOverlay(!showHeatmapOverlay)}
@@ -2621,9 +2649,34 @@ JSON Schema:
                       <h4 className="text-sm font-extrabold text-white">{aiResult.speciesName}</h4>
                       <p className="text-[11px] text-slate-400 italic font-mono">{aiResult.scientificName}</p>
                     </div>
-                    <p className="hidden sm:block text-[11px] text-slate-300 leading-relaxed border-t border-slate-800/80 pt-2">
+
+                    {aiResult.conservationStatus && (
+                      <div className="inline-block bg-emerald-950/80 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold px-2 py-0.5 rounded">
+                        Status: {aiResult.conservationStatus}
+                      </div>
+                    )}
+
+                    <p className="text-[11px] text-slate-300 leading-relaxed border-t border-slate-800/80 pt-2">
                       {aiResult.description}
                     </p>
+
+                    {aiResult.habitat && (
+                      <div className="text-[10px] text-slate-400 pt-1">
+                        <strong className="text-slate-300">Habitat:</strong> {aiResult.habitat}
+                      </div>
+                    )}
+
+                    {aiResult.diet && (
+                      <div className="text-[10px] text-slate-400 pt-0.5">
+                        <strong className="text-slate-300">Diet & Foraging:</strong> {aiResult.diet}
+                      </div>
+                    )}
+
+                    {aiResult.keyTraits && (
+                      <div className="text-[10px] text-slate-400 pt-0.5">
+                        <strong className="text-slate-300">Field Marks:</strong> {aiResult.keyTraits}
+                      </div>
+                    )}
                   </div>
                 ) : aiResult && aiResult.error ? (
                   <div className="space-y-2 bg-red-950/40 border border-red-500/40 p-3 rounded-xl text-xs">
@@ -2649,7 +2702,7 @@ JSON Schema:
             <Accordion title="Lifer List Vault Sync" icon="feather" defaultOpen={!!aiResult}>
               <div className="space-y-2">
                 <p className="hidden sm:block text-[11px] text-slate-400 leading-relaxed">
-                  Save this sighting and its cropped focal metadata into your permanent master species list.
+                  Save this sighting & species record into your permanent master life-list catalog.
                 </p>
                 <button
                   disabled={!aiResult || !!aiResult.error}
@@ -2657,7 +2710,7 @@ JSON Schema:
                   className="w-full py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow transition flex items-center justify-center space-x-1 touch-manipulation"
                 >
                   <Icon name="check" className="w-4 h-4" />
-                  <span>Save to Lifer Vault</span>
+                  <span>Save / Update Lifer Vault</span>
                 </button>
               </div>
             </Accordion>
@@ -2666,15 +2719,11 @@ JSON Schema:
       );
     }
 
-    function LiferVaultView({ vaultEntries, photos = [], onDeleteSighting, onDeleteSpecies, onSelectPhoto }) {
+    function LiferVaultView({ vaultEntries, photos = [], onDeleteSighting, onDeleteSpecies, onSelectPhoto, onUpdateSpeciesNotes }) {
       const [selectedCategory, setSelectedCategory] = useState('All');
       const [searchQuery, setSearchQuery] = useState('');
+      const [expandedSpecies, setExpandedSpecies] = useState(null);
       const [isExportingOpfs, setIsExportingOpfs] = useState(false);
-      const [opfsSupported, setOpfsSupported] = useState(false);
-
-      useEffect(() => {
-        isOpfsSupported().then(setOpfsSupported);
-      }, []);
 
       const workspacePhotosMap = useMemo(() => {
         const map = new Map();
@@ -2694,7 +2743,9 @@ JSON Schema:
         return vaultEntries.filter(entry => {
           const matchesCat = selectedCategory === 'All' || entry.category === selectedCategory;
           const matchesSearch = entry.speciesName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                                entry.scientificName.toLowerCase().includes(searchQuery.toLowerCase());
+                                entry.scientificName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                                (entry.description && entry.description.toLowerCase().includes(searchQuery.toLowerCase())) ||
+                                (entry.habitat && entry.habitat.toLowerCase().includes(searchQuery.toLowerCase()));
           return matchesCat && matchesSearch;
         });
       }, [vaultEntries, selectedCategory, searchQuery]);
@@ -2706,7 +2757,7 @@ JSON Schema:
           if (navigator.share && navigator.canShare && navigator.canShare({ files: [zipFile] })) {
             await navigator.share({
               title: 'BirdVault Lifer Catalog Backup',
-              text: 'Complete physical directory export of BirdVault Pro species catalog and photos.',
+              text: 'Complete species catalog and photos.',
               files: [zipFile]
             });
           } else {
@@ -2720,7 +2771,6 @@ JSON Schema:
             setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
           }
         } catch (err) {
-          console.warn('Vault Export Error:', err);
           alert('Vault directory export failed: ' + (err.message || 'OPFS unavailable'));
         } finally {
           setIsExportingOpfs(false);
@@ -2734,9 +2784,9 @@ JSON Schema:
               <div>
                 <h2 className="text-base sm:text-xl font-extrabold text-white flex items-center space-x-2">
                   <Icon name="feather" className="w-5 h-5 sm:w-6 sm:h-6 text-emerald-400" />
-                  <span>Lifer Species Vault</span>
+                  <span>Lifer Species List Vault</span>
                 </h2>
-                <p className="hidden sm:block text-[11px] sm:text-xs text-slate-400">Master physical directory catalog of verified wildlife species & sighting records</p>
+                <p className="hidden sm:block text-[11px] sm:text-xs text-slate-400">Master life-list species catalog displaying taxonomic records, species traits, and sighting timelines</p>
               </div>
 
               <div className="flex items-center space-x-2 w-full sm:w-auto">
@@ -2744,7 +2794,7 @@ JSON Schema:
                   <Icon name="search" className="w-3.5 h-3.5 sm:w-4 sm:h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
                   <input
                     type="text"
-                    placeholder="Search species or scientific name..."
+                    placeholder="Search species, scientific name, or traits..."
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     className="bg-slate-950 border border-slate-800 rounded-xl pl-8 sm:pl-9 pr-3 sm:pr-4 py-1.5 sm:py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500 w-full"
@@ -2755,10 +2805,9 @@ JSON Schema:
                   onClick={handleExportVaultZip}
                   disabled={isExportingOpfs || vaultEntries.length === 0}
                   className="px-3 sm:px-3.5 py-1.5 sm:py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-semibold text-xs rounded-xl shadow-lg transition flex items-center space-x-1.5 flex-shrink-0 touch-manipulation"
-                  title="Export complete physical folder tree as .ZIP to iOS Files or Android Downloads"
                 >
                   <Icon name="download" className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${isExportingOpfs ? 'animate-bounce' : ''}`} />
-                  <span className="hidden sm:inline">{isExportingOpfs ? 'Packaging...' : 'Export Directory (.zip)'}</span>
+                  <span className="hidden sm:inline">{isExportingOpfs ? 'Packaging...' : 'Export Vault (.zip)'}</span>
                   <span className="sm:hidden">{isExportingOpfs ? '...' : 'Export'}</span>
                 </button>
               </div>
@@ -2779,7 +2828,7 @@ JSON Schema:
 
           <div className="flex-1 overflow-y-auto min-h-0 pr-1 pb-4">
             {filteredEntries.length > 0 ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-5">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
                 {filteredEntries.map(entry => {
                   const primarySighting = entry.sightings[0] || {};
                   const savedPhoto = primarySighting.photo || {};
@@ -2796,12 +2845,13 @@ JSON Schema:
                   }
 
                   const hasActiveFile = !!(photoObj && (photoObj.file || activeSrc));
+                  const isExpanded = expandedSpecies === entry.speciesName;
 
                   return (
                     <div key={entry.speciesName} className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl hover:border-slate-700 transition flex flex-col justify-between">
                       <div>
                         <div 
-                          className="h-40 sm:h-48 relative bg-slate-950 overflow-hidden cursor-pointer flex items-center justify-center p-1 touch-manipulation" 
+                          className="h-44 sm:h-52 relative bg-slate-950 overflow-hidden cursor-pointer flex items-center justify-center p-1 touch-manipulation" 
                           onClick={() => hasActiveFile && onSelectPhoto(photoObj)}
                         >
                           {activeSrc ? (
@@ -2818,55 +2868,135 @@ JSON Schema:
                             <div className="flex flex-col items-center justify-center p-4 text-center space-y-2 h-full w-full bg-slate-950">
                               <Icon name="image" className="w-8 h-8 text-slate-600" />
                               <span className="text-[10px] text-emerald-400 font-semibold bg-emerald-950/80 px-2 py-1 rounded border border-emerald-500/30">
-                                📁 Image blob unlocatable (Purged)
+                                Species Record
                               </span>
                             </div>
                           )}
 
                           <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-transparent to-transparent pointer-events-none"></div>
-                          <span className="absolute top-2 sm:top-3 right-2 sm:right-3 bg-emerald-600/90 backdrop-blur-md text-white font-bold text-[10px] px-2 py-0.5 rounded-full shadow">
-                            {entry.category}
-                          </span>
-                          <span className="absolute bottom-2 sm:bottom-3 left-2 sm:left-3 text-xs font-semibold text-slate-300 pointer-events-none">
+                          
+                          <div className="absolute top-2.5 right-2.5 flex items-center space-x-1.5">
+                            {entry.conservationStatus && (
+                              <span className="bg-emerald-950/90 border border-emerald-500/40 text-emerald-300 font-bold text-[10px] px-2 py-0.5 rounded-full shadow">
+                                {entry.conservationStatus}
+                              </span>
+                            )}
+                            <span className="bg-emerald-600/90 backdrop-blur-md text-white font-bold text-[10px] px-2 py-0.5 rounded-full shadow">
+                              {entry.category}
+                            </span>
+                          </div>
+
+                          <span className="absolute bottom-2.5 left-2.5 text-xs font-semibold text-slate-300 pointer-events-none">
                             {entry.sightings.length} Sighting{entry.sightings.length > 1 ? 's' : ''}
                           </span>
                         </div>
 
-                        <div className="p-3 sm:p-4 space-y-2 sm:space-y-3">
+                        <div className="p-3.5 sm:p-4 space-y-3">
                           <div className="flex items-start justify-between">
                             <div>
-                              <h3 className="font-extrabold text-white text-sm sm:text-base leading-snug">{entry.speciesName}</h3>
-                              <p className="text-[11px] sm:text-xs text-slate-400 italic font-mono">{entry.scientificName}</p>
+                              <h3 className="font-extrabold text-white text-base leading-snug">{entry.speciesName}</h3>
+                              <p className="text-xs text-slate-400 italic font-mono">{entry.scientificName}</p>
                             </div>
                             <button
                               onClick={() => onDeleteSpecies(entry.speciesName)}
                               className="text-slate-500 hover:text-red-400 p-2 -m-2 touch-manipulation"
+                              title="Delete Species Record"
                             >
                               <Icon name="trash" className="w-4 h-4" />
                             </button>
                           </div>
 
-                          <div className="space-y-1.5 border-t border-slate-800 pt-2">
-                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Sightings History</span>
-                            <div className="space-y-1 max-h-28 sm:max-h-32 overflow-y-auto">
+                          {/* Species Metadata Card Details */}
+                          <div className="space-y-2 text-xs bg-slate-950/80 border border-slate-800 p-3 rounded-xl">
+                            <div className="flex items-center justify-between text-[11px] border-b border-slate-800/80 pb-1.5">
+                              <span className="text-slate-400 font-semibold flex items-center space-x-1">
+                                <Icon name="book" className="w-3.5 h-3.5 text-emerald-400" />
+                                <span>Species Profile</span>
+                              </span>
+                              <button
+                                onClick={() => setExpandedSpecies(isExpanded ? null : entry.speciesName)}
+                                className="text-emerald-400 hover:underline font-semibold text-[10px] touch-manipulation"
+                              >
+                                {isExpanded ? 'Show Less' : 'Full Species Details'}
+                              </button>
+                            </div>
+
+                            {entry.description && (
+                              <p className={`text-[11px] text-slate-300 leading-relaxed ${isExpanded ? '' : 'line-clamp-2'}`}>
+                                {entry.description}
+                              </p>
+                            )}
+
+                            {isExpanded && (
+                              <div className="space-y-2 pt-1 animate-fadeIn">
+                                {entry.habitat && (
+                                  <div className="text-[11px] text-slate-300 bg-slate-900 p-2 rounded-lg border border-slate-800/80">
+                                    <strong className="text-emerald-400 block mb-0.5">Habitat & Distribution:</strong>
+                                    {entry.habitat}
+                                  </div>
+                                )}
+
+                                {entry.diet && (
+                                  <div className="text-[11px] text-slate-300 bg-slate-900 p-2 rounded-lg border border-slate-800/80">
+                                    <strong className="text-emerald-400 block mb-0.5">Diet & Foraging:</strong>
+                                    {entry.diet}
+                                  </div>
+                                )}
+
+                                {entry.keyTraits && (
+                                  <div className="text-[11px] text-slate-300 bg-slate-900 p-2 rounded-lg border border-slate-800/80">
+                                    <strong className="text-emerald-400 block mb-0.5">Field Marks & Traits:</strong>
+                                    {entry.keyTraits}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="space-y-1.5 border-t border-slate-800 pt-3">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Sightings Timeline</span>
+                              <span className="text-[10px] font-mono text-emerald-400">{entry.sightings.length} Logged</span>
+                            </div>
+                            <div className="space-y-1.5 max-h-40 overflow-y-auto">
                               {entry.sightings.map(s => {
                                 const sPhoto = s.photo || {};
+                                const cameraExif = sPhoto.cameraExif;
                                 return (
-                                  <div key={s.id} className="flex items-center justify-between bg-slate-950 p-1.5 sm:p-2 rounded-lg text-xs border border-slate-800/80">
-                                    <span className="text-slate-300 font-mono text-[10px] sm:text-[11px]">{new Date(s.date).toLocaleDateString()}</span>
-                                    <div className="flex items-center space-x-1.5 sm:space-x-2">
-                                      <StarRating
-                                        rating={sPhoto.userStars || sPhoto.stars || scoreToStars(sPhoto.sharpness)}
-                                        readOnly={true}
-                                        size="w-3 h-3"
-                                      />
-                                      <button
-                                        onClick={() => onDeleteSighting(entry.speciesName, s.id)}
-                                        className="text-slate-500 hover:text-red-400 ml-1 p-1 touch-manipulation"
-                                      >
-                                        <Icon name="x" className="w-3.5 h-3.5" />
-                                      </button>
+                                  <div key={s.id} className="bg-slate-950 p-2 rounded-xl text-xs border border-slate-800 space-y-1">
+                                    <div className="flex items-center justify-between">
+                                      <span className="text-slate-200 font-mono text-[11px] font-bold">{new Date(s.date).toLocaleDateString()}</span>
+                                      <div className="flex items-center space-x-1.5">
+                                        <StarRating
+                                          rating={sPhoto.userStars || sPhoto.stars || scoreToStars(sPhoto.sharpness)}
+                                          readOnly={true}
+                                          size="w-3 h-3"
+                                        />
+                                        <button
+                                          onClick={() => onDeleteSighting(entry.speciesName, s.id)}
+                                          className="text-slate-500 hover:text-red-400 ml-1 p-0.5 touch-manipulation"
+                                          title="Delete Sighting"
+                                        >
+                                          <Icon name="x" className="w-3.5 h-3.5" />
+                                        </button>
+                                      </div>
                                     </div>
+
+                                    {sPhoto.locationText && (
+                                      <div className="text-[10px] text-slate-400 flex items-center space-x-1 truncate">
+                                        <Icon name="mapPin" className="w-3 h-3 text-emerald-400 flex-shrink-0" />
+                                        <span className="truncate">{sPhoto.locationText}</span>
+                                      </div>
+                                    )}
+
+                                    {cameraExif && (
+                                      <div className="flex items-center space-x-2 text-[9px] font-mono text-slate-500 pt-0.5">
+                                        {cameraExif.shutterSpeed && <span>{cameraExif.shutterSpeed}</span>}
+                                        {cameraExif.aperture && <span>• {cameraExif.aperture}</span>}
+                                        {cameraExif.iso && <span>• {cameraExif.iso}</span>}
+                                        {cameraExif.focalLength && <span>• {cameraExif.focalLength}</span>}
+                                      </div>
+                                    )}
                                   </div>
                                 );
                               })}
@@ -2882,7 +3012,7 @@ JSON Schema:
               <div className="p-8 sm:p-12 text-center bg-slate-900/40 border border-dashed border-slate-800 rounded-3xl space-y-3">
                 <Icon name="feather" className="w-10 h-10 sm:w-12 sm:h-12 text-slate-600 mx-auto" />
                 <h3 className="text-sm sm:text-base font-bold text-slate-300">No Species Records Found</h3>
-                <p className="text-[11px] sm:text-xs text-slate-500 max-w-sm mx-auto">Upload DSLR wildlife photos in the Focus Culling tab to run AI species identification and build your Lifer Vault.</p>
+                <p className="text-[11px] sm:text-xs text-slate-500 max-w-sm mx-auto">Upload wildlife photos in the Culling workspace to run AI species identification and build your Lifer Vault.</p>
               </div>
             )}
           </div>
@@ -2904,7 +3034,7 @@ JSON Schema:
       processedPhotos,
       isPreviewOpen
     }) {
-      const pageSize = 12;
+      const pageSize = BATCH_PAGE_SIZE;
 
       const [selectedIds, setSelectedIds] = useState(new Set());
       const [showFilterBar, setShowFilterBar] = useState(false);
@@ -2916,55 +3046,10 @@ JSON Schema:
       const [ratingProgress, setRatingProgress] = useState({ current: 0, total: 0 });
       const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
       
-      const [swipeToast, setSwipeToast] = useState(null);
-      const touchStartRef = useRef(null);
-      const toastTimerRef = useRef(null);
-
       const abortUploadRef = useRef(false);
       const abortRatingRef = useRef(false);
       const fileInputRef = useRef(null);
       const folderInputRef = useRef(null);
-
-      const triggerPageToast = (msg) => {
-        setSwipeToast(msg);
-        if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-        toastTimerRef.current = setTimeout(() => setSwipeToast(null), 1500);
-      };
-
-      const handleGridTouchStart = (e) => {
-        if (e.touches && e.touches.length === 1) {
-          touchStartRef.current = {
-            x: e.touches[0].clientX,
-            y: e.touches[0].clientY,
-            time: Date.now()
-          };
-        }
-      };
-
-      const handleGridTouchEnd = (e) => {
-        if (!touchStartRef.current) return;
-        const touch = e.changedTouches ? e.changedTouches[0] : null;
-        if (touch) {
-          const dx = touch.clientX - touchStartRef.current.x;
-          const dy = touch.clientY - touchStartRef.current.y;
-          const dt = Date.now() - touchStartRef.current.time;
-
-          const totalP = Math.ceil(processedPhotos.length / pageSize) || 1;
-
-          if (Math.abs(dx) > 50 && Math.abs(dy) < 80 && dt < 500) {
-            if (dx < 0 && currentPage < totalP) {
-              const nextP = currentPage + 1;
-              setCurrentPage(nextP);
-              triggerPageToast(`Swiped to Page ${nextP} of ${totalP}`);
-            } else if (dx > 0 && currentPage > 1) {
-              const prevP = currentPage - 1;
-              setCurrentPage(prevP);
-              triggerPageToast(`Swiped to Page ${prevP} of ${totalP}`);
-            }
-          }
-        }
-        touchStartRef.current = null;
-      };
 
       const toggleSelectPhoto = (photoId, e) => {
         if (e) e.stopPropagation();
@@ -2994,9 +3079,7 @@ JSON Schema:
           if (photo.fileHandle && typeof photo.fileHandle.remove === 'function') {
             try {
               await photo.fileHandle.remove();
-            } catch (err) {
-              console.warn('Native file remove error:', err);
-            }
+            } catch (err) {}
           }
           try { if (photo.blobUrl) URL.revokeObjectURL(photo.blobUrl); } catch (err) {}
           try { if (photo.thumbnailUrl) URL.revokeObjectURL(photo.thumbnailUrl); } catch (err) {}
@@ -3074,7 +3157,6 @@ JSON Schema:
             return;
           } catch (err) {
             if (err.name === 'AbortError') return;
-            console.warn('showDirectoryPicker unavailable or blocked, falling back to folder input:', err);
           }
         }
 
@@ -3083,101 +3165,6 @@ JSON Schema:
         } else if (fileInputRef.current) {
           fileInputRef.current.click();
         }
-      };
-
-      const handleDropItems = async (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        
-        const items = e.dataTransfer?.items;
-        if (!items || !items.length) return;
-
-        setUploading(true);
-        const filesToProcess = [];
-
-        const readEntry = async (entry) => {
-          if (entry.isFile) {
-            return new Promise((resolve) => {
-              entry.file((file) => {
-                if (/\.(jpe?g|png|webp|cr2|nef|arw|dng)$/i.test(file.name)) {
-                  filesToProcess.push(file);
-                }
-                resolve();
-              });
-            });
-          } else if (entry.isDirectory) {
-            const dirReader = entry.createReader();
-            const entries = await new Promise((resolve) => {
-              dirReader.readEntries((results) => resolve(results || []));
-            });
-            for (const subEntry of entries) {
-              await readEntry(subEntry);
-            }
-          }
-        };
-
-        for (let i = 0; i < items.length; i++) {
-          const item = items[i];
-          const entry = item.webkitGetAsEntry ? item.webkitGetAsEntry() : null;
-          if (entry) {
-            await readEntry(entry);
-          } else if (item.kind === 'file') {
-            const file = item.getAsFile();
-            if (file && /\.(jpe?g|png|webp|cr2|nef|arw|dng)$/i.test(file.name)) {
-              filesToProcess.push(file);
-            }
-          }
-        }
-
-        if (filesToProcess.length > 0) {
-          const fpDb = getStoredFingerprintDb();
-          const newPhotoObjs = [];
-
-          for (const file of filesToProcess) {
-            const fpId = generateFingerprintId(file);
-            const savedMeta = fpDb[fpId] || {};
-
-            let cameraExif = savedMeta.cameraExif || null;
-            if (!cameraExif) {
-              cameraExif = await extractCameraExif(file);
-            }
-
-            const photoObj = {
-              id: fpId,
-              fingerprintId: fpId,
-              file: file,
-              fileHandle: null,
-              name: file.name,
-              size: file.size,
-              lastModified: file.lastModified,
-              url: null,
-              blobUrl: null,
-              thumbnailUrl: null,
-              naturalWidth: 1000,
-              naturalHeight: 750,
-              sharpness: savedMeta.sharpness !== undefined ? savedMeta.sharpness : null,
-              stars: savedMeta.stars !== undefined ? savedMeta.stars : null,
-              userStars: savedMeta.userStars !== undefined ? savedMeta.userStars : null,
-              focusSpot: savedMeta.focusSpot || cameraExif?.focusArea || null,
-              cameraExif: cameraExif,
-              identification: savedMeta.identification || null,
-              cropBox: savedMeta.cropBox || null,
-              locationText: savedMeta.locationText || null,
-              opfsFileName: savedMeta.opfsFileName || null
-            };
-
-            saveFingerprintMetadata(photoObj);
-            newPhotoObjs.push(photoObj);
-          }
-
-          onUpdatePhotos(prev => {
-            const existingIds = new Set(prev.map(p => p.id));
-            const filteredNew = newPhotoObjs.filter(p => !existingIds.has(p.id));
-            return [...filteredNew, ...prev];
-          });
-        }
-
-        setUploading(false);
       };
 
       const handleFileUpload = async (e) => {
@@ -3361,12 +3348,11 @@ JSON Schema:
               });
             }
             
-            alert(`Successfully exported ${exportedCount} photo(s) to your selected folder and removed them from the active workspace!`);
+            alert(`Successfully exported ${exportedCount} photo(s) to your selected directory folder and removed them from the main list!`);
             setCurrentPage(1);
             return;
           } catch (err) {
             if (err.name === 'AbortError') return;
-            console.warn('showDirectoryPicker export fallback:', err);
           }
         }
 
@@ -3397,30 +3383,15 @@ JSON Schema:
       const paginatedPhotos = useMemo(() => {
         const start = (currentPage - 1) * pageSize;
         return processedPhotos.slice(start, start + pageSize);
-      }, [processedPhotos, currentPage]);
+      }, [processedPhotos, currentPage, pageSize]);
 
       const bufferedPhotos = useMemo(() => {
         const total = processedPhotos.length;
         if (total === 0) return [];
 
-        const targetBufferSize = 17;
         const pageStart = (currentPage - 1) * pageSize;
         const pageEnd = Math.min(total, currentPage * pageSize);
-        const pageCenter = Math.floor((pageStart + pageEnd) / 2);
-
-        let bufStart = pageCenter - Math.floor(targetBufferSize / 2);
-        let bufEnd = pageCenter + Math.ceil(targetBufferSize / 2);
-
-        if (bufStart < 0) {
-          bufEnd = Math.min(total, bufEnd + Math.abs(bufStart));
-          bufStart = 0;
-        }
-        if (bufEnd > total) {
-          bufStart = Math.max(0, bufStart - (bufEnd - total));
-          bufEnd = total;
-        }
-
-        return processedPhotos.slice(bufStart, bufEnd);
+        return processedPhotos.slice(pageStart, pageEnd);
       }, [processedPhotos, currentPage, pageSize]);
 
       useEffect(() => {
@@ -3506,7 +3477,7 @@ JSON Schema:
       }, [currentPage, processedPhotos.length, filterSharpness, sortBy, isPreviewOpen]);
 
       const isSelectionActive = selectedIds.size > 0;
-      const filterLabel = filterSharpness === '5star' ? '5 Stars' : filterSharpness === '4star' ? '4+ Stars' : filterSharpness === 'soft' ? '1-3 Stars' : filterSharpness === 'unrated' ? 'Unrated' : 'All Photos';
+      const unratedCount = photos.filter(p => p.sharpness === null && p.userStars === null).length;
 
       const showFooterBar = uploading || (loadingThumbnails && !isPreviewOpen) || rating;
 
@@ -3518,9 +3489,9 @@ JSON Schema:
               <div>
                 <h2 className="text-base sm:text-xl font-extrabold text-white flex items-center space-x-2">
                   <Icon name="camera" className="w-5 h-5 sm:w-6 sm:h-6 text-emerald-400" />
-                  <span>Focus Culling Workspace</span>
+                  <span>Culling Focus Workspace</span>
                 </h2>
-                <p className="hidden sm:block text-[11px] sm:text-xs text-slate-400">Grade focus sharpness from 0 (blurry) to 10 (tack sharp) automatically or adjust manually.</p>
+                <p className="hidden sm:block text-[11px] sm:text-xs text-slate-400">Grade focus quality on scale 0 (blurry) to 10 (tack sharp) automatically using subject AI focus cropping.</p>
               </div>
 
               <div className="flex items-center space-x-1.5 sm:space-x-2 overflow-x-auto no-scrollbar py-0.5 w-full sm:w-auto">
@@ -3531,21 +3502,14 @@ JSON Schema:
                       ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' 
                       : 'bg-slate-800 text-slate-300 border-slate-700 hover:text-white'
                   }`}
-                  title="Toggle Filter & Sort Controls"
                 >
                   <Icon name="filter" className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-400" />
-                  <span>Filter/Sort</span>
-                  {filterSharpness !== 'all' && (
-                    <span className="ml-1 bg-emerald-600 text-white font-bold text-[9px] px-1.5 py-0.5 rounded-full">
-                      {filterLabel}
-                    </span>
-                  )}
+                  <span>Filter / Sort</span>
                 </button>
 
                 <button
                   onClick={handleOpenFolderPicker}
                   className="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-[11px] sm:text-xs px-2.5 sm:px-3.5 py-2 sm:py-2.5 rounded-xl shadow-lg transition flex items-center justify-center space-x-1 sm:space-x-1.5 active:scale-95 touch-manipulation flex-1 sm:flex-none"
-                  title="Open Camera Photo Folder into Active Culling Workspace"
                 >
                   <Icon name="upload" className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                   <span>Open Folder</span>
@@ -3570,11 +3534,11 @@ JSON Schema:
 
                 <button
                   onClick={handleBatchRateFocus}
-                  disabled={rating || !photos.some(p => p.sharpness === null && p.userStars === null)}
-                  className="bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 font-semibold text-[11px] sm:text-xs px-2.5 sm:px-3.5 py-2 sm:py-2.5 rounded-xl border border-slate-700 transition flex items-center justify-center space-x-1 sm:space-x-1.5 active:scale-95 touch-manipulation flex-1 sm:flex-none"
+                  disabled={rating || unratedCount === 0}
+                  className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-[11px] sm:text-xs px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl shadow-lg transition flex items-center justify-center space-x-1.5 active:scale-95 touch-manipulation flex-1 sm:flex-none"
                 >
-                  <Icon name="sparkles" className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-400" />
-                  <span>Rate ({photos.filter(p => p.sharpness === null).length})</span>
+                  <Icon name="sparkles" className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-200" />
+                  <span>Cull Blur ({unratedCount} Unrated)</span>
                 </button>
               </div>
             </div>
@@ -3582,17 +3546,17 @@ JSON Schema:
             {showFilterBar && (
               <div className="flex flex-nowrap items-center overflow-x-auto no-scrollbar gap-2 sm:gap-3 pt-2.5 border-t border-slate-800 text-xs animate-fadeIn">
                 <div className="flex items-center space-x-1.5 flex-shrink-0">
-                  <span className="text-slate-400 font-medium text-[10px] sm:text-xs">Filter:</span>
+                  <span className="text-slate-400 font-medium text-[10px] sm:text-xs">Filter Sharpness:</span>
                   <select
                     value={filterSharpness}
                     onChange={(e) => { setFilterSharpness(e.target.value); setCurrentPage(1); }}
-                    className="bg-slate-950 border border-slate-800 text-slate-200 rounded-lg px-2 py-1 focus:outline-none focus:border-emerald-500 text-[10px] sm:text-xs min-w-[110px] touch-manipulation"
+                    className="bg-slate-950 border border-slate-800 text-slate-200 rounded-lg px-2 py-1 focus:outline-none focus:border-emerald-500 text-[10px] sm:text-xs min-w-[120px] touch-manipulation"
                   >
                     <option value="all">All ({photos.length})</option>
-                    <option value="5star">5 Stars (Tack Sharp)</option>
-                    <option value="4star">4+ Stars (Sharp)</option>
-                    <option value="soft">1-3 Stars (Blurry)</option>
-                    <option value="unrated">Unrated</option>
+                    <option value="5star">5 Stars (9-10 Tack Sharp)</option>
+                    <option value="4star">4+ Stars (7-10 Sharp)</option>
+                    <option value="soft">1-3 Stars (1-6 Soft/Blurry)</option>
+                    <option value="unrated">Unrated ({unratedCount})</option>
                   </select>
                 </div>
 
@@ -3604,8 +3568,8 @@ JSON Schema:
                     className="bg-slate-950 border border-slate-800 text-slate-200 rounded-lg px-2 py-1 focus:outline-none focus:border-emerald-500 text-[10px] sm:text-xs touch-manipulation"
                   >
                     <option value="name">File Name</option>
-                    <option value="date">Date Captured</option>
-                    <option value="sharpness">Star Rating</option>
+                    <option value="date">Captured Date (EXIF / Created)</option>
+                    <option value="sharpness">Sharpness Score</option>
                   </select>
                 </div>
 
@@ -3632,18 +3596,11 @@ JSON Schema:
 
               <div className="flex items-center space-x-1.5">
                 <button
-                  onClick={handleSelectAll}
-                  className="px-2.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-slate-300 font-semibold rounded-xl text-[11px] transition border border-slate-700/80 touch-manipulation"
-                >
-                  Deselect
-                </button>
-
-                <button
                   onClick={handleExportFiltered}
-                  className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-xl text-[11px] transition shadow flex items-center space-x-1 touch-manipulation"
+                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-xl text-[11px] transition shadow flex items-center space-x-1 touch-manipulation"
                 >
                   <Icon name="download" className="w-3.5 h-3.5" />
-                  <span>Export Keepers ({selectedIds.size})</span>
+                  <span>Save to Folder & Remove ({selectedIds.size})</span>
                 </button>
 
                 <button
@@ -3651,145 +3608,135 @@ JSON Schema:
                   className="px-2.5 py-1.5 bg-red-600 hover:bg-red-500 text-white font-semibold rounded-xl text-[11px] transition shadow flex items-center space-x-1 touch-manipulation"
                 >
                   <Icon name="trash" className="w-3.5 h-3.5" />
-                  <span>Delete Permanently ({selectedIds.size})</span>
+                  <span>Delete Permanently</span>
                 </button>
               </div>
             </div>
           )}
 
-          {swipeToast && (
-            <div className="absolute top-20 left-1/2 -translate-x-1/2 z-40 bg-emerald-900/90 border border-emerald-400 text-white font-bold text-xs px-4 py-2 rounded-full shadow-2xl backdrop-blur-md animate-fadeIn transition-all pointer-events-none">
-              {swipeToast}
-            </div>
-          )}
-
-          <div 
-            onTouchStart={handleGridTouchStart}
-            onTouchEnd={handleGridTouchEnd}
-            onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
-            onDrop={handleDropItems}
-            className="flex-1 overflow-y-auto min-h-0 pr-1 pb-4"
-          >
+          <div className="flex-1 overflow-y-auto min-h-0 pr-1 pb-4">
             {paginatedPhotos.length > 0 ? (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2.5 sm:gap-4">
-                {paginatedPhotos.map(photo => {
-                  const currentStars = photo.userStars || photo.stars || scoreToStars(photo.sharpness);
-                  const isChecked = selectedIds.has(photo.id);
-                  const activeSrc = photo.thumbnailUrl || photo.blobUrl || photo.url;
-                  
-                  return (
-                    <div
-                      key={photo.id}
-                      onClick={() => (photo.file || activeSrc) && onSelectPhoto(photo)}
-                      className={`group relative aspect-square bg-slate-900 border rounded-2xl overflow-hidden shadow-lg cursor-pointer hover:border-emerald-500 transition flex items-center justify-center p-1 touch-manipulation ${isChecked ? 'border-emerald-500 ring-2 ring-emerald-500/50' : 'border-slate-800'}`}
-                    >
-                      {activeSrc ? (
-                        <CroppedImage
-                          src={activeSrc}
-                          alt={photo.name}
-                          cropBox={photo.cropBox}
-                          photo={photo}
-                          fitMode="contain"
-                          className="w-full h-full"
-                          imgClassName="group-hover:scale-105 transition-transform duration-300"
-                        />
-                      ) : (
-                        <div className="flex flex-col items-center justify-center p-2 text-center space-y-1">
-                          <Icon name="image" className="w-6 h-6 text-slate-600" />
-                          <span className="text-[9px] text-emerald-400 font-semibold bg-emerald-950/80 px-1.5 py-0.5 rounded border border-emerald-500/30">
-                            Re-open folder
-                          </span>
-                        </div>
-                      )}
-
-                      <div 
-                        onClick={(e) => toggleSelectPhoto(photo.id, e)}
-                        className="absolute top-2 left-2 z-20 p-2 sm:p-1 rounded-md bg-slate-950/80 border border-slate-700/80 hover:border-emerald-400 transition touch-manipulation"
-                        title="Select photo"
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2.5 sm:gap-4">
+                  {paginatedPhotos.map(photo => {
+                    const currentStars = photo.userStars || photo.stars || scoreToStars(photo.sharpness);
+                    const isChecked = selectedIds.has(photo.id);
+                    const activeSrc = photo.thumbnailUrl || photo.blobUrl || photo.url;
+                    
+                    return (
+                      <div
+                        key={photo.id}
+                        onClick={() => (photo.file || activeSrc) && onSelectPhoto(photo)}
+                        className={`group relative aspect-square bg-slate-900 border rounded-2xl overflow-hidden shadow-lg cursor-pointer hover:border-emerald-500 transition flex items-center justify-center p-1 touch-manipulation ${isChecked ? 'border-emerald-500 ring-2 ring-emerald-500/50' : 'border-slate-800'}`}
                       >
-                        <input
-                          type="checkbox"
-                          checked={isChecked}
-                          onChange={() => {}}
-                          className="w-5 h-5 sm:w-4 sm:h-4 accent-emerald-500 rounded cursor-pointer pointer-events-none block"
-                        />
-                      </div>
-
-                      <div className="absolute top-2 right-2 z-20 flex items-center space-x-1">
-                        {photo.sharpness !== null && (
-                          <span className="bg-emerald-950/90 border border-emerald-500/50 text-emerald-300 text-[10px] font-extrabold px-1.5 py-0.5 rounded-md shadow-md backdrop-blur-md hidden sm:inline-block">
-                            {photo.sharpness}/10
-                          </span>
+                        {activeSrc ? (
+                          <CroppedImage
+                            src={activeSrc}
+                            alt={photo.name}
+                            cropBox={photo.cropBox}
+                            photo={photo}
+                            fitMode="contain"
+                            className="w-full h-full"
+                            imgClassName="group-hover:scale-105 transition-transform duration-300"
+                          />
+                        ) : (
+                          <div className="flex flex-col items-center justify-center p-2 text-center space-y-1">
+                            <Icon name="image" className="w-6 h-6 text-slate-600" />
+                            <span className="text-[9px] text-emerald-400 font-semibold bg-emerald-950/80 px-1.5 py-0.5 rounded border border-emerald-500/30">
+                              Batch Unloaded
+                            </span>
+                          </div>
                         )}
-                        <button
-                          onClick={(e) => handleDeleteSinglePhoto(photo.id, e)}
-                          className="p-1.5 sm:p-1 bg-slate-950/80 hover:bg-red-600 text-slate-300 hover:text-white rounded-full shadow-md backdrop-blur-md transition touch-manipulation"
-                          title="Delete photo permanently"
-                        >
-                          <Icon name="trash" className="w-3 h-3 sm:w-3 sm:h-3" />
-                        </button>
-                      </div>
 
-                      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-950 via-slate-950/80 to-transparent p-2 flex flex-col justify-end space-y-1 z-10 pointer-events-none">
-                        <div className="flex items-center justify-between pointer-events-auto">
-                          <span className="text-[9px] sm:text-[10px] text-slate-300 font-mono truncate max-w-[70px] sm:max-w-[90px]">
-                            {photo.name}
-                          </span>
-                          <div onClick={(e) => e.stopPropagation()}>
-                            <StarRating
-                              rating={currentStars}
-                              onChange={(newRating) => handleCardStarClick(photo.id, newRating)}
-                              size="w-2.5 h-2.5 sm:w-3 sm:h-3"
-                            />
+                        <div 
+                          onClick={(e) => toggleSelectPhoto(photo.id, e)}
+                          className="absolute top-2 left-2 z-20 p-2 sm:p-1 rounded-md bg-slate-950/80 border border-slate-700/80 hover:border-emerald-400 transition touch-manipulation"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => {}}
+                            className="w-5 h-5 sm:w-4 sm:h-4 accent-emerald-500 rounded cursor-pointer pointer-events-none block"
+                          />
+                        </div>
+
+                        <div className="absolute top-2 right-2 z-20 flex items-center space-x-1">
+                          {photo.sharpness !== null ? (
+                            <span className={`text-[10px] font-extrabold px-1.5 py-0.5 rounded-md shadow-md backdrop-blur-md border ${
+                              photo.sharpness >= 7 ? 'bg-emerald-950/90 text-emerald-300 border-emerald-500/50' :
+                              photo.sharpness >= 4 ? 'bg-amber-950/90 text-amber-300 border-amber-500/50' :
+                              'bg-red-950/90 text-red-300 border-red-500/50'
+                            }`}>
+                              {photo.sharpness}/10
+                            </span>
+                          ) : (
+                            <span className="bg-slate-900/80 text-slate-400 text-[9px] px-1.5 py-0.5 rounded border border-slate-700">
+                              Unrated
+                            </span>
+                          )}
+                          <button
+                            onClick={(e) => handleDeleteSinglePhoto(photo.id, e)}
+                            className="p-1.5 sm:p-1 bg-slate-950/80 hover:bg-red-600 text-slate-300 hover:text-white rounded-full shadow-md backdrop-blur-md transition touch-manipulation"
+                          >
+                            <Icon name="trash" className="w-3 h-3 sm:w-3 sm:h-3" />
+                          </button>
+                        </div>
+
+                        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-950 via-slate-950/80 to-transparent p-2 flex flex-col justify-end space-y-1 z-10 pointer-events-none">
+                          <div className="flex items-center justify-between pointer-events-auto">
+                            <span className="text-[9px] sm:text-[10px] text-slate-300 font-mono truncate max-w-[70px] sm:max-w-[90px]">
+                              {photo.name}
+                            </span>
+                            <div onClick={(e) => e.stopPropagation()}>
+                              <StarRating
+                                rating={currentStars}
+                                onChange={(newRating) => handleCardStarClick(photo.id, newRating)}
+                                size="w-2.5 h-2.5 sm:w-3 sm:h-3"
+                              />
+                            </div>
                           </div>
                         </div>
                       </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+                </div>
 
-                {totalPages > 1 && (
-                  <div className="aspect-square bg-slate-900/90 border border-emerald-500/30 rounded-2xl p-2.5 sm:p-3 flex flex-col items-center justify-between shadow-xl text-center">
-                    <div className="space-y-1 my-auto">
-                      <span className="text-[9px] font-extrabold text-emerald-400 uppercase tracking-widest block">Batch Nav</span>
-                      <div className="text-xs font-extrabold text-white">Page {currentPage} of {totalPages}</div>
-                      <p className="text-[10px] text-slate-400 leading-tight">Swipe grid left/right or use buttons</p>
-                    </div>
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3 flex items-center justify-between shadow-xl">
+                  <span className="text-xs font-semibold text-slate-300">
+                    Page <strong className="text-white">{currentPage}</strong> of <strong className="text-white">{totalPages}</strong> ({processedPhotos.length} Photos total in batch view)
+                  </span>
 
-                    <div className="flex items-center space-x-1.5 w-full pt-2 border-t border-slate-800">
-                      <button
-                        onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                        disabled={currentPage === 1}
-                        className="flex-1 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed text-slate-200 rounded-xl text-xs font-semibold transition touch-manipulation"
-                      >
-                        ← Prev
-                      </button>
-                      <button
-                        onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                        disabled={currentPage === totalPages}
-                        className="flex-1 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-30 disabled:cursor-not-allowed text-white rounded-xl text-xs font-semibold transition shadow touch-manipulation"
-                      >
-                        Next →
-                      </button>
-                    </div>
+                  <div className="flex items-center space-x-2">
+                    <button
+                      onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                      disabled={currentPage === 1}
+                      className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed text-slate-200 rounded-xl text-xs font-semibold transition touch-manipulation"
+                    >
+                      ← Previous 20
+                    </button>
+                    <button
+                      onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                      disabled={currentPage === totalPages}
+                      className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-30 disabled:cursor-not-allowed text-white rounded-xl text-xs font-semibold transition shadow touch-manipulation"
+                    >
+                      Next 20 →
+                    </button>
                   </div>
-                )}
+                </div>
               </div>
             ) : (
               <div 
-                onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
-                onDrop={handleDropItems}
                 className="p-8 sm:p-12 text-center bg-slate-900/40 border border-dashed border-slate-800 hover:border-emerald-500/50 rounded-3xl space-y-3 transition"
               >
                 <Icon name="camera" className="w-10 h-10 sm:w-12 sm:h-12 text-slate-600 mx-auto" />
-                <h3 className="text-sm sm:text-base font-bold text-slate-300">Active Culling Workspace Empty</h3>
-                <p className="text-[11px] sm:text-xs text-slate-500 max-w-sm mx-auto">Click Open Folder or drag and drop a folder of photos here to ingest camera photos and run focus culling.</p>
+                <h3 className="text-sm sm:text-base font-bold text-slate-300">Workspace Memory Empty</h3>
+                <p className="text-[11px] sm:text-xs text-slate-500 max-w-sm mx-auto">Click Open Folder or select photo files to load photos into the batch culling workspace.</p>
                 <div className="flex items-center justify-center space-x-2 pt-2">
                   <button
                     onClick={handleOpenFolderPicker}
                     className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs rounded-xl shadow transition"
                   >
-                    Select Folder
+                    Open Photo Folder
                   </button>
                   <button
                     onClick={() => fileInputRef.current && fileInputRef.current.click()}
@@ -3809,11 +3756,11 @@ JSON Schema:
                   <div className="flex items-center space-x-2 truncate text-emerald-400 font-medium">
                     <div className="w-3.5 h-3.5 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin flex-shrink-0"></div>
                     <span className="truncate">
-                      Reading files: <strong className="font-mono text-white">{uploadProgress.current}</strong>/{uploadProgress.total}
+                      Loading files: <strong className="font-mono text-white">{uploadProgress.current}</strong>/{uploadProgress.total}
                     </span>
                     <button
                       onClick={() => { abortUploadRef.current = true; }}
-                      className="px-2 py-0.5 bg-red-600/20 text-red-400 hover:bg-red-600/30 text-[10px] rounded font-semibold ml-2 flex-shrink-0 touch-manipulation"
+                      className="px-2 py-0.5 bg-red-600/20 text-red-400 text-[10px] rounded font-semibold ml-2 touch-manipulation"
                     >
                       Abort
                     </button>
@@ -3822,18 +3769,18 @@ JSON Schema:
                   <div className="flex items-center space-x-2 truncate text-sky-400 font-medium">
                     <div className="w-3.5 h-3.5 border-2 border-sky-400 border-t-transparent rounded-full animate-spin flex-shrink-0"></div>
                     <span className="truncate">
-                      Buffer Thumbnails: <strong className="font-mono text-white">{thumbnailProgress.current}</strong>/{thumbnailProgress.total}
+                      Rendering 20-Photo Page: <strong className="font-mono text-white">{thumbnailProgress.current}</strong>/{thumbnailProgress.total}
                     </span>
                   </div>
                 ) : rating ? (
                   <div className="flex items-center space-x-2 truncate text-emerald-400 font-medium">
                     <div className="w-3.5 h-3.5 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin flex-shrink-0"></div>
                     <span className="truncate">
-                      Culling Focus: <strong className="font-mono text-white">{ratingProgress.current}</strong>/{ratingProgress.total}
+                      AI Focus Culling: <strong className="font-mono text-white">{ratingProgress.current}</strong>/{ratingProgress.total}
                     </span>
                     <button
                       onClick={() => { abortRatingRef.current = true; }}
-                      className="px-2 py-0.5 bg-red-600/20 text-red-400 hover:bg-red-600/30 text-[10px] rounded font-semibold ml-2 flex-shrink-0 touch-manipulation"
+                      className="px-2 py-0.5 bg-red-600/20 text-red-400 text-[10px] rounded font-semibold ml-2 touch-manipulation"
                     >
                       Abort
                     </button>
@@ -3844,7 +3791,7 @@ JSON Schema:
           )}
 
           {showDeleteConfirmModal && (
-            <div className="fixed inset-0 z-[60] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4" onClick={(e) => e.stopPropagation()}>
+            <div className="fixed inset-0 z-[60] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 sm:p-6 max-w-sm w-full shadow-2xl space-y-4">
                 <div className="flex items-center space-x-3 text-red-400">
                   <div className="p-2 bg-red-500/10 border border-red-500/20 rounded-xl">
@@ -3852,14 +3799,14 @@ JSON Schema:
                   </div>
                   <div>
                     <h3 className="font-bold text-white text-sm sm:text-base">
-                      {isSelectionActive ? "Delete Selected Photos" : "Delete Filtered Photos"}
+                      Delete Photos
                     </h3>
-                    <p className="text-[11px] text-slate-400">Permanent disk & workspace deletion</p>
+                    <p className="text-[11px] text-slate-400">Permanent deletion from disk</p>
                   </div>
                 </div>
                 
                 <p className="text-xs text-slate-300 leading-relaxed bg-slate-950 p-3 rounded-xl border border-slate-800">
-                  Are you sure you want to permanently delete <strong className="text-white font-mono">{isSelectionActive ? selectedIds.size : processedPhotos.length}</strong> photo(s) {isSelectionActive ? "currently checked" : "matching your filter"}? Desktop browsers will attempt native file handle deletion from disk.
+                  Are you sure you want to delete <strong className="text-white font-mono">{isSelectionActive ? selectedIds.size : processedPhotos.length}</strong> photo(s)?
                 </p>
 
                 <div className="flex flex-col-reverse sm:flex-row items-center justify-end sm:space-x-2 pt-2 border-t border-slate-800 gap-2 sm:gap-0">
@@ -3874,7 +3821,7 @@ JSON Schema:
                     className="w-full sm:w-auto px-4 py-2 bg-red-600 hover:bg-red-500 text-white text-xs font-semibold rounded-xl transition shadow-lg flex items-center justify-center space-x-1.5 touch-manipulation"
                   >
                     <Icon name="trash" className="w-3.5 h-3.5" />
-                    <span>Delete {isSelectionActive ? selectedIds.size : processedPhotos.length} Photo{(isSelectionActive ? selectedIds.size : processedPhotos.length) > 1 ? 's' : ''}</span>
+                    <span>Delete Permanently</span>
                   </button>
                 </div>
               </div>
@@ -3964,9 +3911,6 @@ JSON Schema:
                   if (opfsName) {
                     loadedBlob = await getOpfsSightingFileBlob(entry.category, entry.speciesName, opfsName);
                   }
-                  if (!loadedBlob && s.photo?.name) {
-                    loadedBlob = await getOpfsSightingFileBlob(entry.category, entry.speciesName, s.photo.name);
-                  }
 
                   if (loadedBlob) {
                     const freshBlobUrl = URL.createObjectURL(loadedBlob);
@@ -3981,8 +3925,6 @@ JSON Schema:
                     });
                   } else if (s.photo?.thumbnailUrl && !s.photo.thumbnailUrl.startsWith('blob:')) {
                     validSightings.push(s);
-                  } else {
-                    console.log(`Purged vault sighting ${s.id} - image blob unlocatable.`);
                   }
                 }
 
@@ -4062,14 +4004,11 @@ JSON Schema:
         let list = [...photos];
         
         if (filterSharpness === '5star') {
-          list = list.filter(p => (p.userStars || p.stars || scoreToStars(p.sharpness)) === 5);
+          list = list.filter(p => (p.sharpness !== null && p.sharpness >= 9) || p.userStars === 5);
         } else if (filterSharpness === '4star') {
-          list = list.filter(p => (p.userStars || p.stars || scoreToStars(p.sharpness)) >= 4);
+          list = list.filter(p => (p.sharpness !== null && p.sharpness >= 7) || (p.userStars && p.userStars >= 4));
         } else if (filterSharpness === 'soft') {
-          list = list.filter(p => {
-            const stars = p.userStars || p.stars || scoreToStars(p.sharpness);
-            return stars >= 1 && stars <= 3;
-          });
+          list = list.filter(p => (p.sharpness !== null && p.sharpness <= 6) || (p.userStars && p.userStars <= 3));
         } else if (filterSharpness === 'unrated') {
           list = list.filter(p => p.sharpness === null && p.userStars === null);
         }
@@ -4080,9 +4019,9 @@ JSON Schema:
           list.sort((a, b) => b.lastModified - a.lastModified);
         } else if (sortBy === 'sharpness') {
           list.sort((a, b) => {
-            const starsA = a.userStars || a.stars || scoreToStars(a.sharpness);
-            const starsB = b.userStars || b.stars || scoreToStars(b.sharpness);
-            return starsB - starsA;
+            const scoreA = a.sharpness !== null ? a.sharpness : (a.userStars ? a.userStars * 2 : 0);
+            const scoreB = b.sharpness !== null ? b.sharpness : (b.userStars ? b.userStars * 2 : 0);
+            return scoreB - scoreA;
           });
         }
 
@@ -4093,44 +4032,11 @@ JSON Schema:
         if (!selectedPhoto) return;
         const indexInProcessed = processedPhotos.findIndex(p => p.id === selectedPhoto.id);
         if (indexInProcessed !== -1) {
-          const targetPage = Math.floor(indexInProcessed / 12) + 1;
+          const targetPage = Math.floor(indexInProcessed / BATCH_PAGE_SIZE) + 1;
           if (targetPage !== currentPage) {
             setCurrentPage(targetPage);
           }
         }
-      }, [selectedPhoto, processedPhotos]);
-
-      useEffect(() => {
-        if (!selectedPhoto) return;
-        const index = processedPhotos.findIndex(p => p.id === selectedPhoto.id);
-        if (index === -1) return;
-
-        const total = processedPhotos.length;
-        const lruWindow = new Set();
-        if (index > 0) lruWindow.add(processedPhotos[index - 1].id);
-        lruWindow.add(processedPhotos[index].id);
-        if (index < total - 1) lruWindow.add(processedPhotos[index + 1].id);
-
-        setPhotos(prev => {
-          let hasChanges = false;
-          const updated = prev.map(p => {
-            const isInLruWindow = lruWindow.has(p.id);
-            
-            if (isInLruWindow && !p.blobUrl && p.file) {
-              hasChanges = true;
-              return { ...p, blobUrl: URL.createObjectURL(p.file) };
-            }
-            
-            if (!isInLruWindow && p.blobUrl) {
-              try { URL.revokeObjectURL(p.blobUrl); } catch(e){}
-              hasChanges = true;
-              return { ...p, blobUrl: null };
-            }
-            
-            return p;
-          });
-          return hasChanges ? updated : prev;
-        });
       }, [selectedPhoto, processedPhotos]);
 
       useEffect(() => {
@@ -4147,7 +4053,8 @@ JSON Schema:
 
       const handleSaveToVault = async (photoWithAi) => {
         if (!photoWithAi.identification) return;
-        const { speciesName, scientificName, category } = photoWithAi.identification;
+        const idInfo = photoWithAi.identification;
+        const { speciesName, scientificName, category } = idInfo;
 
         const fpId = photoWithAi.fingerprintId || photoWithAi.id;
         const sightingId = 'sighting_' + Math.random().toString(36).substring(2, 9);
@@ -4188,12 +4095,25 @@ JSON Schema:
 
         let updatedEntries = [...vaultEntries];
         if (existingIdx >= 0) {
-          updatedEntries[existingIdx].sightings.unshift(newSighting);
+          updatedEntries[existingIdx] = {
+            ...updatedEntries[existingIdx],
+            description: idInfo.description || updatedEntries[existingIdx].description || '',
+            habitat: idInfo.habitat || updatedEntries[existingIdx].habitat || '',
+            conservationStatus: idInfo.conservationStatus || updatedEntries[existingIdx].conservationStatus || '',
+            diet: idInfo.diet || updatedEntries[existingIdx].diet || '',
+            keyTraits: idInfo.keyTraits || updatedEntries[existingIdx].keyTraits || '',
+            sightings: [newSighting, ...updatedEntries[existingIdx].sightings]
+          };
         } else {
           updatedEntries.unshift({
             speciesName,
             scientificName,
             category,
+            description: idInfo.description || '',
+            habitat: idInfo.habitat || '',
+            conservationStatus: idInfo.conservationStatus || '',
+            diet: idInfo.diet || '',
+            keyTraits: idInfo.keyTraits || '',
             sightings: [newSighting]
           });
         }
@@ -4210,9 +4130,16 @@ JSON Schema:
           speciesName,
           scientificName,
           category,
+          description: idInfo.description || '',
+          habitat: idInfo.habitat || '',
+          conservationStatus: idInfo.conservationStatus || '',
+          diet: idInfo.diet || '',
+          keyTraits: idInfo.keyTraits || '',
           updatedAt: Date.now(),
           lastSighting: cleanPhotoMeta
         });
+
+        updatePhotos(prev => prev.filter(p => p.id !== fpId && p.fingerprintId !== fpId));
 
         setSelectedPhoto(null);
         setActiveTab('vault');
@@ -4275,7 +4202,7 @@ JSON Schema:
                   <span>BirdVault</span>
                   <span className="text-emerald-400 font-mono text-[9px] sm:text-xs font-normal">PRO</span>
                 </h1>
-                <p className="text-[8px] sm:text-[10px] text-slate-400 truncate">Wildlife AI Assistant</p>
+                <p className="text-[8px] sm:text-[10px] text-slate-400 truncate">Wildlife Focus Culling & Vault</p>
               </div>
             </div>
 
@@ -4292,7 +4219,7 @@ JSON Schema:
                 className={`px-4 py-1.5 rounded-lg transition flex items-center space-x-1.5 ${activeTab === 'vault' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
               >
                 <Icon name="feather" className="w-4 h-4" />
-                <span>Lifer Vault</span>
+                <span>Lifer List Vault</span>
               </button>
             </div>
 
@@ -4300,7 +4227,6 @@ JSON Schema:
               <button
                 onClick={() => setShowAuthModal(true)}
                 className={`px-2 sm:px-2.5 py-1.5 rounded-xl border text-[11px] sm:text-xs font-semibold flex items-center space-x-1 transition touch-manipulation ${userApiKey ? 'bg-slate-950 text-slate-300 border-slate-800 hover:border-emerald-500/50' : 'bg-emerald-600/20 text-emerald-300 border-emerald-500/40 animate-pulse'}`}
-                title="Configure Google Gemini API Key"
               >
                 <Icon name="google" className="w-3.5 h-3.5 text-emerald-400" />
                 <span className="text-[10px] sm:text-[11px] font-medium hidden xs:inline">{userApiKey ? 'AI Connected' : 'Connect AI'}</span>
@@ -4309,7 +4235,6 @@ JSON Schema:
               <button
                 onClick={() => setShowTokenModal(true)}
                 className={`px-2 sm:px-2.5 py-1.5 rounded-xl border text-[11px] sm:text-xs font-semibold flex items-center space-x-1 transition touch-manipulation ${rpmUsedPct > 80 ? 'bg-amber-500/20 text-amber-400 border-amber-500/40 animate-pulse' : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-slate-700'}`}
-                title="View Gemini AI Token & Quota Status"
               >
                 <Icon name="bolt" className={`w-3.5 h-3.5 ${rpmUsedPct > 80 ? 'text-amber-400' : 'text-emerald-400'}`} />
                 <span className="text-[10px] sm:text-[11px] font-mono hidden xs:inline">{100 - rpmUsedPct}% Quota</span>
@@ -4358,7 +4283,7 @@ JSON Schema:
               className={`flex flex-col items-center justify-center w-full h-full py-1.5 space-y-0.5 transition touch-manipulation ${activeTab === 'vault' ? 'text-emerald-400 font-bold' : 'text-slate-400 hover:text-slate-300'}`}
             >
               <Icon name="feather" className="w-4 h-4 sm:w-5 sm:h-5" />
-              <span className="text-[10px]">Lifer Vault</span>
+              <span className="text-[10px]">Lifer List Vault</span>
             </button>
           </nav>
 
