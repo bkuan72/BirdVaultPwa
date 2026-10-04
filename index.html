@@ -3042,63 +3042,95 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Sightings Timeline</span>
                   <span className="text-[10px] font-mono text-emerald-400">{entry.sightings.length} Logged</span>
                 </div>
-                <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
                   {entry.sightings.map(s => {
                     const sPhoto = s.photo || {};
                     const cameraExif = sPhoto.cameraExif;
                     const isSelected = s.id === activeSighting.id;
+                    const sKey = `${entry.category}_${entry.speciesName}_${s.id}`;
+                    const sHydratedUrl = vaultImageUrls[sKey];
+                    const sFpId = s.photoFingerprintId || sPhoto.fingerprintId || sPhoto.id;
+                    const sLivePhoto = workspacePhotosMap.get(sFpId);
+
+                    let sSrc = null;
+                    if (sLivePhoto && (sLivePhoto.thumbnailUrl || sLivePhoto.blobUrl || sLivePhoto.url)) {
+                      sSrc = sLivePhoto.thumbnailUrl || sLivePhoto.blobUrl || sLivePhoto.url;
+                    } else if (sHydratedUrl) {
+                      sSrc = sHydratedUrl;
+                    } else if (sPhoto && (sPhoto.thumbnailUrl || sPhoto.blobUrl || sPhoto.url)) {
+                      sSrc = sPhoto.thumbnailUrl || sPhoto.blobUrl || sPhoto.url;
+                    }
+
+                    const sPhotoObj = sLivePhoto || (sHydratedUrl ? { ...sPhoto, thumbnailUrl: sHydratedUrl, blobUrl: sHydratedUrl, url: sHydratedUrl } : sPhoto);
 
                     return (
                       <div 
                         key={s.id} 
                         onClick={() => setSelectedSightingId(s.id)}
-                        className={`p-2 rounded-xl text-xs border cursor-pointer transition-all space-y-1 touch-manipulation ${
+                        className={`p-2 rounded-xl text-xs border cursor-pointer transition-all flex items-center space-x-2.5 touch-manipulation ${
                           isSelected 
                             ? 'bg-emerald-950/60 border-emerald-500/60 ring-1 ring-emerald-500/30' 
                             : 'bg-slate-950 border-slate-800 hover:border-slate-700'
                         }`}
                       >
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center space-x-1.5">
-                            <span className={`w-1.5 h-1.5 rounded-full ${isSelected ? 'bg-emerald-400' : 'bg-slate-600'}`}></span>
-                            <span className={`font-mono text-[11px] font-bold ${isSelected ? 'text-emerald-300' : 'text-slate-200'}`}>
-                              {new Date(s.date).toLocaleDateString()}
-                            </span>
-                          </div>
-                          <div className="flex items-center space-x-1.5">
-                            <StarRating
-                              rating={sPhoto.userStars || sPhoto.stars || scoreToStars(sPhoto.sharpness)}
-                              readOnly={true}
-                              size="w-3 h-3"
+                        <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-lg bg-slate-900 overflow-hidden flex-shrink-0 border border-slate-800 flex items-center justify-center relative">
+                          {sSrc ? (
+                            <CroppedImage
+                              src={sSrc}
+                              alt={sPhoto.name || 'Sighting'}
+                              cropBox={sPhotoObj.cropBox}
+                              photo={sPhotoObj}
+                              fitMode="cover"
+                              className="w-full h-full"
                             />
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onDeleteSighting(entry.speciesName, s.id);
-                              }}
-                              className="text-slate-500 hover:text-red-400 ml-1 p-0.5 touch-manipulation"
-                              title="Delete Sighting"
-                            >
-                              <Icon name="x" className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
+                          ) : (
+                            <Icon name="image" className="w-4 h-4 text-slate-600" />
+                          )}
                         </div>
 
-                        {sPhoto.locationText && (
-                          <div className="text-[10px] text-slate-400 flex items-center space-x-1 truncate pl-3">
-                            <Icon name="mapPin" className="w-3 h-3 text-emerald-400 flex-shrink-0" />
-                            <span className="truncate">{sPhoto.locationText}</span>
+                        <div className="flex-1 min-w-0 space-y-0.5">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center space-x-1.5 truncate">
+                              <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${isSelected ? 'bg-emerald-400' : 'bg-slate-600'}`}></span>
+                              <span className={`font-mono text-[11px] font-bold truncate ${isSelected ? 'text-emerald-300' : 'text-slate-200'}`}>
+                                {new Date(s.date).toLocaleDateString()}
+                              </span>
+                            </div>
+                            <div className="flex items-center space-x-1 flex-shrink-0">
+                              <StarRating
+                                rating={sPhoto.userStars || sPhoto.stars || scoreToStars(sPhoto.sharpness)}
+                                readOnly={true}
+                                size="w-3 h-3"
+                              />
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onDeleteSighting(entry.speciesName, s.id);
+                                }}
+                                className="text-slate-500 hover:text-red-400 ml-1 p-0.5 touch-manipulation"
+                                title="Delete Sighting"
+                              >
+                                <Icon name="x" className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
                           </div>
-                        )}
 
-                        {cameraExif && (
-                          <div className="flex items-center space-x-2 text-[9px] font-mono text-slate-500 pt-0.5 pl-3">
-                            {cameraExif.shutterSpeed && <span>{cameraExif.shutterSpeed}</span>}
-                            {cameraExif.aperture && <span>• {cameraExif.aperture}</span>}
-                            {cameraExif.iso && <span>• {cameraExif.iso}</span>}
-                            {cameraExif.focalLength && <span>• {cameraExif.focalLength}</span>}
-                          </div>
-                        )}
+                          {sPhoto.locationText && (
+                            <div className="text-[10px] text-slate-400 flex items-center space-x-1 truncate pl-3">
+                              <Icon name="mapPin" className="w-3 h-3 text-emerald-400 flex-shrink-0" />
+                              <span className="truncate">{sPhoto.locationText}</span>
+                            </div>
+                          )}
+
+                          {cameraExif && (
+                            <div className="flex items-center space-x-1.5 text-[9px] font-mono text-slate-500 pt-0.5 pl-3 truncate">
+                              {cameraExif.shutterSpeed && <span>{cameraExif.shutterSpeed}</span>}
+                              {cameraExif.aperture && <span>• {cameraExif.aperture}</span>}
+                              {cameraExif.iso && <span>• {cameraExif.iso}</span>}
+                              {cameraExif.focalLength && <span>• {cameraExif.focalLength}</span>}
+                            </div>
+                          )}
+                        </div>
                       </div>
                     );
                   })}
