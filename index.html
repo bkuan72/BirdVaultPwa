@@ -1944,6 +1944,34 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
 
       const activeStars = photo.userStars || photo.stars || scoreToStars(photo.sharpness);
 
+      const triggerCropFocusEvaluation = async (targetCropBox) => {
+        if (!targetCropBox || targetCropBox.width < MIN_CROP_DIMENSION_PCT || targetCropBox.height < MIN_CROP_DIMENSION_PCT) return;
+        setEvaluatingFocus(true);
+        const evalRes = await evaluatePhotoFocus(photo.file || photo.blobUrl || photo.thumbnailUrl || photo.url, targetCropBox, cameraExif);
+        const updated = {
+          ...photo,
+          cropBox: targetCropBox,
+          sharpness: evalRes.score,
+          stars: evalRes.stars
+        };
+        if (evalRes.debugDetails) setDebugData(evalRes.debugDetails);
+        onUpdatePhoto(updated);
+        saveFingerprintMetadata(updated);
+        setEvaluatingFocus(false);
+      };
+
+      const toggleCropTool = async () => {
+        if (isCropToolActive) {
+          setIsCropToolActive(false);
+          const activeCrop = currentCropBoxRef.current || cropBox;
+          if (activeCrop && activeCrop.width >= MIN_CROP_DIMENSION_PCT && activeCrop.height >= MIN_CROP_DIMENSION_PCT) {
+            await triggerCropFocusEvaluation(activeCrop);
+          }
+        } else {
+          setIsCropToolActive(true);
+        }
+      };
+
       const handleRatingChange = (newStars) => {
         const updated = {
           ...photo,
@@ -2141,21 +2169,11 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
 
         if (isDrawingCrop) {
           const finalCrop = currentCropBoxRef.current;
-          
+          setIsDrawingCrop(false);
+          setIsCropToolActive(false);
+
           if (finalCrop && finalCrop.width >= MIN_CROP_DIMENSION_PCT && finalCrop.height >= MIN_CROP_DIMENSION_PCT) {
-            setEvaluatingFocus(true);
-            const evalRes = await evaluatePhotoFocus(photo.file || photo.blobUrl || photo.thumbnailUrl || photo.url, finalCrop, cameraExif);
-            
-            const updated = {
-              ...photo,
-              cropBox: finalCrop,
-              sharpness: evalRes.score,
-              stars: evalRes.stars
-            };
-            if (evalRes.debugDetails) setDebugData(evalRes.debugDetails);
-            onUpdatePhoto(updated);
-            saveFingerprintMetadata(updated);
-            setEvaluatingFocus(false);
+            await triggerCropFocusEvaluation(finalCrop);
           } else {
             setCropBox(photo.cropBox || null);
             currentCropBoxRef.current = photo.cropBox || null;
@@ -2163,8 +2181,6 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
               setShowCroppedPreview(false);
             }
           }
-          setIsDrawingCrop(false);
-          setIsCropToolActive(false);
         }
         setIsDraggingPan(false);
       };
@@ -2253,7 +2269,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
 
               <div className="flex items-center space-x-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
                 <button
-                  onClick={() => setIsCropToolActive(!isCropToolActive)}
+                  onClick={toggleCropTool}
                   className={`px-3 py-1.5 rounded-lg transition font-medium flex items-center space-x-1.5 ${isCropToolActive ? 'bg-emerald-600 text-white shadow-lg' : 'bg-slate-900 text-slate-400 hover:text-white'}`}
                 >
                   <Icon name="crop" className="w-3.5 h-3.5" />
@@ -2726,7 +2742,6 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
       const [isExportingOpfs, setIsExportingOpfs] = useState(false);
       const [vaultImageUrls, setVaultImageUrls] = useState({});
 
-      // Auto-hydrate missing sighting thumbnails from OPFS / IndexedDB storage
       useEffect(() => {
         let isMounted = true;
         async function hydrateMissingImages() {
@@ -2935,7 +2950,6 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                             </button>
                           </div>
 
-                          {/* Species Metadata Card Details */}
                           <div className="space-y-2 text-xs bg-slate-950/80 border border-slate-800 p-3 rounded-xl">
                             <div className="flex items-center justify-between text-[11px] border-b border-slate-800/80 pb-1.5">
                               <span className="text-slate-400 font-semibold flex items-center space-x-1">
@@ -4089,7 +4103,6 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
         const sightingId = 'sighting_' + Math.random().toString(36).substring(2, 9);
         const fileName = `${new Date().toISOString().split('T')[0]}_${sightingId}.jpg`;
 
-        // 1. Fetch or prepare the binary blob before state transition
         let liveBlobUrl = photoWithAi.blobUrl || photoWithAi.thumbnailUrl || photoWithAi.url;
         let blobToWrite = photoWithAi.file;
 
@@ -4102,7 +4115,6 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
           }
         }
 
-        // 2. Commit physical binary to OPFS & IndexedDB vault storage
         if (blobToWrite) {
           await writeOpfsSightingFile(category, speciesName, fileName, blobToWrite);
           if (blobToWrite instanceof Blob || blobToWrite instanceof File) {
@@ -4133,7 +4145,6 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
 
         saveFingerprintMetadata(cleanPhotoMeta);
 
-        // 3. Construct state sighting with live Blob URL for immediate UI display
         const statePhotoMeta = {
           ...cleanPhotoMeta,
           thumbnailUrl: liveBlobUrl,
@@ -4208,7 +4219,6 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
           storageEntries.unshift(newSpeciesStorage);
         }
 
-        // 4. Save sanitized version to localStorage and active live version to React state
         saveVaultToStorage(storageEntries);
         setVaultEntries(stateEntries);
 
