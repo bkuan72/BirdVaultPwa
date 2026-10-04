@@ -173,7 +173,7 @@
 
     const OPFS_VAULT_ROOT = 'BirdVault_Lifer_Catalog';
     const IDB_NAME = 'BirdVault_Storage_DB';
-    const IDB_VERSION = 2; // Incremented for micro-thumbnail cache support
+    const IDB_VERSION = 2;
 
     function openBirdVaultDb() {
       return new Promise((resolve) => {
@@ -496,7 +496,6 @@
       return usage;
     }
 
-    // Phase 1 Optimization: Direct EXIF APP1 Header Embedded Thumbnail Slicing (< 64 KB binary read)
     async function extractExifEmbeddedThumbnail(file) {
       if (!file || !(file instanceof File)) return null;
       const sliceSize = Math.min(65536, file.size);
@@ -517,7 +516,7 @@
               offset += 2;
               if (marker === 0xFFE1) {
                 const length = view.getUint16(offset, false);
-                if (view.getUint32(offset + 2, false) === 0x45786966) { // 'Exif'
+                if (view.getUint32(offset + 2, false) === 0x45786966) {
                   app1Offset = offset + 2;
                   break;
                 }
@@ -820,12 +819,10 @@
       });
     }
 
-    // Fast Micro-Thumbnail Pipeline (EXIF APP1 slice -> IndexedDB micro-cache -> createImageBitmap fallback)
     async function generateFastThumbnail(photo, targetSize = 240) {
       const fpId = photo.fingerprintId || photo.id;
       const file = photo.file;
 
-      // 1. IndexedDB micro-thumbnail cache check
       if (fpId) {
         const cachedBlob = await getBlobFromIdb('birdvault_thumbs', fpId);
         if (cachedBlob && cachedBlob.size > 50) {
@@ -842,7 +839,6 @@
         return { thumbUrl: photo.url || '', width: 240, height: 240 };
       }
 
-      // 2. EXIF APP1 header slice (Fast Path: ~2ms extraction)
       try {
         const exifThumbBlob = await extractExifEmbeddedThumbnail(file);
         if (exifThumbBlob && exifThumbBlob.size > 500) {
@@ -855,7 +851,6 @@
         }
       } catch (e) {}
 
-      // 3. Fallback Path: createImageBitmap scaling & JPEG compression
       try {
         if ('createImageBitmap' in window) {
           const bitmap = await createImageBitmap(file, {
@@ -934,7 +929,7 @@
       let index = 0;
       let completed = 0;
       const total = neededPhotos.length;
-      const concurrency = 4; // Parallelized worker queue
+      const concurrency = 4;
 
       let pendingBatch = [];
 
@@ -2908,6 +2903,213 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
       );
     }
 
+    function SpeciesVaultCard({ entry, workspacePhotosMap, vaultImageUrls, isExpanded, onToggleExpand, onDeleteSpecies, onDeleteSighting, onSelectPhoto }) {
+      const [selectedSightingId, setSelectedSightingId] = useState(entry.sightings[0]?.id || null);
+
+      const activeSighting = useMemo(() => {
+        return entry.sightings.find(s => s.id === selectedSightingId) || entry.sightings[0] || {};
+      }, [entry.sightings, selectedSightingId]);
+
+      const savedPhoto = activeSighting.photo || {};
+      const fpId = activeSighting.photoFingerprintId || savedPhoto.fingerprintId || savedPhoto.id;
+
+      const livePhoto = workspacePhotosMap.get(fpId);
+      const sightingKey = `${entry.category}_${entry.speciesName}_${activeSighting.id}`;
+      const hydratedUrl = vaultImageUrls[sightingKey];
+
+      const photoObj = useMemo(() => {
+        return livePhoto || (hydratedUrl ? { ...savedPhoto, thumbnailUrl: hydratedUrl, blobUrl: hydratedUrl, url: hydratedUrl } : savedPhoto);
+      }, [livePhoto, hydratedUrl, savedPhoto]);
+
+      let activeSrc = null;
+      if (livePhoto && (livePhoto.thumbnailUrl || livePhoto.blobUrl || livePhoto.url)) {
+        activeSrc = livePhoto.thumbnailUrl || livePhoto.blobUrl || livePhoto.url;
+      } else if (hydratedUrl) {
+        activeSrc = hydratedUrl;
+      } else if (savedPhoto && (savedPhoto.thumbnailUrl || savedPhoto.blobUrl || savedPhoto.url)) {
+        activeSrc = savedPhoto.thumbnailUrl || savedPhoto.blobUrl || savedPhoto.url;
+      }
+
+      const hasActiveFile = !!(photoObj && (photoObj.file || activeSrc));
+
+      return (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl hover:border-slate-700 transition flex flex-col justify-between">
+          <div>
+            <div 
+              className="h-44 sm:h-52 relative bg-slate-950 overflow-hidden cursor-pointer flex items-center justify-center p-1 touch-manipulation group" 
+              onClick={() => hasActiveFile && onSelectPhoto(photoObj)}
+            >
+              {activeSrc ? (
+                <CroppedImage
+                  src={activeSrc}
+                  alt={entry.speciesName}
+                  cropBox={photoObj.cropBox}
+                  photo={photoObj}
+                  fitMode="contain"
+                  className="w-full h-full"
+                  imgClassName="transition-transform duration-500 group-hover:scale-105"
+                />
+              ) : (
+                <div className="flex flex-col items-center justify-center p-4 text-center space-y-2 h-full w-full bg-slate-950">
+                  <Icon name="image" className="w-8 h-8 text-slate-600" />
+                  <span className="text-[10px] text-emerald-400 font-semibold bg-emerald-950/80 px-2 py-1 rounded border border-emerald-500/30">
+                    Species Record
+                  </span>
+                </div>
+              )}
+
+              <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-transparent to-transparent pointer-events-none"></div>
+              
+              <div className="absolute top-2.5 right-2.5 flex items-center space-x-1.5">
+                {entry.conservationStatus && (
+                  <span className="bg-emerald-950/90 border border-emerald-500/40 text-emerald-300 font-bold text-[10px] px-2 py-0.5 rounded-full shadow">
+                    {entry.conservationStatus}
+                  </span>
+                )}
+                <span className="bg-emerald-600/90 backdrop-blur-md text-white font-bold text-[10px] px-2 py-0.5 rounded-full shadow">
+                  {entry.category}
+                </span>
+              </div>
+
+              <span className="absolute bottom-2.5 left-2.5 text-xs font-semibold text-slate-300 pointer-events-none bg-slate-950/80 px-2 py-0.5 rounded-md border border-slate-800">
+                {entry.sightings.length} Sighting{entry.sightings.length > 1 ? 's' : ''}
+              </span>
+            </div>
+
+            <div className="p-3.5 sm:p-4 space-y-3">
+              <div className="flex items-start justify-between">
+                <div>
+                  <h3 className="font-extrabold text-white text-base leading-snug">{entry.speciesName}</h3>
+                  <p className="text-xs text-slate-400 italic font-mono">{entry.scientificName}</p>
+                </div>
+                <button
+                  onClick={() => onDeleteSpecies(entry.speciesName)}
+                  className="text-slate-500 hover:text-red-400 p-2 -m-2 touch-manipulation"
+                  title="Delete Species Record"
+                >
+                  <Icon name="trash" className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="space-y-2 text-xs bg-slate-950/80 border border-slate-800 p-3 rounded-xl">
+                <div className="flex items-center justify-between text-[11px] border-b border-slate-800/80 pb-1.5">
+                  <span className="text-slate-400 font-semibold flex items-center space-x-1">
+                    <Icon name="book" className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Species Profile</span>
+                  </span>
+                  <button
+                    onClick={onToggleExpand}
+                    className="text-emerald-400 hover:underline font-semibold text-[10px] touch-manipulation"
+                  >
+                    {isExpanded ? 'Show Less' : 'Full Species Details'}
+                  </button>
+                </div>
+
+                {entry.description && (
+                  <p className={`text-[11px] text-slate-300 leading-relaxed ${isExpanded ? '' : 'line-clamp-2'}`}>
+                    {entry.description}
+                  </p>
+                )}
+
+                {isExpanded && (
+                  <div className="space-y-2 pt-1 animate-fadeIn">
+                    {entry.habitat && (
+                      <div className="text-[11px] text-slate-300 bg-slate-900 p-2 rounded-lg border border-slate-800/80">
+                        <strong className="text-emerald-400 block mb-0.5">Habitat & Distribution:</strong>
+                        {entry.habitat}
+                      </div>
+                    )}
+
+                    {entry.diet && (
+                      <div className="text-[11px] text-slate-300 bg-slate-900 p-2 rounded-lg border border-slate-800/80">
+                        <strong className="text-emerald-400 block mb-0.5">Diet & Foraging:</strong>
+                        {entry.diet}
+                      </div>
+                    )}
+
+                    {entry.keyTraits && (
+                      <div className="text-[11px] text-slate-300 bg-slate-900 p-2 rounded-lg border border-slate-800/80">
+                        <strong className="text-emerald-400 block mb-0.5">Field Marks & Traits:</strong>
+                        {entry.keyTraits}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-1.5 border-t border-slate-800 pt-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Sightings Timeline</span>
+                  <span className="text-[10px] font-mono text-emerald-400">{entry.sightings.length} Logged</span>
+                </div>
+                <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                  {entry.sightings.map(s => {
+                    const sPhoto = s.photo || {};
+                    const cameraExif = sPhoto.cameraExif;
+                    const isSelected = s.id === activeSighting.id;
+
+                    return (
+                      <div 
+                        key={s.id} 
+                        onClick={() => setSelectedSightingId(s.id)}
+                        className={`p-2 rounded-xl text-xs border cursor-pointer transition-all space-y-1 touch-manipulation ${
+                          isSelected 
+                            ? 'bg-emerald-950/60 border-emerald-500/60 ring-1 ring-emerald-500/30' 
+                            : 'bg-slate-950 border-slate-800 hover:border-slate-700'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center space-x-1.5">
+                            <span className={`w-1.5 h-1.5 rounded-full ${isSelected ? 'bg-emerald-400' : 'bg-slate-600'}`}></span>
+                            <span className={`font-mono text-[11px] font-bold ${isSelected ? 'text-emerald-300' : 'text-slate-200'}`}>
+                              {new Date(s.date).toLocaleDateString()}
+                            </span>
+                          </div>
+                          <div className="flex items-center space-x-1.5">
+                            <StarRating
+                              rating={sPhoto.userStars || sPhoto.stars || scoreToStars(sPhoto.sharpness)}
+                              readOnly={true}
+                              size="w-3 h-3"
+                            />
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onDeleteSighting(entry.speciesName, s.id);
+                              }}
+                              className="text-slate-500 hover:text-red-400 ml-1 p-0.5 touch-manipulation"
+                              title="Delete Sighting"
+                            >
+                              <Icon name="x" className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+
+                        {sPhoto.locationText && (
+                          <div className="text-[10px] text-slate-400 flex items-center space-x-1 truncate pl-3">
+                            <Icon name="mapPin" className="w-3 h-3 text-emerald-400 flex-shrink-0" />
+                            <span className="truncate">{sPhoto.locationText}</span>
+                          </div>
+                        )}
+
+                        {cameraExif && (
+                          <div className="flex items-center space-x-2 text-[9px] font-mono text-slate-500 pt-0.5 pl-3">
+                            {cameraExif.shutterSpeed && <span>{cameraExif.shutterSpeed}</span>}
+                            {cameraExif.aperture && <span>• {cameraExif.aperture}</span>}
+                            {cameraExif.iso && <span>• {cameraExif.iso}</span>}
+                            {cameraExif.focalLength && <span>• {cameraExif.focalLength}</span>}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     function LiferVaultView({ vaultEntries, photos = [], onDeleteSighting, onDeleteSpecies, onSelectPhoto }) {
       const [selectedCategory, setSelectedCategory] = useState('All');
       const [searchQuery, setSearchQuery] = useState('');
@@ -3041,188 +3243,19 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
           <div className="flex-1 overflow-y-auto min-h-0 pr-1 pb-4">
             {filteredEntries.length > 0 ? (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
-                {filteredEntries.map(entry => {
-                  const primarySighting = entry.sightings[0] || {};
-                  const savedPhoto = primarySighting.photo || {};
-                  const fpId = primarySighting.photoFingerprintId || savedPhoto.fingerprintId || savedPhoto.id;
-
-                  const livePhoto = workspacePhotosMap.get(fpId);
-                  const sightingKey = `${entry.category}_${entry.speciesName}_${primarySighting.id}`;
-                  const hydratedUrl = vaultImageUrls[sightingKey];
-
-                  const photoObj = livePhoto || (hydratedUrl ? { ...savedPhoto, thumbnailUrl: hydratedUrl, blobUrl: hydratedUrl, url: hydratedUrl } : savedPhoto);
-
-                  let activeSrc = null;
-                  if (livePhoto && (livePhoto.thumbnailUrl || livePhoto.blobUrl || livePhoto.url)) {
-                    activeSrc = livePhoto.thumbnailUrl || livePhoto.blobUrl || livePhoto.url;
-                  } else if (hydratedUrl) {
-                    activeSrc = hydratedUrl;
-                  } else if (savedPhoto && (savedPhoto.thumbnailUrl || savedPhoto.blobUrl || savedPhoto.url)) {
-                    activeSrc = savedPhoto.thumbnailUrl || savedPhoto.blobUrl || savedPhoto.url;
-                  }
-
-                  const hasActiveFile = !!(photoObj && (photoObj.file || activeSrc));
-                  const isExpanded = expandedSpecies === entry.speciesName;
-
-                  return (
-                    <div key={entry.speciesName} className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl hover:border-slate-700 transition flex flex-col justify-between">
-                      <div>
-                        <div 
-                          className="h-44 sm:h-52 relative bg-slate-950 overflow-hidden cursor-pointer flex items-center justify-center p-1 touch-manipulation" 
-                          onClick={() => hasActiveFile && onSelectPhoto(photoObj)}
-                        >
-                          {activeSrc ? (
-                            <CroppedImage
-                              src={activeSrc}
-                              alt={entry.speciesName}
-                              cropBox={photoObj.cropBox}
-                              photo={photoObj}
-                              fitMode="contain"
-                              className="w-full h-full"
-                              imgClassName="transition-transform duration-500 hover:scale-105"
-                            />
-                          ) : (
-                            <div className="flex flex-col items-center justify-center p-4 text-center space-y-2 h-full w-full bg-slate-950">
-                              <Icon name="image" className="w-8 h-8 text-slate-600" />
-                              <span className="text-[10px] text-emerald-400 font-semibold bg-emerald-950/80 px-2 py-1 rounded border border-emerald-500/30">
-                                Species Record
-                              </span>
-                            </div>
-                          )}
-
-                          <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-transparent to-transparent pointer-events-none"></div>
-                          
-                          <div className="absolute top-2.5 right-2.5 flex items-center space-x-1.5">
-                            {entry.conservationStatus && (
-                              <span className="bg-emerald-950/90 border border-emerald-500/40 text-emerald-300 font-bold text-[10px] px-2 py-0.5 rounded-full shadow">
-                                {entry.conservationStatus}
-                              </span>
-                            )}
-                            <span className="bg-emerald-600/90 backdrop-blur-md text-white font-bold text-[10px] px-2 py-0.5 rounded-full shadow">
-                              {entry.category}
-                            </span>
-                          </div>
-
-                          <span className="absolute bottom-2.5 left-2.5 text-xs font-semibold text-slate-300 pointer-events-none">
-                            {entry.sightings.length} Sighting{entry.sightings.length > 1 ? 's' : ''}
-                          </span>
-                        </div>
-
-                        <div className="p-3.5 sm:p-4 space-y-3">
-                          <div className="flex items-start justify-between">
-                            <div>
-                              <h3 className="font-extrabold text-white text-base leading-snug">{entry.speciesName}</h3>
-                              <p className="text-xs text-slate-400 italic font-mono">{entry.scientificName}</p>
-                            </div>
-                            <button
-                              onClick={() => onDeleteSpecies(entry.speciesName)}
-                              className="text-slate-500 hover:text-red-400 p-2 -m-2 touch-manipulation"
-                              title="Delete Species Record"
-                            >
-                              <Icon name="trash" className="w-4 h-4" />
-                            </button>
-                          </div>
-
-                          <div className="space-y-2 text-xs bg-slate-950/80 border border-slate-800 p-3 rounded-xl">
-                            <div className="flex items-center justify-between text-[11px] border-b border-slate-800/80 pb-1.5">
-                              <span className="text-slate-400 font-semibold flex items-center space-x-1">
-                                <Icon name="book" className="w-3.5 h-3.5 text-emerald-400" />
-                                <span>Species Profile</span>
-                              </span>
-                              <button
-                                onClick={() => setExpandedSpecies(isExpanded ? null : entry.speciesName)}
-                                className="text-emerald-400 hover:underline font-semibold text-[10px] touch-manipulation"
-                              >
-                                {isExpanded ? 'Show Less' : 'Full Species Details'}
-                              </button>
-                            </div>
-
-                            {entry.description && (
-                              <p className={`text-[11px] text-slate-300 leading-relaxed ${isExpanded ? '' : 'line-clamp-2'}`}>
-                                {entry.description}
-                              </p>
-                            )}
-
-                            {isExpanded && (
-                              <div className="space-y-2 pt-1 animate-fadeIn">
-                                {entry.habitat && (
-                                  <div className="text-[11px] text-slate-300 bg-slate-900 p-2 rounded-lg border border-slate-800/80">
-                                    <strong className="text-emerald-400 block mb-0.5">Habitat & Distribution:</strong>
-                                    {entry.habitat}
-                                  </div>
-                                )}
-
-                                {entry.diet && (
-                                  <div className="text-[11px] text-slate-300 bg-slate-900 p-2 rounded-lg border border-slate-800/80">
-                                    <strong className="text-emerald-400 block mb-0.5">Diet & Foraging:</strong>
-                                    {entry.diet}
-                                  </div>
-                                )}
-
-                                {entry.keyTraits && (
-                                  <div className="text-[11px] text-slate-300 bg-slate-900 p-2 rounded-lg border border-slate-800/80">
-                                    <strong className="text-emerald-400 block mb-0.5">Field Marks & Traits:</strong>
-                                    {entry.keyTraits}
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                          </div>
-
-                          <div className="space-y-1.5 border-t border-slate-800 pt-3">
-                            <div className="flex items-center justify-between">
-                              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Sightings Timeline</span>
-                              <span className="text-[10px] font-mono text-emerald-400">{entry.sightings.length} Logged</span>
-                            </div>
-                            <div className="space-y-1.5 max-h-40 overflow-y-auto">
-                              {entry.sightings.map(s => {
-                                const sPhoto = s.photo || {};
-                                const cameraExif = sPhoto.cameraExif;
-                                return (
-                                  <div key={s.id} className="bg-slate-950 p-2 rounded-xl text-xs border border-slate-800 space-y-1">
-                                    <div className="flex items-center justify-between">
-                                      <span className="text-slate-200 font-mono text-[11px] font-bold">{new Date(s.date).toLocaleDateString()}</span>
-                                      <div className="flex items-center space-x-1.5">
-                                        <StarRating
-                                          rating={sPhoto.userStars || sPhoto.stars || scoreToStars(sPhoto.sharpness)}
-                                          readOnly={true}
-                                          size="w-3 h-3"
-                                        />
-                                        <button
-                                          onClick={() => onDeleteSighting(entry.speciesName, s.id)}
-                                          className="text-slate-500 hover:text-red-400 ml-1 p-0.5 touch-manipulation"
-                                          title="Delete Sighting"
-                                        >
-                                          <Icon name="x" className="w-3.5 h-3.5" />
-                                        </button>
-                                      </div>
-                                    </div>
-
-                                    {sPhoto.locationText && (
-                                      <div className="text-[10px] text-slate-400 flex items-center space-x-1 truncate">
-                                        <Icon name="mapPin" className="w-3 h-3 text-emerald-400 flex-shrink-0" />
-                                        <span className="truncate">{sPhoto.locationText}</span>
-                                      </div>
-                                    )}
-
-                                    {cameraExif && (
-                                      <div className="flex items-center space-x-2 text-[9px] font-mono text-slate-500 pt-0.5">
-                                        {cameraExif.shutterSpeed && <span>{cameraExif.shutterSpeed}</span>}
-                                        {cameraExif.aperture && <span>• {cameraExif.aperture}</span>}
-                                        {cameraExif.iso && <span>• {cameraExif.iso}</span>}
-                                        {cameraExif.focalLength && <span>• {cameraExif.focalLength}</span>}
-                                      </div>
-                                    )}
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
+                {filteredEntries.map(entry => (
+                  <SpeciesVaultCard
+                    key={entry.speciesName}
+                    entry={entry}
+                    workspacePhotosMap={workspacePhotosMap}
+                    vaultImageUrls={vaultImageUrls}
+                    isExpanded={expandedSpecies === entry.speciesName}
+                    onToggleExpand={() => setExpandedSpecies(expandedSpecies === entry.speciesName ? null : entry.speciesName)}
+                    onDeleteSpecies={onDeleteSpecies}
+                    onDeleteSighting={onDeleteSighting}
+                    onSelectPhoto={onSelectPhoto}
+                  />
+                ))}
               </div>
             ) : (
               <div className="p-8 sm:p-12 text-center bg-slate-900/40 border border-dashed border-slate-800 rounded-3xl space-y-3">
@@ -3645,7 +3678,6 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
         return processedPhotos.slice(pageStart, pageEnd);
       }, [processedPhotos, currentPage, pageSize]);
 
-      // Phase 3 Optimization: Active Pre-fetching Queue
       useEffect(() => {
         if (isPreviewOpen) {
           setLoadingThumbnails(false);
@@ -4268,7 +4300,6 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
         }
 
         if (sortBy === 'default') {
-          // Keep natural streaming order
         } else if (sortBy === 'name') {
           list.sort((a, b) => a.name.localeCompare(b.name));
         } else if (sortBy === 'date_asc') {
