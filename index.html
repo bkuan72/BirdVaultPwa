@@ -162,6 +162,124 @@
     const VAULT_PAGE_SIZE = 5;
     const MIN_CROP_DIMENSION_PCT = 2.0;
 
+    function getStoredTokenUsage() {
+      try {
+        const raw = localStorage.getItem('birdvault_gemini_usage');
+        if (raw) {
+          const usage = JSON.parse(raw);
+          const now = Date.now();
+          if (!usage.minuteWindowStart || now - usage.minuteWindowStart > 60000) {
+            usage.minuteWindowStart = now;
+            usage.minuteRequests = 0;
+            usage.minuteTokens = 0;
+          }
+          if (!usage.dailyWindowStart || now - usage.dailyWindowStart > 86400000) {
+            usage.dailyWindowStart = now;
+            usage.dailyRequests = 0;
+          }
+          return usage;
+        }
+      } catch (e) {}
+      return {
+        minuteWindowStart: Date.now(),
+        minuteRequests: 0,
+        minuteTokens: 0,
+        dailyWindowStart: Date.now(),
+        dailyRequests: 0
+      };
+    }
+
+    function getStoredFingerprintDb() {
+      try {
+        const raw = localStorage.getItem('birdvault_fingerprints_v1');
+        return raw ? JSON.parse(raw) : {};
+      } catch (e) {
+        return {};
+      }
+    }
+
+    function saveFingerprintMetadata(photo) {
+      if (!photo || !photo.fingerprintId) return;
+      try {
+        const db = getStoredFingerprintDb();
+        db[photo.fingerprintId] = {
+          id: photo.id,
+          fingerprintId: photo.fingerprintId,
+          name: photo.name,
+          size: photo.size,
+          lastModified: photo.lastModified,
+          sharpness: photo.sharpness,
+          stars: photo.stars,
+          userStars: photo.userStars,
+          focusSpot: photo.focusSpot,
+          cameraExif: photo.cameraExif,
+          identification: photo.identification,
+          cropBox: photo.cropBox,
+          locationText: photo.locationText,
+          opfsFileName: photo.opfsFileName,
+          activeVersionId: photo.activeVersionId,
+          versions: photo.versions ? photo.versions.map(v => ({...v, blobUrl: null, thumbnailUrl: null})) : undefined
+        };
+        localStorage.setItem('birdvault_fingerprints_v1', JSON.stringify(db));
+      } catch (e) {}
+    }
+
+    function deleteFingerprintMetadata(fingerprintId) {
+      if (!fingerprintId) return;
+      try {
+        const db = getStoredFingerprintDb();
+        delete db[fingerprintId];
+        localStorage.setItem('birdvault_fingerprints_v1', JSON.stringify(db));
+      } catch (e) {}
+    }
+
+    function getStoredVault() {
+      try {
+        const raw = localStorage.getItem('birdvault_entries_v5');
+        return raw ? JSON.parse(raw) : [];
+      } catch (e) {
+        return [];
+      }
+    }
+
+    function saveVaultToStorage(entries) {
+      try {
+        localStorage.setItem('birdvault_entries_v5', JSON.stringify(entries));
+      } catch (e) {}
+    }
+
+    async function exportOpfsVaultToZip(vaultEntries) {
+      if (typeof JSZip === 'undefined') {
+        throw new Error('JSZip library is not loaded.');
+      }
+      const zip = new JSZip();
+      const manifest = {
+        exportDate: new Date().toISOString(),
+        totalSpecies: vaultEntries.length,
+        vaultEntries: vaultEntries
+      };
+      zip.file('vault_manifest.json', JSON.stringify(manifest, null, 2));
+
+      for (const entry of vaultEntries) {
+        const catDir = (entry.category || 'Other').replace(/[^a-zA-Z0-9_-]/g, '_');
+        const speciesDir = (entry.speciesName || 'Unknown').replace(/[^a-zA-Z0-9_-]/g, '_');
+        const folder = zip.folder(`${catDir}/${speciesDir}`);
+
+        for (const s of (entry.sightings || [])) {
+          const fileName = s.opfsFileName || s.photo?.opfsFileName;
+          if (fileName) {
+            const blob = await getOpfsSightingFileBlob(entry.category, entry.speciesName, fileName);
+            if (blob) {
+              folder.file(fileName, blob);
+            }
+          }
+        }
+      }
+
+      const content = await zip.generateAsync({ type: 'blob' });
+      return new File([content], `BirdVault_Lifer_Export_${new Date().toISOString().split('T')[0]}.zip`, { type: 'application/zip' });
+    }
+
     function scoreToStars(score) {
       if (score === null || score === undefined) return 0;
       return Math.max(1, Math.min(5, Math.ceil(score / 2)));
@@ -358,162 +476,269 @@
       }
     }
 
-    async function exportOpfsVaultToZip(vaultEntriesFallback = []) {
-      if (typeof JSZip === 'undefined') {
-        throw new Error('JSZip library is not loaded');
-      }
+    async function applyAiEnhancementsToImage(sourceUrlOrFile, params, cropBox = null, heatmapPoints = []) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
 
-      const zip = new JSZip();
-      const vaultFolder = zip.folder(OPFS_VAULT_ROOT);
-      let opfsSuccess = false;
+        let srcToRevoke = null;
+        if (typeof sourceUrlOrFile === 'string') {
+          img.src = sourceUrlOrFile;
+        } else if (sourceUrlOrFile instanceof File || sourceUrlOrFile instanceof Blob) {
+          srcToRevoke = URL.createObjectURL(sourceUrlOrFile);
+          img.src = srcToRevoke;
+        } else {
+          return resolve(null);
+        }
 
-      try {
-        const root = await getOpfsRootHandle();
-        if (root) {
-          async function traverseDirectory(dirHandle, currentZipFolder) {
-            for await (const [name, handle] of dirHandle.entries()) {
-              if (handle.kind === 'file') {
-                const file = await handle.getFile();
-                currentZipFolder.file(name, file);
-              } else if (handle.kind === 'directory') {
-                const subFolder = currentZipFolder.folder(name);
-                await traverseDirectory(handle, subFolder);
+        img.onload = () => {
+          try {
+            const canvas = document.createElement('canvas');
+            canvas.width = img.naturalWidth || img.width;
+            canvas.height = img.naturalHeight || img.height;
+            const ctx = canvas.getContext('2d', { willReadFrequently: true });
+            ctx.drawImage(img, 0, 0);
+
+            const w = canvas.width;
+            const h = canvas.height;
+            const imgData = ctx.getImageData(0, 0, w, h);
+            const data = imgData.data;
+
+            const denoiseLevel = (params.denoise || 0) / 100;
+            const sharpeningLevel = (params.sharpness || 0) / 100;
+            const vibranceLevel = (params.vibrance || 0) / 100;
+            const contrastLevel = (params.contrast || 0) / 100;
+            const shadowsLevel = (params.shadows || 0) / 100;
+
+            // 1. Subject Mask Construction (Radial gradient from Crop ROI or Heatmap)
+            const mask = new Float32Array(w * h);
+            let maskCx = w / 2;
+            let maskCy = h / 2;
+            let maskRx = w * 0.4;
+            let maskRy = h * 0.4;
+
+            if (cropBox && cropBox.width > 0) {
+              maskCx = (cropBox.x + cropBox.width / 2) / 100 * w;
+              maskCy = (cropBox.y + cropBox.height / 2) / 100 * h;
+              maskRx = (cropBox.width / 2) / 100 * w * 1.2;
+              maskRy = (cropBox.height / 2) / 100 * h * 1.2;
+            } else if (heatmapPoints && heatmapPoints.length > 0) {
+              const eyePt = heatmapPoints.find(p => p.label && p.label.toLowerCase().includes('eye')) || heatmapPoints[0];
+              if (eyePt && eyePt.x !== undefined) {
+                maskCx = (eyePt.x / 100) * w;
+                maskCy = (eyePt.y / 100) * h;
               }
             }
-          }
 
-          await traverseDirectory(root, vaultFolder);
-          opfsSuccess = true;
-        }
-      } catch (err) {
-        console.warn('OPFS traversal warning during ZIP export:', err);
-      }
-
-      // Fallback: If OPFS is restricted by sandbox policies or empty, construct ZIP directly from memory & IDB
-      if (!opfsSuccess || (vaultFolder.files && Object.keys(vaultFolder.files).length <= 1)) {
-        vaultFolder.file('vault_manifest.json', JSON.stringify(vaultEntriesFallback, null, 2));
-        for (const entry of (vaultEntriesFallback || [])) {
-          const catName = await sanitizeDirectoryName(entry.category || 'Other');
-          const speciesName = await sanitizeDirectoryName(entry.speciesName);
-          const catFolder = vaultFolder.folder(catName);
-          const speciesFolder = catFolder.folder(speciesName);
-          speciesFolder.file('species_info.json', JSON.stringify(entry, null, 2));
-
-          for (const s of (entry.sightings || [])) {
-            const fileName = s.opfsFileName || (s.photo ? s.photo.name : null);
-            if (fileName) {
-              const blob = await getOpfsSightingFileBlob(entry.category, entry.speciesName, fileName);
-              if (blob) {
-                speciesFolder.file(fileName, blob);
+            for (let y = 0; y < h; y++) {
+              for (let x = 0; x < w; x++) {
+                const dx = (x - maskCx) / maskRx;
+                const dy = (y - maskCy) / maskRy;
+                const distSq = dx * dx + dy * dy;
+                const weight = Math.max(0.15, Math.min(1.0, 1.0 - distSq * 0.65));
+                mask[y * w + x] = weight;
               }
             }
+
+            // 2. Spatial Bilateral Denoising & High-Pass Unsharp Masking
+            const copy = new Uint8ClampedArray(data);
+            const sharpKernel = [-1, -1, -1, -1, 9, -1, -1, -1, -1];
+
+            for (let y = 1; y < h - 1; y++) {
+              for (let x = 1; x < w - 1; x++) {
+                const idx = (y * w + x) * 4;
+                const mWeight = mask[y * w + x];
+
+                // Denoise pass across flat areas
+                if (denoiseLevel > 0) {
+                  let rSum = 0, gSum = 0, bSum = 0, count = 0;
+                  for (let dy = -1; dy <= 1; dy++) {
+                    for (let dx = -1; dx <= 1; dx++) {
+                      const nIdx = ((y + dy) * w + (x + dx)) * 4;
+                      rSum += copy[nIdx];
+                      gSum += copy[nIdx + 1];
+                      bSum += copy[nIdx + 2];
+                      count++;
+                    }
+                  }
+                  const blend = denoiseLevel * (1.0 - mWeight * 0.5);
+                  data[idx] = data[idx] * (1 - blend) + (rSum / count) * blend;
+                  data[idx + 1] = data[idx + 1] * (1 - blend) + (gSum / count) * blend;
+                  data[idx + 2] = data[idx + 2] * (1 - blend) + (bSum / count) * blend;
+                }
+
+                // Sharpening pass on subject
+                if (sharpeningLevel > 0) {
+                  let sr = 0, sg = 0, sb = 0;
+                  let kIdx = 0;
+                  for (let dy = -1; dy <= 1; dy++) {
+                    for (let dx = -1; dx <= 1; dx++) {
+                      const nIdx = ((y + dy) * w + (x + dx)) * 4;
+                      const k = sharpKernel[kIdx++];
+                      sr += copy[nIdx] * k;
+                      sg += copy[nIdx + 1] * k;
+                      sb += copy[nIdx + 2] * k;
+                    }
+                  }
+                  const sFactor = sharpeningLevel * mWeight * 0.75;
+                  data[idx] = Math.min(255, Math.max(0, data[idx] * (1 - sFactor) + sr * sFactor));
+                  data[idx + 1] = Math.min(255, Math.max(0, data[idx + 1] * (1 - sFactor) + sg * sFactor));
+                  data[idx + 2] = Math.min(255, Math.max(0, data[idx + 2] * (1 - sFactor) + sb * sFactor));
+                }
+
+                // 3. Vibrance, Shadow Lift & Contrast Curve
+                let r = data[idx];
+                let g = data[idx + 1];
+                let b = data[idx + 2];
+
+                // Shadow Lift
+                if (shadowsLevel > 0) {
+                  const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+                  if (lum < 128) {
+                    const shadowBoost = (1 - lum / 128) * shadowsLevel * 40;
+                    r = Math.min(255, r + shadowBoost);
+                    g = Math.min(255, g + shadowBoost);
+                    b = Math.min(255, b + shadowBoost);
+                  }
+                }
+
+                // Contrast
+                if (contrastLevel !== 0) {
+                  const factor = (259 * (contrastLevel * 100 + 255)) / (255 * (259 - contrastLevel * 100));
+                  r = Math.min(255, Math.max(0, factor * (r - 128) + 128));
+                  g = Math.min(255, Math.max(0, factor * (g - 128) + 128));
+                  b = Math.min(255, Math.max(0, factor * (b - 128) + 128));
+                }
+
+                // Selective Vibrance
+                if (vibranceLevel > 0) {
+                  const max = Math.max(r, g, b);
+                  const avg = (r + g + b) / 3;
+                  const amt = (((max - avg) * -1) / 128) * vibranceLevel * 1.2;
+                  r = Math.min(255, Math.max(0, r + (max - r) * amt));
+                  g = Math.min(255, Math.max(0, g + (max - g) * amt));
+                  b = Math.min(255, Math.max(0, b + (max - b) * amt));
+                }
+
+                data[idx] = r;
+                data[idx + 1] = g;
+                data[idx + 2] = b;
+              }
+            }
+
+            ctx.putImageData(imgData, 0, 0);
+
+            canvas.toBlob((blob) => {
+              if (srcToRevoke) URL.revokeObjectURL(srcToRevoke);
+              canvas.width = 0; canvas.height = 0;
+              if (blob) resolve(blob);
+              else reject(new Error('Canvas toBlob failed'));
+            }, 'image/jpeg', 0.92);
+          } catch (err) {
+            if (srcToRevoke) URL.revokeObjectURL(srcToRevoke);
+            reject(err);
           }
-        }
-      }
-
-      const zipBlob = await zip.generateAsync({ type: 'blob' });
-      return new File([zipBlob], `${OPFS_VAULT_ROOT}_Export.zip`, { type: 'application/zip' });
-    }
-
-    function getStoredFingerprintDb() {
-      try {
-        const stored = localStorage.getItem('birdvault_fingerprints_v1');
-        if (stored) return JSON.parse(stored);
-      } catch (e) {
-        console.warn('Fingerprint DB read error:', e);
-      }
-      return {};
-    }
-
-    function saveFingerprintMetadata(photoMeta) {
-      if (!photoMeta || (!photoMeta.fingerprintId && !photoMeta.id)) return;
-      const fpId = photoMeta.fingerprintId || photoMeta.id;
-      
-      try {
-        const db = getStoredFingerprintDb();
-        db[fpId] = {
-          fingerprintId: fpId,
-          name: photoMeta.name,
-          size: photoMeta.size,
-          lastModified: photoMeta.lastModified,
-          sharpness: photoMeta.sharpness !== undefined ? photoMeta.sharpness : null,
-          stars: photoMeta.stars !== undefined ? photoMeta.stars : null,
-          userStars: photoMeta.userStars !== undefined ? photoMeta.userStars : null,
-          focusSpot: photoMeta.focusSpot || null,
-          cameraExif: photoMeta.cameraExif || null,
-          identification: photoMeta.identification || null,
-          cropBox: photoMeta.cropBox || null,
-          locationText: photoMeta.locationText || null,
-          opfsFileName: photoMeta.opfsFileName || null
         };
-        localStorage.setItem('birdvault_fingerprints_v1', JSON.stringify(db));
-      } catch (e) {
-        console.warn('Fingerprint DB save warning:', e);
-      }
+
+        img.onerror = () => {
+          if (srcToRevoke) URL.revokeObjectURL(srcToRevoke);
+          reject(new Error('Failed to load source image for enhancement'));
+        };
+      });
     }
 
-    function deleteFingerprintMetadata(fpId) {
-      if (!fpId) return;
-      try {
-        const db = getStoredFingerprintDb();
-        if (db[fpId]) {
-          delete db[fpId];
-          localStorage.setItem('birdvault_fingerprints_v1', JSON.stringify(db));
-        }
-        deleteFromIdb('birdvault_thumbs', fpId);
-      } catch (e) {
-        console.warn('Fingerprint DB delete warning:', e);
-      }
-    }
+    async function estimateAiEnhancementParams(photo, userApiKey = '', scope = 'full', locationText = 'Global') {
+      const rawKey = userApiKey || localStorage.getItem('birdvault_gemini_token') || '';
+      const apiKey = rawKey.trim().replace(/[\r\n\t]/g, '');
 
-    function syncFingerprintDbPrune(activePhotos) {
+      if (!apiKey) {
+        return {
+          denoise: 35,
+          sharpness: 55,
+          vibrance: 30,
+          contrast: 20,
+          shadows: 25,
+          aiNotes: "Heuristic presets applied (Demo / Offline mode)."
+        };
+      }
+
+      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${encodeURIComponent(apiKey)}`;
+
       try {
-        const activeIds = new Set((activePhotos || []).map(p => p.fingerprintId || p.id));
-        const db = getStoredFingerprintDb();
-        let changed = false;
-        Object.keys(db).forEach(fpId => {
-          if (!activeIds.has(fpId)) {
-            delete db[fpId];
-            deleteFromIdb('birdvault_thumbs', fpId);
-            changed = true;
-          }
+        const base64Data = await new Promise((resolve) => {
+          const img = new Image();
+          img.crossOrigin = 'anonymous';
+          img.onload = () => {
+            const canvas = document.createElement('canvas');
+            let sx = 0, sy = 0, sw = img.width, sh = img.height;
+            if (scope === 'crop' && photo.cropBox && photo.cropBox.width > 0) {
+              sx = (photo.cropBox.x / 100) * img.width;
+              sy = (photo.cropBox.y / 100) * img.height;
+              sw = (photo.cropBox.width / 100) * img.width;
+              sh = (photo.cropBox.height / 100) * img.height;
+            }
+            canvas.width = Math.min(1024, Math.round(sw));
+            canvas.height = Math.min(1024, Math.round(sh));
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+            resolve(canvas.toDataURL('image/jpeg', 0.85).split(',')[1]);
+          };
+          img.onerror = () => resolve(null);
+          img.src = photo.blobUrl || photo.thumbnailUrl || photo.url;
         });
-        if (changed) {
-          localStorage.setItem('birdvault_fingerprints_v1', JSON.stringify(db));
+
+        if (!base64Data) throw new Error("Could not prepare image payload");
+
+        const prompt = `Analyze this wild bird photo for post-processing enhancement.
+Estimate optimal digital darkroom adjustments from 0 to 100:
+- denoise: (0-100) higher for high ISO noise in background or shadow grain
+- sharpness: (0-100) higher for soft plumage or eye focus
+- vibrance: (0-100) boost feather colors without oversaturating skin
+- contrast: (0-100) micro-contrast adjustment
+- shadows: (0-100) lift under-exposed feather details
+
+Return STRICT JSON ONLY:
+{
+  "denoise": 40,
+  "sharpness": 60,
+  "vibrance": 25,
+  "contrast": 15,
+  "shadows": 20,
+  "aiNotes": "Concise reasoning for these darkroom settings."
+}`;
+
+        recordTokenUsage(280);
+
+        const response = await fetch(apiUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{
+              parts: [
+                { text: prompt },
+                { inlineData: { mimeType: "image/jpeg", data: base64Data } }
+              ]
+            }]
+          })
+        });
+
+        if (response.ok) {
+          const resJson = await response.json();
+          const text = resJson.candidates?.[0]?.content?.parts?.[0]?.text || '';
+          const clean = text.replace(/```json/g, '').replace(/```/g, '').trim();
+          return JSON.parse(clean);
         }
       } catch (e) {
-        console.warn('Fingerprint DB sync prune error:', e);
+        console.warn('AI Parameter estimation fallback:', e);
       }
-    }
 
-    function getStoredTokenUsage() {
-      try {
-        const stored = localStorage.getItem('birdvault_gemini_usage');
-        if (stored) {
-          const parsed = JSON.parse(stored);
-          const now = Date.now();
-          if (now - parsed.minuteWindowStart > 60000) {
-            parsed.minuteRequests = 0;
-            parsed.minuteTokens = 0;
-            parsed.minuteWindowStart = now;
-          }
-          const storedDate = new Date(parsed.dailyWindowStart).getUTCDate();
-          const currentDate = new Date(now).getUTCDate();
-          if (storedDate !== currentDate) {
-            parsed.dailyRequests = 0;
-            parsed.dailyWindowStart = now;
-          }
-          return parsed;
-        }
-      } catch (e) {}
-      
-      const now = Date.now();
       return {
-        minuteRequests: 0,
-        minuteTokens: 0,
-        dailyRequests: 0,
-        minuteWindowStart: now,
-        dailyWindowStart: now
+        denoise: 35,
+        sharpness: 55,
+        vibrance: 30,
+        contrast: 20,
+        shadows: 25,
+        aiNotes: "Adaptive default parameters."
       };
     }
 
@@ -1090,8 +1315,17 @@
             const gradMag = new Float32Array(w * h);
             const isEdge = new Uint8Array(w * h);
 
-            const LOWER_GRADIENT_THRESHOLD = 20;
+            const SHARP_GRADIENT_THRESHOLD = 35;
             let peakGrad = 0;
+
+            // Dual-Zone counters for Subject-Core vs Background-Perimeter analysis
+            let coreEdges = 0;
+            let coreSharpEdges = 0;
+            let perimeterEdges = 0;
+            let perimeterSharpEdges = 0;
+
+            const cxCenter = w / 2;
+            const cyCenter = h / 2;
 
             for (let y = 1; y < h - 1; y++) {
               for (let x = 1; x < w - 1; x++) {
@@ -1110,11 +1344,28 @@
                 gradMag[idx] = mag;
                 if (mag > peakGrad) peakGrad = mag;
 
-                if (mag >= LOWER_GRADIENT_THRESHOLD) {
+                // Determine if pixel is in Subject Core (center 50%) or Outer Perimeter (outer 20% border)
+                const isCore = (x >= w * 0.25 && x <= w * 0.75 && y >= h * 0.25 && y <= h * 0.75);
+                const isPerimeter = (x < w * 0.20 || x > w * 0.80 || y < h * 0.20 || y > h * 0.80);
+
+                if (mag >= 20) {
                   isEdge[idx] = 1;
+                  if (isCore) coreEdges++;
+                  if (isPerimeter) perimeterEdges++;
+
+                  if (mag >= SHARP_GRADIENT_THRESHOLD) {
+                    if (isCore) coreSharpEdges++;
+                    if (isPerimeter) perimeterSharpEdges++;
+                  }
                 }
               }
             }
+
+            const coreSharpRatio = coreEdges > 0 ? coreSharpEdges / coreEdges : 0;
+            const perimeterSharpRatio = perimeterEdges > 0 ? perimeterSharpEdges / perimeterEdges : 0;
+
+            // Detect Missed-Focus Penalty (Sharp background in perimeter, blurry subject in core)
+            const isMissedFocusBackground = (perimeterSharpRatio >= 0.20 && coreSharpRatio < 0.08);
 
             const visited = new Uint8Array(w * h);
             let closedShapePixels = 0;
@@ -1174,10 +1425,18 @@
                     for (let k = 0; k < compSize; k++) {
                       const idx = componentIndices[k];
                       const mag = gradMag[idx];
-                      closedShapePixels++;
 
                       const cy = Math.floor(idx / w);
                       const cx = idx % w;
+
+                      // Radial Center Weighting: Give full weight to center/subject shapes
+                      const dxCtr = (cx - cxCenter) / cxCenter;
+                      const dyCtr = (cy - cyCenter) / cyCenter;
+                      const centerDistNorm = Math.sqrt(dxCtr * dxCtr + dyCtr * dyCtr);
+                      const centerWeight = Math.max(0.2, 1.0 - centerDistNorm * 0.65);
+
+                      closedShapePixels++;
+
                       let localMin = luminance[idx];
                       let localMax = luminance[idx];
                       for (let dy = -1; dy <= 1; dy++) {
@@ -1188,10 +1447,10 @@
                         }
                       }
                       const contrastStep = localMax - localMin;
-                      
+
                       let acutance = 0;
                       if (mag >= 45 && contrastStep >= 20) {
-                        acutance = (mag * mag) / (contrastStep + 1);
+                        acutance = ((mag * mag) / (contrastStep + 1)) * centerWeight;
                       }
 
                       if (acutance >= 16.0) {
@@ -1204,42 +1463,50 @@
               }
             }
 
-            const sharpRatio = closedShapePixels > 0 ? sharpClosedShapePixels / closedShapePixels : 0;
+            let sharpRatio = closedShapePixels > 0 ? sharpClosedShapePixels / closedShapePixels : 0;
             const avgAcutance = sharpClosedShapePixels > 0 ? totalClosedAcutance / sharpClosedShapePixels : 0;
+
+            // Apply Missed-Focus Penalty if sharp background detected behind blurry core
+            if (isMissedFocusBackground) {
+              sharpRatio *= 0.25;
+            }
 
             let score = 1;
             let ruleReason = "";
 
-            if (closedShapePixels === 0 || sharpClosedShapePixels === 0) {
+            if (isMissedFocusBackground) {
+              score = Math.min(3, Math.max(1, Math.ceil(coreSharpRatio * 20)));
+              ruleReason = `Missed Focus Penalty: Sharp background elements detected in perimeter (${Math.round(perimeterSharpRatio * 100)}%), but center subject core is blurry (${Math.round(coreSharpRatio * 100)}% sharp ratio).`;
+            } else if (closedShapePixels === 0 || sharpClosedShapePixels === 0) {
               score = 1;
-              ruleReason = "No closed subject shapes found, or shape edges are broad and blurry.";
+              ruleReason = "No sharp closed subject shapes found; edges are soft and out of focus.";
             } else if (sharpRatio >= 0.28 && avgAcutance >= 45) {
               score = 10;
-              ruleReason = `Tack sharp closed shape contours (${(sharpRatio * 100).toFixed(1)}% sharp ratio, ${avgAcutance.toFixed(0)} avg acutance).`;
+              ruleReason = `Tack sharp subject core contours (${(sharpRatio * 100).toFixed(1)}% sharp ratio, ${avgAcutance.toFixed(0)} avg acutance).`;
             } else if (sharpRatio >= 0.22 && avgAcutance >= 35) {
               score = 9;
-              ruleReason = `Very sharp closed shape contours (${(sharpRatio * 100).toFixed(1)}% sharp ratio).`;
+              ruleReason = `Very sharp subject contours with center-weighted acutance (${(sharpRatio * 100).toFixed(1)}% sharp ratio).`;
             } else if (sharpRatio >= 0.16 && avgAcutance >= 28) {
               score = 8;
-              ruleReason = `Sharp shape contours with crisp contrast.`;
+              ruleReason = `Sharp subject core shape contours with crisp contrast.`;
             } else if (sharpRatio >= 0.12 && avgAcutance >= 22) {
               score = 7;
-              ruleReason = `Good edge steepness across closed shapes.`;
+              ruleReason = `Good edge steepness across center subject shapes.`;
             } else if (sharpRatio >= 0.08 && avgAcutance >= 18) {
               score = 6;
-              ruleReason = `Acceptable subject focus on closed shape boundaries.`;
+              ruleReason = `Acceptable subject focus on center shape boundaries.`;
             } else if (sharpRatio >= 0.05) {
               score = 5;
-              ruleReason = `Moderate edge steepness; subject slightly soft.`;
+              ruleReason = `Moderate edge steepness; subject core is slightly soft.`;
             } else if (sharpRatio >= 0.025) {
               score = 4;
-              ruleReason = `Low shape boundary acutance; soft subject.`;
+              ruleReason = `Low center shape acutance; soft subject.`;
             } else if (sharpRatio >= 0.01) {
               score = 3;
-              ruleReason = `Very soft closed shapes.`;
+              ruleReason = `Very soft subject shapes.`;
             } else {
               score = 2;
-              ruleReason = `Barely detectable micro-contrast on closed shape contours.`;
+              ruleReason = `Barely detectable micro-contrast on subject shape contours.`;
             }
 
             if (isNaN(score)) score = 1;
@@ -1250,6 +1517,9 @@
               closedShapesCount,
               sharpEdgeRatioPct: Math.round(sharpRatio * 100),
               avgAcutance: Math.round(avgAcutance),
+              coreSharpRatioPct: Math.round(coreSharpRatio * 100),
+              perimeterSharpRatioPct: Math.round(perimeterSharpRatio * 100),
+              isMissedFocusBackground,
               rule: `Grade ${score}/10 (${stars} Stars)`,
               reason: ruleReason
             };
@@ -1647,15 +1917,22 @@
 
     function CroppedImage({ src, alt, cropBox, photo = null, className = "", imgClassName = "", innerRef = null, fitMode = "contain", children = null }) {
       const [imgError, setImgError] = useState(false);
-      const [imgDims, setImgDims] = useState({
-        w: (photo?.naturalWidth && photo.naturalWidth > 300) ? photo.naturalWidth : 1000,
-        h: (photo?.naturalHeight && photo.naturalHeight > 300) ? photo.naturalHeight : 750
-      });
+      const [imgDims, setImgDims] = useState(() => ({
+        w: (photo?.naturalWidth && photo.naturalWidth > 50) ? photo.naturalWidth : 1000,
+        h: (photo?.naturalHeight && photo.naturalHeight > 50) ? photo.naturalHeight : 750
+      }));
+
+      useEffect(() => {
+        if (photo?.naturalWidth > 50 && photo?.naturalHeight > 50) {
+          setImgDims({ w: photo.naturalWidth, h: photo.naturalHeight });
+        }
+      }, [photo?.naturalWidth, photo?.naturalHeight]);
 
       useEffect(() => {
         setImgError(false);
         if (src) {
           const img = new Image();
+          img.crossOrigin = 'anonymous';
           img.onload = () => {
             if (img.naturalWidth > 0 && img.naturalHeight > 0) {
               setImgDims({ w: img.naturalWidth, h: img.naturalHeight });
@@ -1666,91 +1943,104 @@
         }
       }, [src]);
 
-      const naturalW = imgDims.w;
-      const naturalH = imgDims.h;
-
-      const aspect = useMemo(() => {
-        const baseAspect = naturalW / naturalH;
-        if (cropBox && cropBox.width > 0 && cropBox.height > 0) {
-          return (cropBox.width / cropBox.height) * baseAspect;
-        }
-        return baseAspect;
-      }, [cropBox, naturalW, naturalH]);
-
-      const frameStyle = useMemo(() => {
-        if (!aspect || fitMode !== "contain") return {};
-        return {
-          aspectRatio: `${aspect}`,
-          maxWidth: '100%',
-          maxHeight: '100%',
-          width: 'auto',
-          height: 'auto'
-        };
-      }, [aspect, fitMode]);
-
-      const preserveAspect = fitMode === "cover" ? "xMidYMid slice" : "xMidYMid meet";
-
       if (imgError || !src) {
         return (
-          <div className={`relative overflow-hidden flex flex-col items-center justify-center bg-slate-950 p-4 text-center select-none ${className}`} style={frameStyle}>
-            <Icon name="image" className="w-8 h-8 text-slate-600 mb-1" />
-            <span className="text-[10px] text-emerald-400 font-semibold bg-emerald-950/80 px-2 py-1 rounded border border-emerald-500/30">
-              📁 Re-select folder for preview
-            </span>
+          <div className={`flex flex-col items-center justify-center bg-slate-900 border border-slate-800 rounded-xl p-4 text-slate-500 ${className}`}>
+            <Icon name="image" className="w-8 h-8 opacity-40 mb-1" />
+            <span className="text-[10px] text-slate-400">Image unavailable</span>
           </div>
         );
       }
 
-      if (cropBox && cropBox.width > 0 && cropBox.height > 0) {
-        const cropX = (cropBox.x / 100) * naturalW;
-        const cropY = (cropBox.y / 100) * naturalH;
-        const cropW = (cropBox.width / 100) * naturalW;
-        const cropH = (cropBox.height / 100) * naturalH;
+      const hasCrop = cropBox && cropBox.width > 0 && cropBox.height > 0 && (cropBox.width < 99 || cropBox.height < 99 || cropBox.x > 1 || cropBox.y > 1);
 
-        const finalSrc = photo?.blobUrl || src;
+      const naturalW = imgDims.w || 1000;
+      const naturalH = imgDims.h || 750;
 
-        return (
-          <div 
-            className={`relative overflow-hidden flex items-center justify-center bg-slate-950 select-none ${className}`}
-            style={frameStyle}
-          >
-            <svg
-              ref={innerRef}
-              viewBox={`${cropX} ${cropY} ${cropW} ${cropH}`}
-              preserveAspectRatio={preserveAspect}
-              className={`w-full h-full block ${imgClassName}`}
-              draggable="false"
-              onDragStart={(e) => e.preventDefault()}
-            >
-              <image
-                href={finalSrc}
-                x="0"
-                y="0"
-                width={naturalW}
-                height={naturalH}
-                onError={() => setImgError(true)}
+      // Calculate the true aspect ratio of the rendered view
+      let viewW = naturalW;
+      let viewH = naturalH;
+      if (hasCrop) {
+        viewW = (cropBox.width / 100) * naturalW;
+        viewH = (cropBox.height / 100) * naturalH;
+      }
+      const aspect = (viewW > 0 && viewH > 0) ? (viewW / viewH) : 1.33;
+
+      if (fitMode === 'cover') {
+        if (hasCrop) {
+          const scaleX = 100 / cropBox.width;
+          const scaleY = 100 / cropBox.height;
+          const translateX = -cropBox.x * scaleX;
+          const translateY = -cropBox.y * scaleY;
+
+          return (
+            <div className={`relative overflow-hidden w-full h-full ${className}`}>
+              <img
+                ref={innerRef}
+                src={src}
+                alt={alt || 'Photo'}
+                className={`absolute max-w-none origin-top-left transition-transform duration-150 ${imgClassName}`}
+                style={{
+                  width: `${scaleX * 100}%`,
+                  height: `${scaleY * 100}%`,
+                  left: `${translateX}%`,
+                  top: `${translateY}%`,
+                  objectFit: 'cover'
+                }}
               />
-            </svg>
-            {children}
-          </div>
-        );
+              {children}
+            </div>
+          );
+        } else {
+          return (
+            <div className={`relative overflow-hidden w-full h-full ${className}`}>
+              <img ref={innerRef} src={src} alt={alt || 'Photo'} className={`w-full h-full object-cover ${imgClassName}`} />
+              {children}
+            </div>
+          );
+        }
       }
+
+      // 'contain' mode (Lightbox & Photo Inspector view)
+      // Use the Invisible Spacer trick to enforce aspect ratio scaling and shrink-wrapping
+      const spacerW = 10000;
+      const spacerH = 10000 / aspect;
+      const svgSpacer = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='${Math.round(spacerW)}' height='${Math.round(spacerH)}'%3E%3C/svg%3E`;
 
       return (
-        <div 
-          className={`relative overflow-hidden flex items-center justify-center bg-slate-950 select-none ${className}`}
-          style={frameStyle}
-        >
-          <img
-            ref={innerRef}
-            src={src}
-            alt={alt}
-            decoding="async"
-            draggable="false"
-            onDragStart={(e) => e.preventDefault()}
-            onError={() => setImgError(true)}
-            className={`${fitMode === 'cover' ? 'w-full h-full object-cover' : 'w-full h-full object-contain'} ${imgClassName}`}
+        <div className={`relative inline-flex items-center justify-center max-w-full max-h-full ${className}`}>
+          {/* Spacer forces exactly calculated aspect ratio and ensures the container tightly wraps */}
+          <img 
+            src={svgSpacer} 
+            alt="" 
+            className="block max-w-full max-h-full opacity-0 pointer-events-none select-none"
+            style={{ width: 'auto', height: 'auto' }}
           />
+
+          <div className="absolute inset-0 w-full h-full overflow-hidden" style={{ borderRadius: 'inherit' }}>
+            {hasCrop ? (
+              <img
+                ref={innerRef}
+                src={src}
+                alt={alt || 'Photo'}
+                className={`absolute max-w-none origin-top-left transition-transform duration-150 ${imgClassName}`}
+                style={{
+                  width: `${(100 / cropBox.width) * 100}%`,
+                  height: `${(100 / cropBox.height) * 100}%`,
+                  left: `${-cropBox.x * (100 / cropBox.width)}%`,
+                  top: `${-cropBox.y * (100 / cropBox.height)}%`,
+                  objectFit: 'cover'
+                }}
+              />
+            ) : (
+              <img
+                ref={innerRef}
+                src={src}
+                alt={alt || 'Photo'}
+                className={`w-full h-full object-contain ${imgClassName}`}
+              />
+            )}
+          </div>
           {children}
         </div>
       );
@@ -1762,33 +2052,18 @@
       const [gettingGps, setGettingGps] = useState(false);
       const inputRef = useRef(null);
 
-      const globalHotspots = useMemo(() => [
-        "Auckland, New Zealand",
-        "Fiordland National Park, South Island, New Zealand",
-        "Kaimai Mamaku Conservation Park, Bay of Plenty, NZ",
-        "Aoraki / Mount Cook National Park, Canterbury, NZ",
-        "Kruger National Park, Limpopo, South Africa",
-        "Monteverde Cloud Forest Reserve, Puntarenas, Costa Rica",
-        "Everglades National Park, Florida, United States",
-        "Pantanal Matogrossense National Park, Mato Grosso, Brazil",
-        "Kakadu National Park, Northern Territory, Australia",
-        "Galapagos National Park, Galapagos Islands, Ecuador",
-        "Daintree Rainforest, Queensland, Australia",
-        "Bwindi Impenetrable National Park, Western Region, Uganda",
-        "Ranthambore National Park, Rajasthan, India",
-        "Central Park Bird Sanctuary, New York City, USA",
-        "Lake Nakuru National Park, Great Rift Valley, Kenya"
-      ], []);
-
-      const handleInputChange = (e) => {
-        const query = e.target.value;
-        onChange(query);
-        if (query.trim().length > 0) {
-          const filtered = globalHotspots.filter(h => 
-            h.toLowerCase().includes(query.toLowerCase())
-          );
-          setSuggestions(filtered.length > 0 ? filtered : [query]);
-          setIsOpen(true);
+      const handleInputChange = async (e) => {
+        const val = e.target.value;
+        onChange(val);
+        if (val.length > 2) {
+          try {
+            const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(val)}&limit=5`);
+            if (res.ok) {
+              const data = await res.json();
+              setSuggestions(data.map(item => item.display_name));
+              setIsOpen(true);
+            }
+          } catch (err) {}
         } else {
           setSuggestions([]);
           setIsOpen(false);
@@ -1864,6 +2139,7 @@
             />
             {value && (
               <button
+                type="button"
                 onClick={() => onChange('')}
                 className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 p-2 touch-manipulation"
               >
@@ -2036,7 +2312,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
       }
     }
 
-    function InteractivePhotoViewer({ photo, onClose, onUpdatePhoto, onSaveToVault, onDeletePhoto, userApiKey, initialLocation = '', onUpdateLocation, onNextPhoto, onPrevPhoto, hasNext = false, hasPrev = false, vaultEntries = [] }) {
+    function InteractivePhotoViewer({ photo, onClose, onUpdatePhoto, onSaveToVault, onDeletePhoto, userApiKey, initialLocation = '', onUpdateLocation, onNextPhoto, onPrevPhoto, hasNext = false, hasPrev = false, vaultEntries = [], onCommitNewVersion = null }) {
       const [loupeImgPos, setLoupeImgPos] = useState({ xPct: 50, yPct: 50 });
       const [loupeScreenPos, setLoupeScreenPos] = useState({ x: 0, y: 0 });
       const [isLoupeActive, setIsLoupeActive] = useState(false);
@@ -2049,9 +2325,153 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
       const [showCongratModal, setShowCongratModal] = useState(false);
       const [congratData, setCongratData] = useState(null);
 
+      const [enhanceScope, setEnhanceScope] = useState('full');
+      const [enhanceParams, setEnhanceParams] = useState({
+        denoise: 35,
+        sharpness: 55,
+        vibrance: 25,
+        contrast: 15,
+        shadows: 20
+      });
+      const [isEstimatingParams, setIsEstimatingParams] = useState(false);
+      const [isProcessingEnhancement, setIsProcessingEnhancement] = useState(false);
+      const [enhancedPreviewUrl, setEnhancedPreviewUrl] = useState(null);
+      const [isHoldingOriginal, setIsHoldingOriginal] = useState(false);
+      const [enhancementNotes, setEnhancementNotes] = useState('');
+
       const loupeCanvasRef = useRef(null);
       const cachedLoupeImgRef = useRef(null);
       const [loupeImgLoaded, setLoupeImgLoaded] = useState(false);
+
+      const activeVersions = useMemo(() => {
+        return photo.versions || [
+          {
+            versionId: 'v1',
+            label: 'Original Capture',
+            opfsFileName: photo.opfsFileName || photo.name,
+            timestamp: photo.lastModified || Date.now(),
+            isOriginal: true,
+            blobUrl: photo.blobUrl,
+            thumbnailUrl: photo.thumbnailUrl
+          }
+        ];
+      }, [photo.versions, photo.opfsFileName, photo.name, photo.lastModified, photo.blobUrl, photo.thumbnailUrl]);
+
+      const activeVersionId = photo.activeVersionId || 'v1';
+
+      const handleSelectVersion = async (versionId) => {
+        const selectedVer = activeVersions.find(v => v.versionId === versionId);
+        if (!selectedVer) return;
+
+        let newBlobUrl = selectedVer.blobUrl;
+        let newThumbUrl = selectedVer.thumbnailUrl;
+
+        if (!newBlobUrl && selectedVer.opfsFileName) {
+          const idInfo = photo.identification || {};
+          const blob = await getOpfsSightingFileBlob(idInfo.category || 'Other', idInfo.speciesName || 'Uncategorized', selectedVer.opfsFileName);
+          if (blob) {
+            newBlobUrl = URL.createObjectURL(blob);
+            newThumbUrl = newBlobUrl;
+          }
+        }
+
+        if (!newBlobUrl && selectedVer.isOriginal && photo.file) {
+          newBlobUrl = URL.createObjectURL(photo.file);
+          newThumbUrl = newBlobUrl;
+        }
+
+        const updatedVersions = activeVersions.map(v => 
+          v.versionId === versionId ? { ...v, blobUrl: newBlobUrl, thumbnailUrl: newThumbUrl } : v
+        );
+
+        const updated = {
+          ...photo,
+          activeVersionId: versionId,
+          cropBox: selectedVer.cropBox !== undefined ? selectedVer.cropBox : photo.cropBox,
+          blobUrl: newBlobUrl || photo.blobUrl,
+          thumbnailUrl: newThumbUrl || photo.thumbnailUrl,
+          versions: updatedVersions
+        };
+        onUpdatePhoto(updated);
+        saveFingerprintMetadata(updated);
+      };
+
+      const handleAutoTuneAiParams = async () => {
+        setIsEstimatingParams(true);
+        const estimated = await estimateAiEnhancementParams(photo, userApiKey, enhanceScope, locationInput);
+        if (estimated) {
+          setEnhanceParams({
+            denoise: estimated.denoise ?? 35,
+            sharpness: estimated.sharpness ?? 55,
+            vibrance: estimated.vibrance ?? 25,
+            contrast: estimated.contrast ?? 15,
+            shadows: estimated.shadows ?? 20
+          });
+          if (estimated.aiNotes) setEnhancementNotes(estimated.aiNotes);
+        }
+        setIsEstimatingParams(false);
+      };
+
+      const handleGenerateEnhancementPreview = async () => {
+        setIsProcessingEnhancement(true);
+        try {
+          const source = photo.blobUrl || photo.thumbnailUrl || photo.url;
+          const enhancedBlob = await applyAiEnhancementsToImage(source, enhanceParams, enhanceScope === 'crop' ? cropBox : null, aiResult?.heatmapPoints || []);
+          if (enhancedBlob) {
+            if (enhancedPreviewUrl) URL.revokeObjectURL(enhancedPreviewUrl);
+            const newUrl = URL.createObjectURL(enhancedBlob);
+            setEnhancedPreviewUrl(newUrl);
+          }
+        } catch (err) {
+          console.warn('Enhancement error:', err);
+        } finally {
+          setIsProcessingEnhancement(false);
+        }
+      };
+
+      const handleSaveEnhancementVersion = async () => {
+        setIsProcessingEnhancement(true);
+        try {
+          const source = photo.blobUrl || photo.thumbnailUrl || photo.url;
+          const enhancedBlob = await applyAiEnhancementsToImage(source, enhanceParams, enhanceScope === 'crop' ? cropBox : null, aiResult?.heatmapPoints || []);
+          if (!enhancedBlob) return;
+
+          const nextVerNum = activeVersions.length + 1;
+          const verId = `v${nextVerNum}`;
+          const verLabel = `v${nextVerNum}: AI Enhanced (${enhanceScope === 'crop' ? 'Crop' : 'Full'})`;
+
+          const newVersionObj = {
+            versionId: verId,
+            label: verLabel,
+            timestamp: Date.now(),
+            isOriginal: false,
+            cropBox: enhanceScope === 'crop' ? cropBox : null,
+            processingParams: { ...enhanceParams }
+          };
+
+          if (onCommitNewVersion) {
+            await onCommitNewVersion(photo, enhancedBlob, newVersionObj);
+          } else {
+            const newUrl = URL.createObjectURL(enhancedBlob);
+            const updatedVersions = [...activeVersions, { ...newVersionObj, blobUrl: newUrl, thumbnailUrl: newUrl }];
+            const updatedPhoto = {
+              ...photo,
+              blobUrl: newUrl,
+              thumbnailUrl: newUrl,
+              activeVersionId: verId,
+              versions: updatedVersions
+            };
+            onUpdatePhoto(updatedPhoto);
+            saveFingerprintMetadata(updatedPhoto);
+          }
+
+          setEnhancedPreviewUrl(null);
+        } catch (err) {
+          console.warn('Commit version error:', err);
+        } finally {
+          setIsProcessingEnhancement(false);
+        }
+      };
 
       useEffect(() => {
         const handleKeyDown = (e) => {
@@ -2125,6 +2545,13 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
       const currentCropBoxRef = useRef(photo.cropBox || null);
       const containerRef = useRef(null);
       const imgRef = useRef(null);
+
+      useEffect(() => {
+        const activeCrop = photo.cropBox || null;
+        setCropBox(activeCrop);
+        currentCropBoxRef.current = activeCrop;
+        setShowCroppedPreview(!!(activeCrop && activeCrop.width > 0));
+      }, [photo.id, photo.cropBox]);
 
       const [identifying, setIdentifying] = useState(false);
       const [aiResult, setAiResult] = useState(photo.identification || null);
@@ -2229,8 +2656,21 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
         ctx.arc(radius, radius, radius - 1, 0, Math.PI * 2);
         ctx.clip();
 
-        const srcX = (loupeImgPos.xPct / 100) * img.naturalWidth;
-        const srcY = (loupeImgPos.yPct / 100) * img.naturalHeight;
+        let normX = loupeImgPos.xPct / 100;
+        let normY = loupeImgPos.yPct / 100;
+
+        if (showCroppedPreview && cropBox && cropBox.width > 0 && cropBox.height > 0) {
+          const cX = cropBox.x || 0;
+          const cY = cropBox.y || 0;
+          const cW = cropBox.width || 100;
+          const cH = cropBox.height || 100;
+
+          normX = (cX + (normX * cW)) / 100;
+          normY = (cY + (normY * cH)) / 100;
+        }
+
+        const srcX = normX * img.naturalWidth;
+        const srcY = normY * img.naturalHeight;
 
         const sw = img.naturalWidth / zoomLevel;
         const sh = img.naturalHeight / zoomLevel;
@@ -2251,20 +2691,21 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
         ctx.stroke();
 
         ctx.restore();
-      }, [loupeImgPos, zoomLevel, loupeImgLoaded]);
+      }, [loupeImgPos, zoomLevel, loupeImgLoaded, showCroppedPreview, cropBox]);
 
       useEffect(() => {
         if (isLoupeActive) {
-          drawLoupeLens();
+          // Synchronize rendering with the browser's paint cycle to ensure smooth tracking
+          const rafId = requestAnimationFrame(() => drawLoupeLens());
+          return () => cancelAnimationFrame(rafId);
         }
-      }, [isLoupeActive, loupeImgPos, zoomLevel, loupeImgLoaded, drawLoupeLens]);
+      }, [isLoupeActive, drawLoupeLens]);
 
       const handleWheelZoom = (e) => {
-        if (isLoupeActive || isCropToolActive) return;
         e.preventDefault();
-        const delta = e.deltaY < 0 ? 0.25 : -0.25;
+        const zoomFactor = e.deltaY < 0 ? 1.15 : 0.85;
         setPanZoom(prev => {
-          const nextScale = Math.max(1, Math.min(8, prev.scale + delta));
+          const nextScale = Math.max(1, Math.min(8, prev.scale * zoomFactor));
           return {
             ...prev,
             scale: nextScale,
@@ -2365,6 +2806,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
           setIsCropToolActive(false);
 
           if (finalCrop && finalCrop.width >= MIN_CROP_DIMENSION_PCT && finalCrop.height >= MIN_CROP_DIMENSION_PCT) {
+            setShowCroppedPreview(true);
             await triggerCropFocusEvaluation(finalCrop);
           } else {
             setCropBox(photo.cropBox || null);
@@ -2471,6 +2913,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
 
               <div className="flex items-center space-x-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
                 <button
+                  type="button"
                   onClick={toggleCropTool}
                   className={`px-3 py-1.5 rounded-lg transition font-medium flex items-center space-x-1.5 ${isCropToolActive ? 'bg-emerald-600 text-white shadow-lg' : 'bg-slate-900 text-slate-400 hover:text-white'}`}
                 >
@@ -2479,6 +2922,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                 </button>
                 
                 <button
+                  type="button"
                   onClick={() => setIsLoupeActive(!isLoupeActive)}
                   className={`px-3 py-1.5 rounded-lg transition font-medium flex items-center space-x-1.5 ${isLoupeActive ? 'bg-emerald-600 text-white shadow-lg' : 'bg-slate-900 text-slate-400 hover:text-white'}`}
                 >
@@ -2489,12 +2933,13 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
 
               <div className="flex items-center space-x-1">
                 <button
+                  type="button"
                   onClick={() => setShowMobileSidebar(!showMobileSidebar)}
                   className="md:hidden p-2 text-slate-300 hover:text-white rounded-lg bg-slate-800 flex items-center justify-center touch-manipulation"
                 >
                   <Icon name="info" className="w-5 h-5 text-emerald-400" />
                 </button>
-                <button onClick={onClose} className="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 touch-manipulation">
+                <button type="button" onClick={onClose} className="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 touch-manipulation">
                   <Icon name="x" className="w-6 h-6" />
                 </button>
               </div>
@@ -2513,6 +2958,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
               className={`flex-1 relative flex items-center justify-center p-2 sm:p-4 overflow-hidden select-none ${isCropToolActive ? 'cursor-crosshair' : panZoom.scale > 1 ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'} touch-canvas`}
             >
               <button
+                type="button"
                 onClick={(e) => {
                   e.stopPropagation();
                   if (onDeletePhoto) onDeletePhoto(photo.id);
@@ -2534,6 +2980,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
 
               <div className="absolute left-3 sm:left-5 top-1/2 -translate-y-1/2 z-30 flex flex-col items-center space-y-2.5 bg-slate-900/90 p-2 sm:p-2.5 rounded-2xl border border-slate-700/90 backdrop-blur-md shadow-2xl">
                 <button
+                  type="button"
                   onClick={(e) => {
                     e.stopPropagation();
                     if (hasPrev && onPrevPhoto) onPrevPhoto();
@@ -2552,6 +2999,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                 <div className="w-6 h-px bg-slate-700/60"></div>
 
                 <button
+                  type="button"
                   onClick={(e) => {
                     e.stopPropagation();
                     if (hasNext && onNextPhoto) onNextPhoto();
@@ -2576,22 +3024,22 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                 }}
               >
                 {showCroppedPreview && hasValidCropBox && !isDrawingCrop ? (
-                  <div className="relative flex items-center justify-center max-h-[calc(100vh-8rem)] max-w-full">
+                  <div className="relative flex items-center justify-center w-full h-full max-h-[calc(100vh-8rem)] max-w-full p-2">
                     <CroppedImage
                       innerRef={imgRef}
-                      src={activeBlobUrl}
+                      src={isHoldingOriginal ? (photo.blobUrl || activeBlobUrl) : (enhancedPreviewUrl || activeBlobUrl)}
                       alt={photo.name}
                       cropBox={cropBox}
                       photo={photo}
                       fitMode="contain"
-                      className="rounded-2xl border border-slate-700 shadow-2xl overflow-hidden"
+                      className="rounded-2xl border border-slate-700 shadow-2xl overflow-hidden max-h-[calc(100vh-10rem)] max-w-full"
                     />
                   </div>
                 ) : (
                   <div className="relative flex items-center justify-center w-full h-full max-w-full max-h-full">
                     <CroppedImage
                       innerRef={imgRef}
-                      src={activeBlobUrl}
+                      src={isHoldingOriginal ? (photo.blobUrl || activeBlobUrl) : (enhancedPreviewUrl || activeBlobUrl)}
                       alt={photo.name}
                       cropBox={null}
                       photo={photo}
@@ -2675,6 +3123,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                 ) : (
                   <div className="flex items-center space-x-1 bg-slate-950 p-1 rounded-xl border border-slate-800">
                     <button
+                      type="button"
                       onClick={() => setPanZoom(prev => ({ ...prev, scale: Math.min(8, prev.scale + 0.5) }))}
                       className="p-1.5 text-slate-300 hover:text-white rounded-lg hover:bg-slate-800 touch-manipulation"
                       title="Zoom In"
@@ -2685,6 +3134,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                       {panZoom.scale.toFixed(1)}x
                     </span>
                     <button
+                      type="button"
                       onClick={() => setPanZoom(prev => ({ ...prev, scale: Math.max(1, prev.scale - 0.5), x: prev.scale <= 1.5 ? 0 : prev.x, y: prev.scale <= 1.5 ? 0 : prev.y }))}
                       className="p-1.5 text-slate-300 hover:text-white rounded-lg hover:bg-slate-800 touch-manipulation"
                       title="Zoom Out"
@@ -2693,6 +3143,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                     </button>
                     {panZoom.scale > 1 && (
                       <button
+                        type="button"
                         onClick={() => setPanZoom({ scale: 1, x: 0, y: 0 })}
                         className="px-1.5 py-0.5 text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 rounded font-semibold touch-manipulation"
                       >
@@ -2705,6 +3156,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
 
               <div className="flex items-center space-x-2">
                 <button
+                  type="button"
                   onClick={() => setShowCroppedPreview(!showCroppedPreview)}
                   disabled={!hasValidCropBox}
                   className={`text-[10px] sm:text-xs px-3 py-2 rounded-xl font-semibold transition flex items-center space-x-1.5 touch-manipulation ${
@@ -2720,6 +3172,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                 </button>
 
                 <button
+                  type="button"
                   onClick={handleRunAiIdentification}
                   disabled={identifying || evaluatingFocus}
                   className="px-3 sm:px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-semibold text-xs rounded-xl shadow-lg transition flex items-center space-x-1.5 flex-shrink-0 touch-manipulation"
@@ -2737,7 +3190,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                 <Icon name="feather" className="w-4 h-4 text-emerald-400" />
                 <span>Photo Inspection Deck</span>
               </h3>
-              <button onClick={() => setShowMobileSidebar(false)} className="md:hidden text-slate-400 p-1 touch-manipulation">
+              <button type="button" onClick={() => setShowMobileSidebar(false)} className="md:hidden text-slate-400 p-1 touch-manipulation">
                 <Icon name="x" className="w-5 h-5" />
               </button>
             </div>
@@ -2835,6 +3288,177 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
             </Accordion>
 
             <Accordion 
+              title="AI Photo Enhancement Studio" 
+              icon="sparkles" 
+              defaultOpen={false}
+              badge={
+                activeVersions.length > 1 ? (
+                  <span className="text-[9px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full">
+                    {activeVersionId} Active
+                  </span>
+                ) : null
+              }
+            >
+              <div className="space-y-3">
+                <div className="space-y-1.5">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Image Versions & History</span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {activeVersions.map(v => (
+                      <button
+                        key={v.versionId}
+                        type="button"
+                        onClick={() => handleSelectVersion(v.versionId)}
+                        className={`text-[10px] font-semibold px-2.5 py-1 rounded-lg border transition touch-manipulation ${
+                          activeVersionId === v.versionId
+                            ? 'bg-emerald-600 text-white border-emerald-500 shadow'
+                            : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
+                        }`}
+                      >
+                        {v.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="pt-2 border-t border-slate-800 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-200">Enhancement Scope</span>
+                    <div className="flex bg-slate-950 p-1 rounded-lg border border-slate-800">
+                      <button
+                        type="button"
+                        onClick={() => setEnhanceScope('full')}
+                        className={`text-[10px] px-2.5 py-1 rounded font-semibold transition touch-manipulation ${enhanceScope === 'full' ? 'bg-emerald-600 text-white' : 'text-slate-400'}`}
+                      >
+                        Full Photo
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setEnhanceScope('crop')}
+                        disabled={!cropBox || cropBox.width <= 0}
+                        className={`text-[10px] px-2.5 py-1 rounded font-semibold transition touch-manipulation ${enhanceScope === 'crop' ? 'bg-emerald-600 text-white' : 'text-slate-400 disabled:opacity-40'}`}
+                      >
+                        Crop ROI
+                      </button>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleAutoTuneAiParams}
+                    disabled={isEstimatingParams}
+                    className="w-full py-1.5 bg-slate-800 hover:bg-slate-700 text-emerald-300 font-semibold text-xs rounded-xl border border-slate-700 transition flex items-center justify-center space-x-1.5 touch-manipulation"
+                  >
+                    <Icon name="sparkles" className={`w-3.5 h-3.5 ${isEstimatingParams ? 'animate-spin' : ''}`} />
+                    <span>{isEstimatingParams ? 'Analyzing Image...' : 'Auto-Tune Parameters with AI'}</span>
+                  </button>
+
+                  {enhancementNotes && (
+                    <p className="text-[10px] text-slate-400 bg-slate-950 p-2 rounded-lg border border-slate-800/80 italic">
+                      💡 {enhancementNotes}
+                    </p>
+                  )}
+
+                  <div className="space-y-2 bg-slate-950 p-3 rounded-xl border border-slate-800 text-xs">
+                    <div>
+                      <div className="flex justify-between text-[11px] mb-1">
+                        <span className="text-slate-400">Subject-Masked Sharpening</span>
+                        <span className="text-emerald-400 font-bold">{enhanceParams.sharpness}%</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        value={enhanceParams.sharpness}
+                        onChange={(e) => setEnhanceParams({ ...enhanceParams, sharpness: parseInt(e.target.value) })}
+                        className="w-full accent-emerald-500 h-1.5 cursor-pointer"
+                      />
+                    </div>
+
+                    <div>
+                      <div className="flex justify-between text-[11px] mb-1">
+                        <span className="text-slate-400">Spatial Noise Reduction</span>
+                        <span className="text-emerald-400 font-bold">{enhanceParams.denoise}%</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        value={enhanceParams.denoise}
+                        onChange={(e) => setEnhanceParams({ ...enhanceParams, denoise: parseInt(e.target.value) })}
+                        className="w-full accent-emerald-500 h-1.5 cursor-pointer"
+                      />
+                    </div>
+
+                    <div>
+                      <div className="flex justify-between text-[11px] mb-1">
+                        <span className="text-slate-400">Plumage Vibrance Boost</span>
+                        <span className="text-emerald-400 font-bold">{enhanceParams.vibrance}%</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        value={enhanceParams.vibrance}
+                        onChange={(e) => setEnhanceParams({ ...enhanceParams, vibrance: parseInt(e.target.value) })}
+                        className="w-full accent-emerald-500 h-1.5 cursor-pointer"
+                      />
+                    </div>
+
+                    <div>
+                      <div className="flex justify-between text-[11px] mb-1">
+                        <span className="text-slate-400">Micro-Contrast & Shadows</span>
+                        <span className="text-emerald-400 font-bold">{enhanceParams.contrast}%</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        value={enhanceParams.contrast}
+                        onChange={(e) => setEnhanceParams({ ...enhanceParams, contrast: parseInt(e.target.value) })}
+                        className="w-full accent-emerald-500 h-1.5 cursor-pointer"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex items-center space-x-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={handleGenerateEnhancementPreview}
+                      disabled={isProcessingEnhancement}
+                      className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs rounded-xl border border-slate-700 transition flex items-center justify-center space-x-1 touch-manipulation"
+                    >
+                      <Icon name="eye" className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>{isProcessingEnhancement ? 'Rendering...' : 'Live Preview'}</span>
+                    </button>
+
+                    {enhancedPreviewUrl && (
+                      <button
+                        type="button"
+                        onMouseDown={() => setIsHoldingOriginal(true)}
+                        onMouseUp={() => setIsHoldingOriginal(false)}
+                        onTouchStart={() => setIsHoldingOriginal(true)}
+                        onTouchEnd={() => setIsHoldingOriginal(false)}
+                        className="px-3 py-2 bg-amber-600/20 text-amber-300 border border-amber-500/40 font-semibold text-xs rounded-xl transition touch-manipulation select-none"
+                      >
+                        Hold A/B
+                      </button>
+                    )}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleSaveEnhancementVersion}
+                    disabled={isProcessingEnhancement}
+                    className="w-full py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-lg transition flex items-center justify-center space-x-1.5 touch-manipulation"
+                  >
+                    <Icon name="check" className="w-4 h-4" />
+                    <span>Commit & Save as Version v{activeVersions.length + 1}</span>
+                  </button>
+                </div>
+              </div>
+            </Accordion>
+
+            <Accordion 
               title="AI Identification & Species Traits" 
               icon="sparkles" 
               defaultOpen={true}
@@ -2916,6 +3540,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                   </div>
                 ) : (
                   <button
+                    type="button"
                     onClick={handleRunAiIdentification}
                     disabled={identifying}
                     className="w-full py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow transition flex items-center justify-center space-x-1.5 touch-manipulation"
@@ -2933,6 +3558,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                   Save this sighting & species record into your permanent master life-list catalog.
                 </p>
                 <button
+                  type="button"
                   disabled={!aiResult || !!aiResult.error}
                   onClick={() => onSaveToVault({ ...photo, identification: aiResult, cropBox, focusSpot: photo.focusSpot || cameraExif?.focusArea, locationText: locationInput, stars: activeStars })}
                   className="w-full py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow transition flex items-center justify-center space-x-1 touch-manipulation"
@@ -3289,6 +3915,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
 
       useEffect(() => {
         let isMounted = true;
+        const createdUrls = [];
         async function hydrateMissingImages() {
           for (const entry of vaultEntries) {
             for (const s of (entry.sightings || [])) {
@@ -3299,6 +3926,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                 const blob = await getOpfsSightingFileBlob(entry.category, entry.speciesName, opfsName);
                 if (blob && isMounted) {
                   const freshUrl = URL.createObjectURL(blob);
+                  createdUrls.push(freshUrl);
                   setVaultImageUrls(prev => ({ ...prev, [key]: freshUrl }));
                 }
               }
@@ -3306,7 +3934,12 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
           }
         }
         hydrateMissingImages();
-        return () => { isMounted = false; };
+        return () => {
+          isMounted = false;
+          createdUrls.forEach(url => {
+            try { URL.revokeObjectURL(url); } catch(e){}
+          });
+        };
       }, [vaultEntries]);
 
       const workspacePhotosMap = useMemo(() => {
@@ -3635,7 +4268,9 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                   identification: savedMeta.identification || null,
                   cropBox: savedMeta.cropBox || null,
                   locationText: savedMeta.locationText || null,
-                  opfsFileName: savedMeta.opfsFileName || null
+                  opfsFileName: savedMeta.opfsFileName || null,
+                  activeVersionId: savedMeta.activeVersionId || null,
+                  versions: savedMeta.versions || null
                 };
                 saveFingerprintMetadata(photoObj);
                 return photoObj;
@@ -3718,32 +4353,35 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
               identification: savedMeta.identification || null,
               cropBox: savedMeta.cropBox || null,
               locationText: savedMeta.locationText || null,
-              opfsFileName: savedMeta.opfsFileName || null
-            };
-            saveFingerprintMetadata(photoObj);
-            return photoObj;
+            opfsFileName: savedMeta.opfsFileName || null,
+            activeVersionId: savedMeta.activeVersionId || null,
+            versions: savedMeta.versions || null
+          };
+          saveFingerprintMetadata(photoObj);
+          return photoObj;
+        });
+
+        if (isFirstChunk) {
+          onUpdatePhotos(chunkObjs);
+          isFirstChunk = false;
+        } else {
+          onUpdatePhotos(prev => {
+            const existingIds = new Set(prev.map(p => p.id));
+            const filteredNew = chunkObjs.filter(p => !existingIds.has(p.id));
+            return [...prev, ...filteredNew];
           });
-
-          if (isFirstChunk) {
-            onUpdatePhotos(chunkObjs);
-            isFirstChunk = false;
-          } else {
-            onUpdatePhotos(prev => {
-              const existingIds = new Set(prev.map(p => p.id));
-              const filteredNew = chunkObjs.filter(p => !existingIds.has(p.id));
-              return [...prev, ...filteredNew];
-            });
-          }
-
-          setUploadProgress({ current: Math.min(i + CHUNK_SIZE, total), total });
-          await new Promise(r => setTimeout(r, 10));
         }
 
-        setUploading(false);
-        if (fileInputRef.current) fileInputRef.current.value = '';
-      };
+        setUploadProgress({ current: Math.min(i + CHUNK_SIZE, total), total });
+        await new Promise(r => setTimeout(r, 10));
+      }
 
-      const handleBatchRateFocus = async () => {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      if (folderInputRef.current) folderInputRef.current.value = '';
+    };
+
+    const handleBatchRateFocus = async () => {
         const unrated = photos.filter(p => p.sharpness === null && p.userStars === null);
         if (!unrated.length) return;
 
@@ -3964,16 +4602,19 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
             let updatedPhoto = p;
             let changed = false;
 
-            if (!bufferedIds.has(p.id) && p.thumbnailUrl && !p.thumbnailUrl.startsWith('blob:')) {
-              try { URL.revokeObjectURL(p.thumbnailUrl); } catch(e){}
-              updatedPhoto = { ...updatedPhoto, thumbnailUrl: null };
-              changed = true;
-            }
+            // Strict Memory Cleanup: Free object URLs for off-page images to preserve memory
+            if (!bufferedIds.has(p.id)) {
+              if (p.thumbnailUrl && p.thumbnailUrl.startsWith('blob:')) {
+                try { URL.revokeObjectURL(p.thumbnailUrl); } catch(e){}
+                updatedPhoto = { ...updatedPhoto, thumbnailUrl: null };
+                changed = true;
+              }
 
-            if (p.blobUrl && !p.file) {
-              try { URL.revokeObjectURL(p.blobUrl); } catch(e){}
-              updatedPhoto = { ...updatedPhoto, blobUrl: null };
-              changed = true;
+              if (p.blobUrl && p.blobUrl.startsWith('blob:')) {
+                try { URL.revokeObjectURL(p.blobUrl); } catch(e){}
+                updatedPhoto = { ...updatedPhoto, blobUrl: null };
+                changed = true;
+              }
             }
 
             if (changed) hasChanges = true;
@@ -4347,7 +4988,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
 
     function BirdVaultApp() {
       const [activeTab, setActiveTabState] = useState(() => {
-        try { return localStorage.getItem('birdvault_pref_tab') || 'culling'; } catch(e) { return 'culling'; }
+        try { return localStorage.getItem('birdvault_pref_tab') || 'vault'; } catch(e) { return 'vault'; }
       });
       
       const [filterSharpness, setFilterSharpnessState] = useState(() => {
@@ -4355,217 +4996,89 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
       });
 
       const [sortBy, setSortByState] = useState(() => {
-        try { return localStorage.getItem('birdvault_pref_sort') || 'name'; } catch(e) { return 'name'; }
-      });
-
-      const [userLocation, setUserLocationState] = useState(() => {
-        try { return localStorage.getItem('birdvault_user_location') || 'Auckland, New Zealand'; } catch(e) { return 'Auckland, New Zealand'; }
+        try { return localStorage.getItem('birdvault_pref_sort') || 'default'; } catch(e) { return 'default'; }
       });
 
       const [photos, setPhotos] = useState([]);
-      const [vaultEntries, setVaultEntries] = useState([]);
+      const [vaultEntries, setVaultEntries] = useState(() => getStoredVault());
       const [selectedPhoto, setSelectedPhoto] = useState(null);
-      const [currentPage, setCurrentPage] = useState(1);
-
-      const [userApiKey, setUserApiKey] = useState((localStorage.getItem('birdvault_gemini_token') || '').trim());
       const [showTokenModal, setShowTokenModal] = useState(false);
       const [showAuthModal, setShowAuthModal] = useState(false);
-
-      const [tokenUsageState, setTokenUsageState] = useState(getStoredTokenUsage());
-
-      const setActiveTab = (tab) => {
-        setActiveTabState(tab);
-        try { localStorage.setItem('birdvault_pref_tab', tab); } catch(e){}
-      };
-
-      const setFilterSharpness = (filter) => {
-        setFilterSharpnessState(filter);
-        try { localStorage.setItem('birdvault_pref_filter', filter); } catch(e){}
-      };
-
-      const setSortBy = (sort) => {
-        setSortByState(sort);
-        try { localStorage.setItem('birdvault_pref_sort', sort); } catch(e){}
-      };
-
-      const setUserLocation = (loc) => {
-        setUserLocationState(loc);
-        try {
-          if (loc) localStorage.setItem('birdvault_user_location', loc);
-          else localStorage.removeItem('birdvault_user_location');
-        } catch(e){}
-      };
-
-      const updatePhotos = (action) => {
-        setPhotos(prev => {
-          const nextPhotos = typeof action === 'function' ? action(prev) : action;
-          syncFingerprintDbPrune(nextPhotos);
-          return nextPhotos;
-        });
-      };
+      const [userApiKey, setUserApiKey] = useState(() => localStorage.getItem('birdvault_gemini_token') || '');
+      const [userLocation, setUserLocation] = useState('Auckland, New Zealand');
+      const [currentPage, setCurrentPage] = useState(1);
 
       useEffect(() => {
         window.birdvault_open_auth_modal = () => setShowAuthModal(true);
         return () => { delete window.birdvault_open_auth_modal; };
       }, []);
 
-      useEffect(() => {
-        async function reloadWorkspaceAndVault() {
-          const savedVault = localStorage.getItem('birdvault_entries_v5');
-          if (savedVault) {
-            try {
-              const parsed = JSON.parse(savedVault);
-              const validEntries = [];
+      const setActiveTab = (tab) => {
+        setActiveTabState(tab);
+        try { localStorage.setItem('birdvault_pref_tab', tab); } catch(e){}
+      };
 
-              for (const entry of parsed) {
-                const validSightings = [];
-                for (const s of (entry.sightings || [])) {
-                  let loadedBlob = null;
-                  const opfsName = s.opfsFileName || (s.photo ? `${s.photo.name}` : null);
-                  if (opfsName) {
-                    loadedBlob = await getOpfsSightingFileBlob(entry.category, entry.speciesName, opfsName);
-                  }
+      const setFilterSharpness = (val) => {
+        setFilterSharpnessState(val);
+        try { localStorage.setItem('birdvault_pref_filter', val); } catch(e){}
+      };
 
-                  if (loadedBlob) {
-                    const freshBlobUrl = URL.createObjectURL(loadedBlob);
-                    validSightings.push({
-                      ...s,
-                      photo: {
-                        ...s.photo,
-                        thumbnailUrl: freshBlobUrl,
-                        blobUrl: freshBlobUrl,
-                        url: freshBlobUrl
-                      }
-                    });
-                  } else if (s.photo?.thumbnailUrl && !s.photo.thumbnailUrl.startsWith('blob:')) {
-                    validSightings.push(s);
-                  }
-                }
+      const setSortBy = (val) => {
+        setSortByState(val);
+        try { localStorage.setItem('birdvault_pref_sort', val); } catch(e){}
+      };
 
-                if (validSightings.length > 0) {
-                  validEntries.push({
-                    ...entry,
-                    sightings: validSightings
-                  });
-                }
-              }
-
-              setVaultEntries(validEntries);
-              localStorage.setItem('birdvault_entries_v5', JSON.stringify(validEntries));
-            } catch (e) {
-              console.warn('Vault reload error:', e);
-            }
-          }
-
-          const fpDb = getStoredFingerprintDb();
-          const fingerprintKeys = Object.keys(fpDb);
-          const validWorkspacePhotos = [];
-
-          for (const fpId of fingerprintKeys) {
-            const savedMeta = fpDb[fpId];
-            let workspaceBlob = null;
-            if (savedMeta.identification?.category && savedMeta.identification?.speciesName) {
-              const opfsName = savedMeta.opfsFileName || savedMeta.name;
-              workspaceBlob = await getOpfsSightingFileBlob(savedMeta.identification.category, savedMeta.identification.speciesName, opfsName);
-            }
-
-            if (workspaceBlob) {
-              const freshBlobUrl = URL.createObjectURL(workspaceBlob);
-              validWorkspacePhotos.push({
-                id: fpId,
-                fingerprintId: fpId,
-                file: null,
-                fileHandle: null,
-                name: savedMeta.name || 'Photo',
-                size: savedMeta.size || 0,
-                lastModified: savedMeta.lastModified || 0,
-                url: freshBlobUrl,
-                blobUrl: freshBlobUrl,
-                thumbnailUrl: freshBlobUrl,
-                naturalWidth: 1000,
-                naturalHeight: 750,
-                sharpness: savedMeta.sharpness !== undefined ? savedMeta.sharpness : null,
-                stars: savedMeta.stars !== undefined ? savedMeta.stars : null,
-                userStars: savedMeta.userStars !== undefined ? savedMeta.userStars : null,
-                focusSpot: savedMeta.focusSpot || savedMeta.cameraExif?.focusArea || null,
-                cameraExif: savedMeta.cameraExif || null,
-                identification: savedMeta.identification || null,
-                cropBox: savedMeta.cropBox || null,
-                locationText: savedMeta.locationText || null,
-                opfsFileName: savedMeta.opfsFileName || null
-              });
-            } else {
-              deleteFingerprintMetadata(fpId);
-            }
-          }
-
-          setPhotos(validWorkspacePhotos);
-        }
-
-        reloadWorkspaceAndVault();
-      }, []);
-
-      const handleSaveApiKey = (newKey) => {
-        setUserApiKey(newKey);
-        if (newKey) {
-          localStorage.setItem('birdvault_gemini_token', newKey);
-        } else {
-          localStorage.removeItem('birdvault_gemini_token');
-        }
+      const handleSaveApiKey = (key) => {
+        setUserApiKey(key);
+        try {
+          if (key) localStorage.setItem('birdvault_gemini_token', key);
+          else localStorage.removeItem('birdvault_gemini_token');
+        } catch(e){}
       };
 
       const processedPhotos = useMemo(() => {
-        let list = [...photos];
-        
+        let result = [...photos];
+
         if (filterSharpness === '5star') {
-          list = list.filter(p => (p.sharpness !== null && p.sharpness >= 9) || p.userStars === 5);
+          result = result.filter(p => (p.userStars || p.stars) === 5 || p.sharpness >= 9);
         } else if (filterSharpness === '4star') {
-          list = list.filter(p => (p.sharpness !== null && p.sharpness >= 7) || (p.userStars && p.userStars >= 4));
+          result = result.filter(p => (p.userStars || p.stars) >= 4 || p.sharpness >= 7);
         } else if (filterSharpness === 'soft') {
-          list = list.filter(p => (p.sharpness !== null && p.sharpness <= 6) || (p.userStars && p.userStars <= 3));
+          result = result.filter(p => ((p.userStars || p.stars) > 0 && (p.userStars || p.stars) <= 3) || (p.sharpness !== null && p.sharpness < 7));
         } else if (filterSharpness === 'unrated') {
-          list = list.filter(p => p.sharpness === null && p.userStars === null);
+          result = result.filter(p => p.sharpness === null && p.userStars === null);
         }
 
-        if (sortBy === 'default') {
-        } else if (sortBy === 'name') {
-          list.sort((a, b) => a.name.localeCompare(b.name));
+        if (sortBy === 'name') {
+          result.sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' }));
         } else if (sortBy === 'date_asc') {
-          list.sort((a, b) => (a.lastModified || 0) - (b.lastModified || 0));
+          result.sort((a, b) => (a.lastModified || 0) - (b.lastModified || 0));
         } else if (sortBy === 'date_desc') {
-          list.sort((a, b) => (b.lastModified || 0) - (a.lastModified || 0));
+          result.sort((a, b) => (b.lastModified || 0) - (a.lastModified || 0));
         } else if (sortBy === 'sharpness') {
-          list.sort((a, b) => {
-            const scoreA = a.sharpness !== null ? a.sharpness : (a.userStars ? a.userStars * 2 : 0);
-            const scoreB = b.sharpness !== null ? b.sharpness : (b.userStars ? b.userStars * 2 : 0);
-            return scoreB - scoreA;
-          });
+          result.sort((a, b) => (b.sharpness || 0) - (a.sharpness || 0));
         }
 
-        return list;
+        return result;
       }, [photos, filterSharpness, sortBy]);
 
-      useEffect(() => {
-        if (!selectedPhoto) return;
-        const indexInProcessed = processedPhotos.findIndex(p => p.id === selectedPhoto.id);
-        if (indexInProcessed !== -1) {
-          const targetPage = Math.floor(indexInProcessed / BATCH_PAGE_SIZE) + 1;
-          if (targetPage !== currentPage) {
-            setCurrentPage(targetPage);
-          }
+      const updatePhotos = (action) => {
+        if (typeof action === 'function') {
+          setPhotos(prev => action(prev));
+        } else {
+          setPhotos(action);
         }
-      }, [selectedPhoto, processedPhotos]);
+      };
 
-      useEffect(() => {
-        const handleTokenUpdate = () => setTokenUsageState(getStoredTokenUsage());
-        window.addEventListener('birdvault_token_update', handleTokenUpdate);
-        return () => window.removeEventListener('birdvault_token_update', handleTokenUpdate);
-      }, []);
-
-      const saveVaultToStorage = (entries) => {
-        setVaultEntries(entries);
-        localStorage.setItem('birdvault_entries_v5', JSON.stringify(entries));
-        updateOpfsMasterManifest(entries);
+      const handleDeletePhotoInViewer = (photoId) => {
+        const photo = photos.find(p => p.id === photoId);
+        if (photo) {
+          try { if (photo.blobUrl) URL.revokeObjectURL(photo.blobUrl); } catch (e) {}
+          try { if (photo.thumbnailUrl) URL.revokeObjectURL(photo.thumbnailUrl); } catch (e) {}
+          deleteFingerprintMetadata(photo.fingerprintId || photo.id);
+        }
+        updatePhotos(prev => prev.filter(p => p.id !== photoId));
+        setSelectedPhoto(null);
       };
 
       const handleSaveToVault = async (photoWithAi) => {
@@ -4575,7 +5088,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
 
         const fpId = photoWithAi.fingerprintId || photoWithAi.id;
         const sightingId = 'sighting_' + Math.random().toString(36).substring(2, 9);
-        const fileName = `${new Date().toISOString().split('T')[0]}_${sightingId}.jpg`;
+        const fileName = `${new Date().toISOString().split('T')[0]}_${sightingId}_v1.jpg`;
 
         let liveBlobUrl = photoWithAi.blobUrl || photoWithAi.thumbnailUrl || photoWithAi.url;
         let blobToWrite = photoWithAi.file;
@@ -4598,6 +5111,15 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
 
         const sanitizeUrl = (u) => (u && typeof u === 'string' && !u.startsWith('blob:')) ? u : null;
 
+        const initialVersion = {
+          versionId: 'v1',
+          label: 'v1: Original Capture',
+          opfsFileName: fileName,
+          timestamp: Date.now(),
+          isOriginal: true,
+          cropBox: photoWithAi.cropBox || null
+        };
+
         const cleanPhotoMeta = {
           id: fpId,
           fingerprintId: fpId,
@@ -4614,7 +5136,9 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
           identification: photoWithAi.identification,
           cropBox: photoWithAi.cropBox,
           locationText: photoWithAi.locationText,
-          opfsFileName: fileName
+          opfsFileName: fileName,
+          activeVersionId: 'v1',
+          versions: [initialVersion]
         };
 
         saveFingerprintMetadata(cleanPhotoMeta);
@@ -4631,6 +5155,8 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
           date: Date.now(),
           opfsFileName: fileName,
           photoFingerprintId: fpId,
+          activeVersionId: 'v1',
+          versions: [initialVersion],
           photo: statePhotoMeta
         };
 
@@ -4639,6 +5165,8 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
           date: Date.now(),
           opfsFileName: fileName,
           photoFingerprintId: fpId,
+          activeVersionId: 'v1',
+          versions: [initialVersion],
           photo: cleanPhotoMeta
         };
 
@@ -4715,9 +5243,90 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
         setActiveTab('vault');
       };
 
+      const handleCommitNewVersion = async (photo, enhancedBlob, versionMeta) => {
+        const idInfo = photo.identification || {};
+        const category = idInfo.category || 'Other';
+        const speciesName = idInfo.speciesName || 'Uncategorized';
+        const verId = versionMeta.versionId;
+        const verFileName = `${new Date().toISOString().split('T')[0]}_${photo.id}_${verId}.jpg`;
+
+        if (enhancedBlob) {
+          await writeOpfsSightingFile(category, speciesName, verFileName, enhancedBlob);
+        }
+
+        const freshBlobUrl = URL.createObjectURL(enhancedBlob);
+        const fullVerMeta = {
+          ...versionMeta,
+          opfsFileName: verFileName,
+          blobUrl: freshBlobUrl,
+          thumbnailUrl: freshBlobUrl
+        };
+
+        const existingVersions = photo.versions || [
+          {
+            versionId: 'v1',
+            label: 'v1: Original Capture',
+            opfsFileName: photo.opfsFileName || photo.name,
+            timestamp: photo.lastModified || Date.now(),
+            isOriginal: true,
+            blobUrl: photo.blobUrl,
+            thumbnailUrl: photo.thumbnailUrl
+          }
+        ];
+
+        const updatedVersions = [...existingVersions, fullVerMeta];
+
+        const updatedPhoto = {
+          ...photo,
+          opfsFileName: verFileName,
+          blobUrl: freshBlobUrl,
+          thumbnailUrl: freshBlobUrl,
+          activeVersionId: verId,
+          versions: updatedVersions
+        };
+
+        updatePhotos(prev => prev.map(p => p.id === photo.id ? updatedPhoto : p));
+        saveFingerprintMetadata(updatedPhoto);
+        setSelectedPhoto(updatedPhoto);
+
+        if (idInfo.speciesName) {
+          const updatedVault = vaultEntries.map(entry => {
+            if (entry.speciesName.toLowerCase() === idInfo.speciesName.toLowerCase()) {
+              const updatedSightings = entry.sightings.map(s => {
+                if (s.photoFingerprintId === photo.id || s.photo?.id === photo.id) {
+                  return {
+                    ...s,
+                    activeVersionId: verId,
+                    opfsFileName: verFileName,
+                    versions: updatedVersions,
+                    photo: {
+                      ...s.photo,
+                      opfsFileName: verFileName,
+                      activeVersionId: verId,
+                      versions: updatedVersions
+                    }
+                  };
+                }
+                return s;
+              });
+              return { ...entry, sightings: updatedSightings };
+            }
+            return entry;
+          });
+          saveVaultToStorage(updatedVault);
+          setVaultEntries(updatedVault);
+        }
+      };
+
+      const handleDeleteSpecies = (speciesName) => {
+        const updated = vaultEntries.filter(e => e.speciesName.toLowerCase() !== speciesName.toLowerCase());
+        setVaultEntries(updated);
+        saveVaultToStorage(updated);
+      };
+
       const handleDeleteSighting = (speciesName, sightingId) => {
         const updated = vaultEntries.map(e => {
-          if (e.speciesName === speciesName) {
+          if (e.speciesName.toLowerCase() === speciesName.toLowerCase()) {
             return {
               ...e,
               sightings: e.sightings.filter(s => s.id !== sightingId)
@@ -4726,93 +5335,70 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
           return e;
         }).filter(e => e.sightings.length > 0);
 
+        setVaultEntries(updated);
         saveVaultToStorage(updated);
       };
-
-      const handleDeleteSpecies = (speciesName) => {
-        const updated = vaultEntries.filter(e => e.speciesName !== speciesName);
-        saveVaultToStorage(updated);
-      };
-
-      const handleDeletePhotoInViewer = async (photoId) => {
-        const currentIndex = photos.findIndex(p => p.id === photoId);
-        const photoToDelete = photos.find(p => p.id === photoId);
-        
-        if (photoToDelete) {
-          if (photoToDelete.fileHandle && typeof photoToDelete.fileHandle.remove === 'function') {
-            try { await photoToDelete.fileHandle.remove(); } catch (e) {}
-          }
-          try { if (photoToDelete.blobUrl) URL.revokeObjectURL(photoToDelete.blobUrl); } catch (e) {}
-          try { if (photoToDelete.thumbnailUrl) URL.revokeObjectURL(photoToDelete.thumbnailUrl); } catch (e) {}
-          deleteFingerprintMetadata(photoToDelete.fingerprintId || photoToDelete.id);
-        }
-
-        const updatedPhotos = photos.filter(p => p.id !== photoId);
-        updatePhotos(updatedPhotos);
-
-        if (updatedPhotos.length > 0) {
-          const nextIndex = currentIndex < updatedPhotos.length ? currentIndex : updatedPhotos.length - 1;
-          setSelectedPhoto(updatedPhotos[nextIndex]);
-        } else {
-          setSelectedPhoto(null);
-        }
-      };
-
-      const rpmUsedPct = Math.round((tokenUsageState.minuteRequests / GEMINI_QUOTAS.MAX_RPM) * 100);
 
       return (
-        <div className="h-full w-full flex flex-col bg-slate-950 text-slate-100 overflow-hidden select-none">
-          <header className="h-14 sm:h-16 border-b border-slate-800 bg-slate-900/90 backdrop-blur-md px-2.5 sm:px-6 flex items-center justify-between z-30 flex-shrink-0 gap-1.5 sm:gap-4">
-            <div className="flex items-center space-x-2 min-w-0">
-              <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl sm:rounded-2xl bg-emerald-600/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shadow-lg flex-shrink-0">
-                <Icon name="feather" className="w-4 h-4 sm:w-6 sm:h-6" />
+        <div className="flex-1 flex flex-col overflow-hidden h-full">
+          <header className="bg-slate-900 border-b border-slate-800 px-4 py-3 flex items-center justify-between z-30">
+            <div className="flex items-center space-x-2.5">
+              <div className="w-8 h-8 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400">
+                <Icon name="feather" className="w-5 h-5" />
               </div>
-              <div className="truncate">
-                <h1 className="font-extrabold text-white text-xs sm:text-base tracking-tight leading-none flex items-center space-x-1">
-                  <span>BirdVault</span>
-                  <span className="text-emerald-400 font-mono text-[9px] sm:text-xs font-normal">PRO</span>
-                </h1>
-                <p className="text-[8px] sm:text-[10px] text-slate-400 truncate">Wildlife Focus Culling & Vault</p>
+              <div>
+                <h1 className="font-extrabold text-white text-base leading-tight">BirdVault Pro</h1>
+                <p className="text-[10px] text-slate-400">Wildlife Photography & Culling Assistant</p>
               </div>
             </div>
 
-            <div className="hidden md:flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs font-semibold">
-              <button
-                onClick={() => setActiveTab('culling')}
-                className={`px-4 py-1.5 rounded-lg transition flex items-center space-x-1.5 ${activeTab === 'culling' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
-              >
-                <Icon name="camera" className="w-4 h-4" />
-                <span>Focus Culling</span>
-              </button>
-              <button
-                onClick={() => setActiveTab('vault')}
-                className={`px-4 py-1.5 rounded-lg transition flex items-center space-x-1.5 ${activeTab === 'vault' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'}`}
-              >
-                <Icon name="feather" className="w-4 h-4" />
-                <span>Lifer List Vault</span>
-              </button>
-            </div>
-
-            <div className="flex items-center space-x-1.5 sm:space-x-2">
-              <button
-                onClick={() => setShowAuthModal(true)}
-                className={`px-2 sm:px-2.5 py-1.5 rounded-xl border text-[11px] sm:text-xs font-semibold flex items-center space-x-1 transition touch-manipulation ${userApiKey ? 'bg-slate-950 text-slate-300 border-slate-800 hover:border-emerald-500/50' : 'bg-emerald-600/20 text-emerald-300 border-emerald-500/40 animate-pulse'}`}
-              >
-                <Icon name="google" className="w-3.5 h-3.5 text-emerald-400" />
-                <span className="text-[10px] sm:text-[11px] font-medium hidden xs:inline">{userApiKey ? 'AI Connected' : 'Connect AI'}</span>
-              </button>
-
+            <div className="flex items-center space-x-1.5">
               <button
                 onClick={() => setShowTokenModal(true)}
-                className={`px-2 sm:px-2.5 py-1.5 rounded-xl border text-[11px] sm:text-xs font-semibold flex items-center space-x-1 transition touch-manipulation ${rpmUsedPct > 80 ? 'bg-amber-500/20 text-amber-400 border-amber-500/40 animate-pulse' : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-slate-700'}`}
+                className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-semibold rounded-xl border border-slate-700 transition flex items-center space-x-1.5 touch-manipulation"
+                title="View Gemini AI API Quotas"
               >
-                <Icon name="bolt" className={`w-3.5 h-3.5 ${rpmUsedPct > 80 ? 'text-amber-400' : 'text-emerald-400'}`} />
-                <span className="text-[10px] sm:text-[11px] font-mono hidden xs:inline">{100 - rpmUsedPct}% Quota</span>
+                <Icon name="bolt" className="w-3.5 h-3.5 text-emerald-400" />
+                <span className="hidden sm:inline">Quotas</span>
+              </button>
+
+              <button
+                onClick={() => setShowAuthModal(true)}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-xl border transition flex items-center space-x-1.5 touch-manipulation ${
+                  userApiKey 
+                    ? 'bg-emerald-950/60 text-emerald-300 border-emerald-500/40' 
+                    : 'bg-amber-950/60 text-amber-300 border-amber-500/40'
+                }`}
+              >
+                <Icon name="key" className="w-3.5 h-3.5" />
+                <span>{userApiKey ? 'API Key Set' : 'Set Gemini Key'}</span>
               </button>
             </div>
           </header>
 
-          <main className="flex-1 overflow-hidden flex flex-col relative z-20">
+          <div className="bg-slate-900/60 border-b border-slate-800 px-4 py-1.5 flex items-center justify-center space-x-2 z-20">
+            <button
+              onClick={() => setActiveTab('vault')}
+              className={`px-4 py-1.5 rounded-xl text-xs font-bold transition flex items-center space-x-1.5 touch-manipulation ${
+                activeTab === 'vault' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Icon name="feather" className="w-4 h-4" />
+              <span>Lifer Vault ({vaultEntries.length})</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('culling')}
+              className={`px-4 py-1.5 rounded-xl text-xs font-bold transition flex items-center space-x-1.5 touch-manipulation ${
+                activeTab === 'culling' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Icon name="camera" className="w-4 h-4" />
+              <span>Culling Workspace ({photos.length})</span>
+            </button>
+          </div>
+
+          <div className="flex-1 flex flex-col overflow-hidden relative">
             {activeTab === 'vault' ? (
               <LiferVaultView
                 vaultEntries={vaultEntries}
@@ -4834,28 +5420,10 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                 currentPage={currentPage}
                 setCurrentPage={setCurrentPage}
                 processedPhotos={processedPhotos}
-                isPreviewOpen={selectedPhoto !== null}
+                isPreviewOpen={!!selectedPhoto}
               />
             )}
-          </main>
-
-          <nav className="md:hidden fixed bottom-0 inset-x-0 bg-slate-900/95 border-t border-slate-800 backdrop-blur-lg flex items-center justify-around z-40 px-2 pb-safe shadow-[0_-4px_10px_rgba(0,0,0,0.3)] min-h-[3.8rem]">
-            <button
-              onClick={() => setActiveTab('culling')}
-              className={`flex flex-col items-center justify-center w-full h-full py-1.5 space-y-0.5 transition touch-manipulation ${activeTab === 'culling' ? 'text-emerald-400 font-bold' : 'text-slate-400 hover:text-slate-300'}`}
-            >
-              <Icon name="camera" className="w-4 h-4 sm:w-5 sm:h-5" />
-              <span className="text-[10px]">Focus Culling</span>
-            </button>
-            <div className="w-px h-6 bg-slate-800"></div>
-            <button
-              onClick={() => setActiveTab('vault')}
-              className={`flex flex-col items-center justify-center w-full h-full py-1.5 space-y-0.5 transition touch-manipulation ${activeTab === 'vault' ? 'text-emerald-400 font-bold' : 'text-slate-400 hover:text-slate-300'}`}
-            >
-              <Icon name="feather" className="w-4 h-4 sm:w-5 sm:h-5" />
-              <span className="text-[10px]">Lifer List Vault</span>
-            </button>
-          </nav>
+          </div>
 
           {selectedPhoto && (() => {
             const selectedIndex = processedPhotos.findIndex(p => p.id === selectedPhoto.id);
@@ -4882,6 +5450,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                 hasNext={hasNext}
                 hasPrev={hasPrev}
                 vaultEntries={vaultEntries}
+                onCommitNewVersion={handleCommitNewVersion}
               />
             );
           })()}
