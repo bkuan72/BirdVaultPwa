@@ -476,7 +476,7 @@
       }
     }
 
-    async function applyAiEnhancementsToImage(sourceUrlOrFile, params, cropBox = null, heatmapPoints = []) {
+    async function applyAiEnhancementsToImage(sourceUrlOrFile, params, cropBox = null, heatmapPoints = [], literallyCrop = false) {
       return new Promise((resolve, reject) => {
         const img = new Image();
         img.crossOrigin = 'anonymous';
@@ -494,10 +494,24 @@
         img.onload = () => {
           try {
             const canvas = document.createElement('canvas');
-            canvas.width = img.naturalWidth || img.width;
-            canvas.height = img.naturalHeight || img.height;
+            
+            let sx = 0, sy = 0, sw = img.naturalWidth || img.width, sh = img.naturalHeight || img.height;
+            if (literallyCrop && cropBox && cropBox.width > 0) {
+              sx = (cropBox.x / 100) * sw;
+              sy = (cropBox.y / 100) * sh;
+              sw = (cropBox.width / 100) * sw;
+              sh = (cropBox.height / 100) * sh;
+            }
+            
+            canvas.width = Math.round(sw);
+            canvas.height = Math.round(sh);
             const ctx = canvas.getContext('2d', { willReadFrequently: true });
-            ctx.drawImage(img, 0, 0);
+            
+            if (literallyCrop && cropBox && cropBox.width > 0) {
+              ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+            } else {
+              ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            }
 
             const w = canvas.width;
             const h = canvas.height;
@@ -517,7 +531,12 @@
             let maskRx = w * 0.4;
             let maskRy = h * 0.4;
 
-            if (cropBox && cropBox.width > 0) {
+            if (literallyCrop && cropBox && cropBox.width > 0) {
+              maskCx = w / 2;
+              maskCy = h / 2;
+              maskRx = w * 0.6;
+              maskRy = h * 0.6;
+            } else if (cropBox && cropBox.width > 0) {
               maskCx = (cropBox.x + cropBox.width / 2) / 100 * w;
               maskCy = (cropBox.y + cropBox.height / 2) / 100 * h;
               maskRx = (cropBox.width / 2) / 100 * w * 1.2;
@@ -2325,7 +2344,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
       const [showCongratModal, setShowCongratModal] = useState(false);
       const [congratData, setCongratData] = useState(null);
 
-      const [enhanceScope, setEnhanceScope] = useState('full');
+      const [enhanceScope, setEnhanceScope] = useState(photo.cropBox && photo.cropBox.width > 0 ? 'crop' : 'full');
       const [enhanceParams, setEnhanceParams] = useState({
         denoise: 35,
         sharpness: 55,
@@ -2342,6 +2361,14 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
       const loupeCanvasRef = useRef(null);
       const cachedLoupeImgRef = useRef(null);
       const [loupeImgLoaded, setLoupeImgLoaded] = useState(false);
+      
+      useEffect(() => {
+        if (photo.cropBox && photo.cropBox.width > 0) {
+          setEnhanceScope('crop');
+        } else {
+          setEnhanceScope('full');
+        }
+      }, [photo.cropBox]);
 
       const activeVersions = useMemo(() => {
         return photo.versions || [
@@ -2351,11 +2378,12 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
             opfsFileName: photo.opfsFileName || photo.name,
             timestamp: photo.lastModified || Date.now(),
             isOriginal: true,
+            cropBox: photo.cropBox,
             blobUrl: photo.blobUrl,
             thumbnailUrl: photo.thumbnailUrl
           }
         ];
-      }, [photo.versions, photo.opfsFileName, photo.name, photo.lastModified, photo.blobUrl, photo.thumbnailUrl]);
+      }, [photo.versions, photo.opfsFileName, photo.name, photo.lastModified, photo.blobUrl, photo.thumbnailUrl, photo.cropBox]);
 
       const activeVersionId = photo.activeVersionId || 'v1';
 
@@ -2416,7 +2444,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
         setIsProcessingEnhancement(true);
         try {
           const source = photo.blobUrl || photo.thumbnailUrl || photo.url;
-          const enhancedBlob = await applyAiEnhancementsToImage(source, enhanceParams, enhanceScope === 'crop' ? cropBox : null, aiResult?.heatmapPoints || []);
+          const enhancedBlob = await applyAiEnhancementsToImage(source, enhanceParams, enhanceScope === 'crop' ? cropBox : null, aiResult?.heatmapPoints || [], enhanceScope === 'crop');
           if (enhancedBlob) {
             if (enhancedPreviewUrl) URL.revokeObjectURL(enhancedPreviewUrl);
             const newUrl = URL.createObjectURL(enhancedBlob);
@@ -2433,7 +2461,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
         setIsProcessingEnhancement(true);
         try {
           const source = photo.blobUrl || photo.thumbnailUrl || photo.url;
-          const enhancedBlob = await applyAiEnhancementsToImage(source, enhanceParams, enhanceScope === 'crop' ? cropBox : null, aiResult?.heatmapPoints || []);
+          const enhancedBlob = await applyAiEnhancementsToImage(source, enhanceParams, enhanceScope === 'crop' ? cropBox : null, aiResult?.heatmapPoints || [], enhanceScope === 'crop');
           if (!enhancedBlob) return;
 
           const nextVerNum = activeVersions.length + 1;
@@ -2445,7 +2473,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
             label: verLabel,
             timestamp: Date.now(),
             isOriginal: false,
-            cropBox: enhanceScope === 'crop' ? cropBox : null,
+            cropBox: enhanceScope === 'crop' ? null : cropBox,
             processingParams: { ...enhanceParams }
           };
 
@@ -2459,6 +2487,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
               blobUrl: newUrl,
               thumbnailUrl: newUrl,
               activeVersionId: verId,
+              cropBox: enhanceScope === 'crop' ? null : photo.cropBox,
               versions: updatedVersions
             };
             onUpdatePhoto(updatedPhoto);
@@ -5071,14 +5100,27 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
       };
 
       const handleDeletePhotoInViewer = (photoId) => {
+        const currentIndex = processedPhotos.findIndex(p => p.id === photoId);
+        let nextPhoto = null;
+        
+        if (processedPhotos.length > 1) {
+          // Move to the next photo, or fallback to the previous if deleting the last photo in the list
+          if (currentIndex < processedPhotos.length - 1) {
+            nextPhoto = processedPhotos[currentIndex + 1];
+          } else {
+            nextPhoto = processedPhotos[currentIndex - 1];
+          }
+        }
+
         const photo = photos.find(p => p.id === photoId);
         if (photo) {
           try { if (photo.blobUrl) URL.revokeObjectURL(photo.blobUrl); } catch (e) {}
           try { if (photo.thumbnailUrl) URL.revokeObjectURL(photo.thumbnailUrl); } catch (e) {}
           deleteFingerprintMetadata(photo.fingerprintId || photo.id);
         }
+        
         updatePhotos(prev => prev.filter(p => p.id !== photoId));
-        setSelectedPhoto(null);
+        setSelectedPhoto(nextPhoto);
       };
 
       const handleSaveToVault = async (photoWithAi) => {
@@ -5474,4 +5516,4 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
     root.render(<BirdVaultApp />);
   </script>
 </body>
-</html>
+</html>-1.22A2
