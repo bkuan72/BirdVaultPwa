@@ -494,16 +494,26 @@
         img.onload = () => {
           try {
             const canvas = document.createElement('canvas');
-            const sourceW = img.naturalWidth || img.width;
-            const sourceH = img.naturalHeight || img.height;
+            let sx = 0;
+            let sy = 0;
+            let sw = img.naturalWidth || img.width;
+            let sh = img.naturalHeight || img.height;
+            const cropRequested = literallyCrop && cropBox && cropBox.width > 0 && cropBox.height > 0;
+            if (cropRequested) {
+              sx = (cropBox.x / 100) * sw;
+              sy = (cropBox.y / 100) * sh;
+              sw = (cropBox.width / 100) * sw;
+              sh = (cropBox.height / 100) * sh;
+            }
 
-            // Preserve the user's current framing while the enhancement pipeline applies AI emphasis.
-            // Crop boxes are used as a subject mask and ROI hint, but they must not resize the output
-            // canvas or mutate the apparent zoom/crop state of the image being reviewed.
-            canvas.width = Math.max(1, Math.round(sourceW));
-            canvas.height = Math.max(1, Math.round(sourceH));
+            canvas.width = Math.max(1, Math.round(sw));
+            canvas.height = Math.max(1, Math.round(sh));
             const ctx = canvas.getContext('2d', { willReadFrequently: true });
-            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            if (cropRequested) {
+              ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+            } else {
+              ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            }
 
             const w = canvas.width;
             const h = canvas.height;
@@ -523,7 +533,7 @@
             let maskRx = w * 0.4;
             let maskRy = h * 0.4;
 
-            if (literallyCrop && cropBox && cropBox.width > 0) {
+            if (cropRequested) {
               maskCx = w / 2;
               maskCy = h / 2;
               maskRx = w * 0.6;
@@ -2377,6 +2387,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
       const [enhancedPreviewUrl, setEnhancedPreviewUrl] = useState(null);
       const [isHoldingOriginal, setIsHoldingOriginal] = useState(false);
       const [enhancementNotes, setEnhancementNotes] = useState('');
+      const [enhancementSaveError, setEnhancementSaveError] = useState('');
 
       const loupeCanvasRef = useRef(null);
       const cachedLoupeImgRef = useRef(null);
@@ -2407,6 +2418,14 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
       }, [photo.versions, photo.opfsFileName, photo.name, photo.lastModified, photo.blobUrl, photo.thumbnailUrl, photo.cropBox, photo.cameraExif]);
 
       const activeVersionId = photo.activeVersionId || 'v1';
+      const selectedVersion = activeVersions.find(v => v.versionId === activeVersionId);
+      const isCropOutputActive = !!selectedVersion?.isCropOutput;
+      const isShowingBakedCrop = isCropOutputActive || (!!enhancedPreviewUrl && enhanceScope === 'crop');
+      const getEnhancementSource = () => (
+        selectedVersion?.isOriginal && photo.file
+          ? photo.file
+          : photo.blobUrl || photo.file || photo.thumbnailUrl || photo.url
+      );
 
       const handleSelectVersion = async (versionId) => {
         const selectedVer = activeVersions.find(v => v.versionId === versionId);
@@ -2443,6 +2462,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
         };
         onUpdatePhoto(updated);
         saveFingerprintMetadata(updated);
+        setShowCroppedPreview(!!selectedVer.isOriginal && !!updated.cropBox && updated.cropBox.width > 0);
       };
 
       const handleAutoTuneAiParams = async () => {
@@ -2464,12 +2484,13 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
       const handleGenerateEnhancementPreview = async () => {
         setIsProcessingEnhancement(true);
         try {
-          const source = photo.blobUrl || photo.thumbnailUrl || photo.url;
+          const source = getEnhancementSource();
           const enhancedBlob = await applyAiEnhancementsToImage(source, enhanceParams, enhanceScope === 'crop' ? cropBox : null, aiResult?.heatmapPoints || [], enhanceScope === 'crop');
           if (enhancedBlob) {
             if (enhancedPreviewUrl) URL.revokeObjectURL(enhancedPreviewUrl);
             const newUrl = URL.createObjectURL(enhancedBlob);
             setEnhancedPreviewUrl(newUrl);
+            setShowCroppedPreview(false);
           }
         } catch (err) {
           console.warn('Enhancement error:', err);
@@ -2480,10 +2501,76 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
 
       const handleSaveEnhancementVersion = async () => {
         setIsProcessingEnhancement(true);
+        setEnhancementSaveError('');
         try {
-          const source = photo.blobUrl || photo.thumbnailUrl || photo.url;
+          let cropOutputFileHandle = null;
+          let cropOutputDirectoryHandle = null;
+          let cropOutputFileName = null;
+          const baseName = (photo.name || 'birdvault-photo')
+            .replace(/\.[^.]+$/, '')
+            .replace(/[^a-zA-Z0-9_-]/g, '_') || 'birdvault-photo';
+
+          if (enhanceScope === 'crop') {
+            cropOutputFileName = `${baseName}_crop_enhanced_${Date.now()}.jpg`;
+            cropOutputDirectoryHandle = photo.sourceDirectoryHandle || null;
+
+            if (cropOutputDirectoryHandle
+              && typeof cropOutputDirectoryHandle.queryPermission === 'function'
+              && typeof cropOutputDirectoryHandle.requestPermission === 'function') {
+              let permission = await cropOutputDirectoryHandle.queryPermission({ mode: 'readwrite' });
+              if (permission !== 'granted') {
+                permission = await cropOutputDirectoryHandle.requestPermission({ mode: 'readwrite' });
+              }
+              if (permission !== 'granted') cropOutputDirectoryHandle = null;
+            } else if (cropOutputDirectoryHandle) {
+              cropOutputDirectoryHandle = null;
+            }
+
+            if (!cropOutputDirectoryHandle) {
+              if (typeof window.showSaveFilePicker === 'function') {
+                cropOutputFileHandle = await window.showSaveFilePicker({
+                  suggestedName: cropOutputFileName,
+                  types: [{ description: 'JPEG image', accept: { 'image/jpeg': ['.jpg'] } }]
+                });
+                cropOutputFileName = cropOutputFileHandle.name;
+              } else if (typeof window.showDirectoryPicker === 'function') {
+                cropOutputDirectoryHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+              } else {
+                throw new Error('This browser cannot prompt for a save location. Use a browser that supports file saving.');
+              }
+            }
+          }
+
+          const source = getEnhancementSource();
           const enhancedBlob = await applyAiEnhancementsToImage(source, enhanceParams, enhanceScope === 'crop' ? cropBox : null, aiResult?.heatmapPoints || [], enhanceScope === 'crop');
           if (!enhancedBlob) return;
+
+          if (enhanceScope === 'crop') {
+            if (cropOutputDirectoryHandle) {
+              let candidateName = cropOutputFileName;
+              let suffix = 1;
+              while (true) {
+                try {
+                  await cropOutputDirectoryHandle.getFileHandle(candidateName, { create: false });
+                  candidateName = `${baseName}_crop_enhanced_${Date.now()}_${suffix++}.jpg`;
+                } catch (err) {
+                  if (err.name === 'NotFoundError') break;
+                  throw err;
+                }
+              }
+              cropOutputFileName = candidateName;
+              cropOutputFileHandle = await cropOutputDirectoryHandle.getFileHandle(candidateName, { create: true });
+            }
+
+            const writable = await cropOutputFileHandle.createWritable();
+            try {
+              await writable.write(enhancedBlob);
+              await writable.close();
+            } catch (err) {
+              if (typeof writable.abort === 'function') await writable.abort();
+              throw err;
+            }
+          }
 
           const nextVerNum = activeVersions.length + 1;
           const verId = `v${nextVerNum}`;
@@ -2494,7 +2581,9 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
             label: verLabel,
             timestamp: photo.cameraExif?.captureTimestamp || photo.lastModified || Date.now(),
             isOriginal: false,
-            cropBox: cropBox || photo.cropBox || null,
+            cropBox: enhanceScope === 'crop' ? null : cropBox || photo.cropBox || null,
+            isCropOutput: enhanceScope === 'crop',
+            savedFileName: enhanceScope === 'crop' ? cropOutputFileName : null,
             processingParams: { ...enhanceParams }
           };
 
@@ -2508,7 +2597,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
               blobUrl: newUrl,
               thumbnailUrl: newUrl,
               activeVersionId: verId,
-              cropBox: cropBox || photo.cropBox || null,
+              cropBox: newVersionObj.cropBox,
               versions: updatedVersions
             };
             onUpdatePhoto(updatedPhoto);
@@ -2516,7 +2605,11 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
           }
 
           setEnhancedPreviewUrl(null);
+          setShowCroppedPreview(false);
         } catch (err) {
+          if (err.name !== 'AbortError') {
+            setEnhancementSaveError(err.message || 'Could not save the enhanced image.');
+          }
           console.warn('Commit version error:', err);
         } finally {
           setIsProcessingEnhancement(false);
@@ -2589,7 +2682,10 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
       const pinchStartScaleRef = useRef(1);
 
       const [cropBox, setCropBox] = useState(photo.cropBox || null);
-      const [showCroppedPreview, setShowCroppedPreview] = useState(!!(photo.cropBox && photo.cropBox.width > 0));
+      const [showCroppedPreview, setShowCroppedPreview] = useState(() => {
+        const activeVersion = photo.versions?.find(v => v.versionId === photo.activeVersionId);
+        return !!(photo.cropBox && photo.cropBox.width > 0 && (!activeVersion || activeVersion.isOriginal));
+      });
       const [isDrawingCrop, setIsDrawingCrop] = useState(false);
       const cropStartRef = useRef(null);
       const currentCropBoxRef = useRef(photo.cropBox || null);
@@ -2598,10 +2694,11 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
 
       useEffect(() => {
         const activeCrop = photo.cropBox || null;
+        const activeVersion = photo.versions?.find(v => v.versionId === photo.activeVersionId);
         setCropBox(activeCrop);
         currentCropBoxRef.current = activeCrop;
-        setShowCroppedPreview(!!(activeCrop && activeCrop.width > 0));
-      }, [photo.id, photo.cropBox]);
+        setShowCroppedPreview(!!(activeCrop && activeCrop.width > 0 && (!activeVersion || activeVersion.isOriginal)));
+      }, [photo.id, photo.cropBox, photo.activeVersionId, photo.versions]);
 
       const [identifying, setIdentifying] = useState(false);
       const [aiResult, setAiResult] = useState(photo.identification || null);
@@ -3096,7 +3193,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                       fitMode="contain"
                       className="rounded-2xl border border-slate-800 shadow-2xl overflow-hidden"
                     >
-                      {cropBox && cropBox.width > 0 && (
+                      {cropBox && cropBox.width > 0 && !isShowingBakedCrop && (
                         <div
                           className="absolute border-2 border-emerald-400 bg-emerald-500/20 pointer-events-none z-20 shadow-[0_0_0_9999px_rgba(0,0,0,0.6)]"
                           style={{
@@ -3208,9 +3305,9 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                 <button
                   type="button"
                   onClick={() => setShowCroppedPreview(!showCroppedPreview)}
-                  disabled={!hasValidCropBox}
+                  disabled={!hasValidCropBox || isShowingBakedCrop}
                   className={`text-[10px] sm:text-xs px-3 py-2 rounded-xl font-semibold transition flex items-center space-x-1.5 touch-manipulation ${
-                    !hasValidCropBox 
+                    !hasValidCropBox || isShowingBakedCrop
                       ? 'bg-slate-800/50 text-slate-600 border border-slate-800/80 cursor-not-allowed' 
                       : showCroppedPreview 
                         ? 'bg-emerald-600 text-white shadow-lg' 
@@ -3218,7 +3315,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                   }`}
                 >
                   <Icon name="crop" className="w-3.5 h-3.5" />
-                  <span>{showCroppedPreview ? 'View Full Image' : 'Cropped Preview'}</span>
+                  <span>{isShowingBakedCrop ? 'Crop Baked into Image' : showCroppedPreview ? 'View Full Image' : 'Cropped Preview'}</span>
                 </button>
 
                 <button
@@ -3405,6 +3502,12 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                   {enhancementNotes && (
                     <p className="text-[10px] text-slate-400 bg-slate-950 p-2 rounded-lg border border-slate-800/80 italic">
                       💡 {enhancementNotes}
+                    </p>
+                  )}
+
+                  {enhancementSaveError && (
+                    <p role="alert" className="text-[11px] text-red-300 bg-red-950/50 p-2 rounded-lg border border-red-800/70">
+                      {enhancementSaveError}
                     </p>
                   )}
 
@@ -4302,6 +4405,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                   fingerprintId: fpId,
                   file: file,
                   fileHandle: file.handle || null,
+                  sourceDirectoryHandle: dirHandle,
                   name: file.name,
                   size: file.size,
                   lastModified: file.lastModified,
@@ -5338,17 +5442,22 @@ const handleDeletePhotoInViewer = async (photoId) => {
         };
 
         const captureTimestampForVersion = photo.cameraExif?.captureTimestamp || photo.lastModified || Date.now();
-        const existingVersions = photo.versions || [
+        const existingVersions = (photo.versions || [
           {
             versionId: 'v1',
             label: 'v1: Original Capture',
             opfsFileName: photo.opfsFileName || photo.name,
             timestamp: captureTimestampForVersion,
             isOriginal: true,
+            cropBox: photo.cropBox || null,
             blobUrl: photo.blobUrl,
             thumbnailUrl: photo.thumbnailUrl
           }
-        ];
+        ]).map(version => (
+          version.isOriginal && version.cropBox === undefined
+            ? { ...version, cropBox: photo.cropBox || null }
+            : version
+        ));
 
         const updatedVersions = [...existingVersions, fullVerMeta];
 
@@ -5358,6 +5467,7 @@ const handleDeletePhotoInViewer = async (photoId) => {
           blobUrl: freshBlobUrl,
           thumbnailUrl: freshBlobUrl,
           activeVersionId: verId,
+          cropBox: versionMeta.cropBox,
           versions: updatedVersions
         };
 
@@ -5374,11 +5484,13 @@ const handleDeletePhotoInViewer = async (photoId) => {
                     ...s,
                     activeVersionId: verId,
                     opfsFileName: verFileName,
+                    cropBox: versionMeta.cropBox,
                     versions: updatedVersions,
                     photo: {
                       ...s.photo,
                       opfsFileName: verFileName,
                       activeVersionId: verId,
+                      cropBox: versionMeta.cropBox,
                       versions: updatedVersions
                     }
                   };

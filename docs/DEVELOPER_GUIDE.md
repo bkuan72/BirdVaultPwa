@@ -59,6 +59,12 @@ The app will function best when:
 - the user has adequate filesystem permissions for folder selection
 - the device has enough RAM for high-resolution preview processing
 
+## Crop-scoped enhancement output
+
+Crop ROI enhancement renders the selected region into a standalone JPEG, then processes and saves that image as a new version. The crop is baked into the output, so the viewer must not apply the original ROI to that version again. The original version retains its crop metadata.
+
+When a photo was imported through the app's folder picker, the app saves the JPEG beside the source photo. For photos imported through a file picker without writable source-folder access, the browser prompts for a save location. The new JPEG is also stored as an app version in the local vault.
+
 ## Common troubleshooting
 
 ### 1. API identification fails
