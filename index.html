@@ -494,24 +494,16 @@
         img.onload = () => {
           try {
             const canvas = document.createElement('canvas');
-            
-            let sx = 0, sy = 0, sw = img.naturalWidth || img.width, sh = img.naturalHeight || img.height;
-            if (literallyCrop && cropBox && cropBox.width > 0) {
-              sx = (cropBox.x / 100) * sw;
-              sy = (cropBox.y / 100) * sh;
-              sw = (cropBox.width / 100) * sw;
-              sh = (cropBox.height / 100) * sh;
-            }
-            
-            canvas.width = Math.round(sw);
-            canvas.height = Math.round(sh);
+            const sourceW = img.naturalWidth || img.width;
+            const sourceH = img.naturalHeight || img.height;
+
+            // Preserve the user's current framing while the enhancement pipeline applies AI emphasis.
+            // Crop boxes are used as a subject mask and ROI hint, but they must not resize the output
+            // canvas or mutate the apparent zoom/crop state of the image being reviewed.
+            canvas.width = Math.max(1, Math.round(sourceW));
+            canvas.height = Math.max(1, Math.round(sourceH));
             const ctx = canvas.getContext('2d', { willReadFrequently: true });
-            
-            if (literallyCrop && cropBox && cropBox.width > 0) {
-              ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
-            } else {
-              ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-            }
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
             const w = canvas.width;
             const h = canvas.height;
@@ -2502,7 +2494,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
             label: verLabel,
             timestamp: photo.cameraExif?.captureTimestamp || photo.lastModified || Date.now(),
             isOriginal: false,
-            cropBox: enhanceScope === 'crop' ? null : cropBox,
+            cropBox: cropBox || photo.cropBox || null,
             processingParams: { ...enhanceParams }
           };
 
@@ -2516,7 +2508,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
               blobUrl: newUrl,
               thumbnailUrl: newUrl,
               activeVersionId: verId,
-              cropBox: enhanceScope === 'crop' ? null : photo.cropBox,
+              cropBox: cropBox || photo.cropBox || null,
               versions: updatedVersions
             };
             onUpdatePhoto(updatedPhoto);
