@@ -5099,7 +5099,8 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
         }
       };
 
-      const handleDeletePhotoInViewer = (photoId) => {
+
+const handleDeletePhotoInViewer = async (photoId) => {
         const currentIndex = processedPhotos.findIndex(p => p.id === photoId);
         let nextPhoto = null;
         
@@ -5114,6 +5115,15 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
 
         const photo = photos.find(p => p.id === photoId);
         if (photo) {
+          // NEW: Attempt to delete the physical file from disk via File System Access API
+          if (photo.fileHandle && typeof photo.fileHandle.remove === 'function') {
+            try { 
+              await photo.fileHandle.remove(); 
+            } catch (err) {
+              console.warn('Could not delete physical file from disk:', err);
+            }
+          }
+          
           try { if (photo.blobUrl) URL.revokeObjectURL(photo.blobUrl); } catch (e) {}
           try { if (photo.thumbnailUrl) URL.revokeObjectURL(photo.thumbnailUrl); } catch (e) {}
           deleteFingerprintMetadata(photo.fingerprintId || photo.id);
@@ -5122,6 +5132,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
         updatePhotos(prev => prev.filter(p => p.id !== photoId));
         setSelectedPhoto(nextPhoto);
       };
+
 
       const handleSaveToVault = async (photoWithAi) => {
         if (!photoWithAi.identification) return;
