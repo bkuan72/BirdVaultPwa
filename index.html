@@ -9,6 +9,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="theme-color" content="#040711">
+  <link rel="icon" type="image/png" sizes="100x100" href="./resourse/BirdVault_100px.png">
 
   <script>
     (function() {
@@ -19,7 +20,7 @@
       };
 
       const svgIcon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none"><rect width="512" height="512" rx="128" fill="#040711"/><path d="M256 64C180 64 120 120 120 200C120 300 256 448 256 448C256 448 392 300 392 200C392 120 332 64 256 64ZM256 250C228.4 250 206 227.6 206 200C206 172.4 228.4 150 256 150C283.6 150 306 127.6 306 200C306 227.6 283.6 250 256 250Z" fill="#10b981"/><path d="M256 120C211.8 120 176 155.8 176 200C176 260 256 360 256 360C256 360 336 260 336 200C336 155.8 300.2 120 256 120ZM256 230C239.4 230 226 216.6 226 200C226 183.4 239.4 170 256 170C272.6 170 286 183.4 286 200C286 216.6 272.6 230 256 230Z" fill="#34d399"/></svg>`;
-      const iconUrl = 'data:image/svg+xml;base64,' + btoa(svgIcon);
+      const iconUrl = new URL('./resourse/BirdVault_100px.png', document.baseURI).href;
 
       let validStartUrl = window.location.origin + window.location.pathname;
       try {
@@ -36,7 +37,7 @@
         background_color: "#040711",
         theme_color: "#040711",
         icons: [
-          { src: iconUrl, sizes: "512x512", type: "image/svg+xml", purpose: "any maskable" }
+          { src: iconUrl, sizes: "100x100", type: "image/png", purpose: "any" }
         ]
       };
       const blob = new Blob([JSON.stringify(manifest)], {type: 'application/json'});
