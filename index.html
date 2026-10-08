@@ -1127,45 +1127,53 @@ Return STRICT JSON ONLY:
     async function generateFastThumbnail(photo, targetSize = 240) {
       const fpId = photo.fingerprintId || photo.id;
       const file = photo.file;
+      const thumbnailCacheKey = fpId ? `${fpId}_oriented_v2` : null;
 
-      if (fpId) {
-        const cachedBlob = await getBlobFromIdb('birdvault_thumbs', fpId);
+      if (thumbnailCacheKey) {
+        const cachedBlob = await getBlobFromIdb('birdvault_thumbs', thumbnailCacheKey);
         if (cachedBlob && cachedBlob.size > 50) {
-          return {
-            thumbUrl: URL.createObjectURL(cachedBlob),
-            width: targetSize,
-            height: targetSize
-          };
+          try {
+            const bitmap = await createImageBitmap(cachedBlob, { imageOrientation: 'from-image' });
+            const width = bitmap.width;
+            const height = bitmap.height;
+            bitmap.close();
+            return { thumbUrl: URL.createObjectURL(cachedBlob), width, height };
+          } catch (err) {
+            console.warn('Cached thumbnail dimensions unavailable; regenerating thumbnail:', err);
+          }
         }
       }
 
       if (!file) {
-        if (photo.thumbnailUrl) return { thumbUrl: photo.thumbnailUrl, width: 240, height: 240 };
-        return { thumbUrl: photo.url || '', width: 240, height: 240 };
-      }
-
-      try {
-        const exifThumbBlob = await extractExifEmbeddedThumbnail(file);
-        if (exifThumbBlob && exifThumbBlob.size > 500) {
-          if (fpId) saveBlobToIdb('birdvault_thumbs', fpId, exifThumbBlob);
-          return {
-            thumbUrl: URL.createObjectURL(exifThumbBlob),
-            width: targetSize,
-            height: targetSize
-          };
+        const source = photo.thumbnailUrl || photo.blobUrl || photo.url;
+        if (!source) return { thumbUrl: '', width: 1000, height: 750 };
+        try {
+          const img = new Image();
+          const dimensions = await new Promise((resolve, reject) => {
+            img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
+            img.onerror = () => reject(new Error('Could not read thumbnail dimensions'));
+            img.src = source;
+          });
+          return { thumbUrl: source, ...dimensions };
+        } catch (err) {
+          console.warn('Thumbnail dimensions unavailable:', err);
+          return { thumbUrl: source, width: 1000, height: 750 };
         }
-      } catch (e) {}
+      }
 
       try {
         if ('createImageBitmap' in window) {
           const bitmap = await createImageBitmap(file, {
             resizeWidth: targetSize,
             resizeHeight: targetSize,
-            resizeMode: 'aspect-fit'
+            resizeMode: 'aspect-fit',
+            imageOrientation: 'from-image'
           });
+          const width = bitmap.width;
+          const height = bitmap.height;
           const canvas = document.createElement('canvas');
-          canvas.width = bitmap.width;
-          canvas.height = bitmap.height;
+          canvas.width = width;
+          canvas.height = height;
           const ctx = canvas.getContext('2d', { alpha: false });
           ctx.imageSmoothingEnabled = true;
           ctx.imageSmoothingQuality = 'medium';
@@ -1174,24 +1182,35 @@ Return STRICT JSON ONLY:
 
           return new Promise((resolve) => {
             canvas.toBlob((blob) => {
-              canvas.width = 0; canvas.height = 0;
+              canvas.width = 0;
+              canvas.height = 0;
               if (blob) {
-                if (fpId) saveBlobToIdb('birdvault_thumbs', fpId, blob);
-                resolve({
-                  thumbUrl: URL.createObjectURL(blob),
-                  width: canvas.width,
-                  height: canvas.height
-                });
+                if (thumbnailCacheKey) saveBlobToIdb('birdvault_thumbs', thumbnailCacheKey, blob);
+                resolve({ thumbUrl: URL.createObjectURL(blob), width, height });
               } else {
-                resolve({ thumbUrl: URL.createObjectURL(file), width: 1000, height: 750 });
+                resolve({ thumbUrl: URL.createObjectURL(file), width, height });
               }
             }, 'image/jpeg', 0.65);
           });
         }
-      } catch (e) {
-        console.warn('createImageBitmap fallback:', e);
+      } catch (err) {
+        console.warn('createImageBitmap fallback:', err);
       }
-      return { thumbUrl: URL.createObjectURL(file), width: 1000, height: 750 };
+
+      const fallbackUrl = URL.createObjectURL(file);
+      try {
+        const img = new Image();
+        const dimensions = await new Promise((resolve, reject) => {
+          img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
+          img.onerror = () => reject(new Error('Could not read source image dimensions'));
+          img.src = fallbackUrl;
+        });
+        return { thumbUrl: fallbackUrl, ...dimensions };
+      } catch (err) {
+        URL.revokeObjectURL(fallbackUrl);
+        console.warn('Source image dimensions unavailable:', err);
+        return { thumbUrl: URL.createObjectURL(file), width: 1000, height: 750 };
+      }
     }
 
     async function createScreenProxy(file, maxDimension = 2048) {
@@ -1200,7 +1219,8 @@ Return STRICT JSON ONLY:
         if ('createImageBitmap' in window) {
           const bitmap = await createImageBitmap(file, {
             resizeWidth: maxDimension,
-            resizeMode: 'aspect-fit'
+            resizeMode: 'aspect-fit',
+            imageOrientation: 'from-image'
           });
 
           const canvas = document.createElement('canvas');
@@ -1966,19 +1986,11 @@ Return STRICT JSON ONLY:
 
     function CroppedImage({ src, alt, cropBox, photo = null, className = "", imgClassName = "", innerRef = null, fitMode = "contain", children = null }) {
       const [imgError, setImgError] = useState(false);
-      const [imgDims, setImgDims] = useState(() => ({
-        w: (photo?.naturalWidth && photo.naturalWidth > 50) ? photo.naturalWidth : 1000,
-        h: (photo?.naturalHeight && photo.naturalHeight > 50) ? photo.naturalHeight : 750
-      }));
-
-      useEffect(() => {
-        if (photo?.naturalWidth > 50 && photo?.naturalHeight > 50) {
-          setImgDims({ w: photo.naturalWidth, h: photo.naturalHeight });
-        }
-      }, [photo?.naturalWidth, photo?.naturalHeight]);
+      const [imgDims, setImgDims] = useState({ w: 1000, h: 750 });
 
       useEffect(() => {
         setImgError(false);
+        setImgDims({ w: 1000, h: 750 });
         if (src) {
           const img = new Image();
           img.crossOrigin = 'anonymous';
@@ -2726,6 +2738,23 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
         setEvaluatingFocus(false);
       };
 
+      const handleClearCropBox = (event) => {
+        event?.stopPropagation();
+        const updated = {
+          ...photo,
+          cropBox: null,
+          versions: photo.versions?.map(version => ({ ...version, cropBox: null }))
+        };
+        currentCropBoxRef.current = null;
+        setCropBox(null);
+        setShowCroppedPreview(false);
+        setIsCropToolActive(false);
+        setIsDrawingCrop(false);
+        cropStartRef.current = null;
+        onUpdatePhoto(updated);
+        saveFingerprintMetadata(updated);
+      };
+
       const toggleCropTool = async () => {
         if (isCropToolActive) {
           setIsCropToolActive(false);
@@ -3180,7 +3209,19 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                       photo={photo}
                       fitMode="contain"
                       className="rounded-2xl border border-slate-700 shadow-2xl overflow-hidden max-h-[calc(100vh-10rem)] max-w-full"
-                    />
+                    >
+                      <button
+                        type="button"
+                        aria-label="Remove crop region"
+                        title="Remove crop region"
+                        onPointerDown={e => e.stopPropagation()}
+                        onTouchStart={e => e.stopPropagation()}
+                        onClick={handleClearCropBox}
+                        className="absolute -top-3 -right-3 pointer-events-auto z-30 w-6 h-6 flex items-center justify-center rounded-full bg-red-600 hover:bg-red-500 text-white border-2 border-slate-950 shadow-lg touch-manipulation"
+                      >
+                        <Icon name="x" className="w-3.5 h-3.5" />
+                      </button>
+                    </CroppedImage>
                   </div>
                 ) : (
                   <div className="relative flex items-center justify-center w-full h-full max-w-full max-h-full">
@@ -3195,7 +3236,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                     >
                       {cropBox && cropBox.width > 0 && !isShowingBakedCrop && (
                         <div
-                          className="absolute border-2 border-emerald-400 bg-emerald-500/20 pointer-events-none z-20 shadow-[0_0_0_9999px_rgba(0,0,0,0.6)]"
+                          className="absolute border-2 border-emerald-400 bg-emerald-500/20 z-20 shadow-[0_0_0_9999px_rgba(0,0,0,0.6)]"
                           style={{
                             left: `${cropBox.x}%`,
                             top: `${cropBox.y}%`,
@@ -3203,9 +3244,20 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                             height: `${cropBox.height}%`
                           }}
                         >
-                          <span className="absolute -top-6 left-0 bg-emerald-600 text-white text-[9px] sm:text-[10px] font-bold px-1.5 py-0.5 rounded whitespace-nowrap shadow">
+                          <span className="absolute -top-6 left-0 pointer-events-none bg-emerald-600 text-white text-[9px] sm:text-[10px] font-bold px-1.5 py-0.5 rounded whitespace-nowrap shadow">
                             Crop ROI ({cropBox.width.toFixed(0)}% × {cropBox.height.toFixed(0)}%)
                           </span>
+                          <button
+                            type="button"
+                            aria-label="Remove crop region"
+                            title="Remove crop region"
+                            onPointerDown={e => e.stopPropagation()}
+                            onTouchStart={e => e.stopPropagation()}
+                            onClick={handleClearCropBox}
+                            className="absolute -top-3 -right-3 pointer-events-auto z-30 w-6 h-6 flex items-center justify-center rounded-full bg-red-600 hover:bg-red-500 text-white border-2 border-slate-950 shadow-lg touch-manipulation"
+                          >
+                            <Icon name="x" className="w-3.5 h-3.5" />
+                          </button>
                         </div>
                       )}
                     </CroppedImage>
@@ -3396,42 +3448,59 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                   )}
                 </div>
 
-                {cameraExif && (
-                  <div className="mt-3 pt-2 border-t border-slate-800 space-y-2">
-                    <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider block">Camera EXIF Parameters</span>
-                    <div className="grid grid-cols-2 gap-1.5 text-[10px] font-mono">
-                      {cameraExif.make || cameraExif.model ? (
-                        <div className="col-span-2 bg-slate-950 p-1.5 rounded border border-slate-800/80 flex justify-between items-center">
-                          <span className="text-slate-500">CAMERA</span>
-                          <span className="text-slate-200 font-bold truncate max-w-[150px]">{[cameraExif.make, cameraExif.model].filter(Boolean).join(' ')}</span>
-                        </div>
-                      ) : null}
-                      {cameraExif.lens && (
-                        <div className="col-span-2 bg-slate-950 p-1.5 rounded border border-slate-800/80 flex justify-between items-center">
-                          <span className="text-slate-500">LENS</span>
-                          <span className="text-slate-200 font-bold truncate max-w-[150px]">{cameraExif.lens}</span>
-                        </div>
-                      )}
-                      <div className="bg-slate-950 p-1.5 rounded border border-slate-800/80">
-                        <span className="text-slate-500 block">SHUTTER</span>
-                        <span className="text-slate-200 font-bold">{cameraExif.shutterSpeed || 'N/A'}</span>
-                      </div>
-                      <div className="bg-slate-950 p-1.5 rounded border border-slate-800/80">
-                        <span className="text-slate-500 block">APERTURE</span>
-                        <span className="text-slate-200 font-bold">{cameraExif.aperture || 'N/A'}</span>
-                      </div>
-                      <div className="bg-slate-950 p-1.5 rounded border border-slate-800/80">
-                        <span className="text-slate-500 block">ISO</span>
-                        <span className="text-slate-200 font-bold">{cameraExif.iso || 'N/A'}</span>
-                      </div>
-                      <div className="bg-slate-950 p-1.5 rounded border border-slate-800/80">
-                        <span className="text-slate-500 block">FOCAL LENGTH</span>
-                        <span className="text-slate-200 font-bold">{cameraExif.focalLength || 'N/A'}</span>
-                      </div>
-                    </div>
-                  </div>
-                )}
               </div>
+            </Accordion>
+
+            <Accordion
+              title="Camera EXIF Data"
+              icon="camera"
+              defaultOpen={false}
+              badge={
+                cameraExif?.make || cameraExif?.model ? (
+                  <span className="text-[9px] font-bold bg-slate-800 text-slate-300 border border-slate-700 px-2 py-0.5 rounded-full">
+                    {[cameraExif.make, cameraExif.model].filter(Boolean).join(' ')}
+                  </span>
+                ) : null
+              }
+            >
+              {cameraExif ? (
+                <div className="grid grid-cols-2 gap-1.5 text-[10px] font-mono">
+                  {cameraExif.make || cameraExif.model ? (
+                    <div className="col-span-2 bg-slate-950 p-1.5 rounded border border-slate-800/80 flex justify-between items-center">
+                      <span className="text-slate-500">CAMERA</span>
+                      <span className="text-slate-200 font-bold truncate max-w-[150px]">{[cameraExif.make, cameraExif.model].filter(Boolean).join(' ')}</span>
+                    </div>
+                  ) : null}
+                  {cameraExif.lens && (
+                    <div className="col-span-2 bg-slate-950 p-1.5 rounded border border-slate-800/80 flex justify-between items-center">
+                      <span className="text-slate-500">LENS</span>
+                      <span className="text-slate-200 font-bold truncate max-w-[150px]">{cameraExif.lens}</span>
+                    </div>
+                  )}
+                  <div className="bg-slate-950 p-1.5 rounded border border-slate-800/80">
+                    <span className="text-slate-500 block">CAPTURE DATE</span>
+                    <span className="text-slate-200 font-bold">{cameraExif.captureTimestamp ? new Date(cameraExif.captureTimestamp).toLocaleString() : 'N/A'}</span>
+                  </div>
+                  <div className="bg-slate-950 p-1.5 rounded border border-slate-800/80">
+                    <span className="text-slate-500 block">SHUTTER</span>
+                    <span className="text-slate-200 font-bold">{cameraExif.shutterSpeed || 'N/A'}</span>
+                  </div>
+                  <div className="bg-slate-950 p-1.5 rounded border border-slate-800/80">
+                    <span className="text-slate-500 block">APERTURE</span>
+                    <span className="text-slate-200 font-bold">{cameraExif.aperture || 'N/A'}</span>
+                  </div>
+                  <div className="bg-slate-950 p-1.5 rounded border border-slate-800/80">
+                    <span className="text-slate-500 block">ISO</span>
+                    <span className="text-slate-200 font-bold">{cameraExif.iso || 'N/A'}</span>
+                  </div>
+                  <div className="bg-slate-950 p-1.5 rounded border border-slate-800/80">
+                    <span className="text-slate-500 block">FOCAL LENGTH</span>
+                    <span className="text-slate-200 font-bold">{cameraExif.focalLength || 'N/A'}</span>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-[11px] text-slate-400">No camera EXIF data is available for this photo.</p>
+              )}
             </Accordion>
 
             <Accordion 
