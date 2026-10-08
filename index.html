@@ -863,6 +863,23 @@ Return STRICT JSON ONLY:
       });
     }
 
+    function parseExifCaptureDate(dateValue) {
+      if (dateValue === null || dateValue === undefined) return null;
+      if (typeof dateValue === 'number' && Number.isFinite(dateValue)) return dateValue;
+
+      const raw = String(dateValue).trim();
+      if (!raw) return null;
+
+      const isoCandidate = raw.replace(/^(\d{4}):(\d{2}):(\d{2})\s+(\d{2}):(\d{2}):(\d{2})$/, '$1-$2-$3T$4:$5:$6');
+      const parsed = new Date(isoCandidate);
+      if (!Number.isNaN(parsed.getTime())) return parsed.getTime();
+
+      const altParsed = new Date(raw);
+      if (!Number.isNaN(altParsed.getTime())) return altParsed.getTime();
+
+      return null;
+    }
+
     async function extractCameraExif(file) {
       return new Promise((resolve) => {
         if (!file || !(file instanceof File)) return resolve(null);
@@ -1003,12 +1020,23 @@ Return STRICT JSON ONLY:
               focalLength: null,
               focalLengthValue: null,
               subjectDistance: null,
-              focusArea: null
+              focusArea: null,
+              captureDate: null,
+              captureTimestamp: null
             };
 
             const exifSubIFDOffset = ifd0Tags[0x8769];
             if (exifSubIFDOffset) {
               const exifTags = readIFD(tiffOffset + exifSubIFDOffset);
+
+              const captureDateCandidate = exifTags[0x9003] || exifTags[0x9004] || ifd0Tags[0x0132];
+              if (captureDateCandidate) {
+                const captureTimestamp = parseExifCaptureDate(captureDateCandidate);
+                if (captureTimestamp) {
+                  cameraData.captureTimestamp = captureTimestamp;
+                  cameraData.captureDate = new Date(captureTimestamp).toISOString();
+                }
+              }
 
               if (exifTags[0x920A] !== undefined) {
                 const fl = parseFloat(exifTags[0x920A]);
@@ -1079,7 +1107,7 @@ Return STRICT JSON ONLY:
               }
             }
 
-            if (cameraData.make || cameraData.model || cameraData.focalLength || cameraData.shutterSpeed || cameraData.aperture || cameraData.iso || cameraData.lens || cameraData.focusArea) {
+            if (cameraData.make || cameraData.model || cameraData.focalLength || cameraData.shutterSpeed || cameraData.aperture || cameraData.iso || cameraData.lens || cameraData.focusArea || cameraData.captureTimestamp) {
               resolve(cameraData);
             } else {
               resolve(null);
@@ -2371,19 +2399,20 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
       }, [photo.cropBox]);
 
       const activeVersions = useMemo(() => {
+        const captureTs = photo.cameraExif?.captureTimestamp || photo.lastModified || Date.now();
         return photo.versions || [
           {
             versionId: 'v1',
             label: 'Original Capture',
             opfsFileName: photo.opfsFileName || photo.name,
-            timestamp: photo.lastModified || Date.now(),
+            timestamp: captureTs,
             isOriginal: true,
             cropBox: photo.cropBox,
             blobUrl: photo.blobUrl,
             thumbnailUrl: photo.thumbnailUrl
           }
         ];
-      }, [photo.versions, photo.opfsFileName, photo.name, photo.lastModified, photo.blobUrl, photo.thumbnailUrl, photo.cropBox]);
+      }, [photo.versions, photo.opfsFileName, photo.name, photo.lastModified, photo.blobUrl, photo.thumbnailUrl, photo.cropBox, photo.cameraExif]);
 
       const activeVersionId = photo.activeVersionId || 'v1';
 
@@ -2471,7 +2500,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
           const newVersionObj = {
             versionId: verId,
             label: verLabel,
-            timestamp: Date.now(),
+            timestamp: photo.cameraExif?.captureTimestamp || photo.lastModified || Date.now(),
             isOriginal: false,
             cropBox: enhanceScope === 'crop' ? null : cropBox,
             processingParams: { ...enhanceParams }
@@ -5139,6 +5168,7 @@ const handleDeletePhotoInViewer = async (photoId) => {
         const idInfo = photoWithAi.identification;
         const { speciesName, scientificName, category } = idInfo;
 
+        const captureTimestamp = photoWithAi.cameraExif?.captureTimestamp || photoWithAi.lastModified || Date.now();
         const fpId = photoWithAi.fingerprintId || photoWithAi.id;
         const sightingId = 'sighting_' + Math.random().toString(36).substring(2, 9);
         const fileName = `${new Date().toISOString().split('T')[0]}_${sightingId}_v1.jpg`;
@@ -5168,7 +5198,7 @@ const handleDeletePhotoInViewer = async (photoId) => {
           versionId: 'v1',
           label: 'v1: Original Capture',
           opfsFileName: fileName,
-          timestamp: Date.now(),
+          timestamp: captureTimestamp,
           isOriginal: true,
           cropBox: photoWithAi.cropBox || null
         };
@@ -5205,7 +5235,7 @@ const handleDeletePhotoInViewer = async (photoId) => {
 
         const newSightingForState = {
           id: sightingId,
-          date: Date.now(),
+          date: captureTimestamp,
           opfsFileName: fileName,
           photoFingerprintId: fpId,
           activeVersionId: 'v1',
@@ -5215,7 +5245,7 @@ const handleDeletePhotoInViewer = async (photoId) => {
 
         const newSightingForStorage = {
           id: sightingId,
-          date: Date.now(),
+          date: captureTimestamp,
           opfsFileName: fileName,
           photoFingerprintId: fpId,
           activeVersionId: 'v1',
@@ -5315,12 +5345,13 @@ const handleDeletePhotoInViewer = async (photoId) => {
           thumbnailUrl: freshBlobUrl
         };
 
+        const captureTimestampForVersion = photo.cameraExif?.captureTimestamp || photo.lastModified || Date.now();
         const existingVersions = photo.versions || [
           {
             versionId: 'v1',
             label: 'v1: Original Capture',
             opfsFileName: photo.opfsFileName || photo.name,
-            timestamp: photo.lastModified || Date.now(),
+            timestamp: captureTimestampForVersion,
             isOriginal: true,
             blobUrl: photo.blobUrl,
             thumbnailUrl: photo.thumbnailUrl

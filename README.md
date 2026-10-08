@@ -111,6 +111,17 @@ BirdVault Pro is PWA-ready and optimized for mobile browsers (iOS Safari & Andro
 
 ---
 
+## 📚 Project Documentation
+
+This repository includes the main project references and supporting design documents:
+
+- [README.md](./README.md) — overview, features, quick start, and project summary
+- [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) — system design, main components, and storage model
+- [docs/DEVELOPER_GUIDE.md](./docs/DEVELOPER_GUIDE.md) — setup, browser requirements, and developer notes
+- [birdvault_detailed_documentation (1).md](./birdvault_detailed_documentation%20(1).md) — deeper technical and design documentation
+
+---
+
 ## 📄 License
 
 Distributed under the MIT License. See `LICENSE` for more information.
