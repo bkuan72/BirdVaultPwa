@@ -3893,7 +3893,10 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
           <div>
             <div 
               className="h-44 sm:h-52 relative bg-slate-950 overflow-hidden cursor-pointer flex items-center justify-center p-1 touch-manipulation group" 
-              onClick={() => hasActiveFile && onSelectPhoto(photoObj)}
+              onClick={() => hasActiveFile && onSelectPhoto(photoObj, {
+                speciesName: entry.speciesName,
+                sightingId: activeSighting.id
+              })}
             >
               {activeSrc ? (
                 <CroppedImage
@@ -5226,6 +5229,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
       const [photos, setPhotos] = useState([]);
       const [vaultEntries, setVaultEntries] = useState(() => getStoredVault());
       const [selectedPhoto, setSelectedPhoto] = useState(null);
+      const [selectedPhotoVaultRef, setSelectedPhotoVaultRef] = useState(null);
       const [showTokenModal, setShowTokenModal] = useState(false);
       const [showAuthModal, setShowAuthModal] = useState(false);
       const [userApiKey, setUserApiKey] = useState(() => localStorage.getItem('birdvault_gemini_token') || '');
@@ -5489,6 +5493,7 @@ const handleDeletePhotoInViewer = async (photoId) => {
         updatePhotos(prev => prev.filter(p => p.id !== fpId && p.fingerprintId !== fpId));
 
         setSelectedPhoto(null);
+        setSelectedPhotoVaultRef(null);
         setActiveTab('vault');
       };
 
@@ -5597,6 +5602,50 @@ const handleDeletePhotoInViewer = async (photoId) => {
         saveVaultToStorage(updated);
       };
 
+      const handleUpdateSelectedPhoto = (updatedPhoto) => {
+        updatePhotos(prev => prev.map(p => p.id === updatedPhoto.id ? updatedPhoto : p));
+        setSelectedPhoto(updatedPhoto);
+        saveFingerprintMetadata(updatedPhoto);
+
+        if (!selectedPhotoVaultRef) return;
+
+        const updatedVault = vaultEntries.map(entry => {
+          if (entry.speciesName !== selectedPhotoVaultRef.speciesName) return entry;
+          return {
+            ...entry,
+            sightings: entry.sightings.map(sighting => {
+              if (sighting.id !== selectedPhotoVaultRef.sightingId) return sighting;
+              return {
+                ...sighting,
+                cropBox: updatedPhoto.cropBox ?? null,
+                activeVersionId: updatedPhoto.activeVersionId || sighting.activeVersionId,
+                opfsFileName: updatedPhoto.opfsFileName || sighting.opfsFileName,
+                versions: updatedPhoto.versions
+                  ? updatedPhoto.versions.map(version => ({ ...version, blobUrl: null, thumbnailUrl: null }))
+                  : sighting.versions,
+                photo: {
+                  ...sighting.photo,
+                  cropBox: updatedPhoto.cropBox ?? null,
+                  activeVersionId: updatedPhoto.activeVersionId || sighting.photo?.activeVersionId,
+                  opfsFileName: updatedPhoto.opfsFileName || sighting.photo?.opfsFileName,
+                  versions: updatedPhoto.versions
+                    ? updatedPhoto.versions.map(version => ({ ...version, blobUrl: null, thumbnailUrl: null }))
+                    : sighting.photo?.versions,
+                  file: null,
+                  fileHandle: undefined,
+                  sourceDirectoryHandle: undefined,
+                  blobUrl: null,
+                  thumbnailUrl: null,
+                  url: null
+                }
+              };
+            })
+          };
+        });
+        setVaultEntries(updatedVault);
+        saveVaultToStorage(updatedVault);
+      };
+
       return (
         <div className="flex-1 flex flex-col overflow-hidden h-full">
           <header className="bg-slate-900 border-b border-slate-800 px-4 py-3 flex items-center justify-between z-30">
@@ -5663,13 +5712,19 @@ const handleDeletePhotoInViewer = async (photoId) => {
                 photos={photos}
                 onDeleteSighting={handleDeleteSighting}
                 onDeleteSpecies={handleDeleteSpecies}
-                onSelectPhoto={(photo) => setSelectedPhoto(photo)}
+                onSelectPhoto={(photo, vaultRef) => {
+                  setSelectedPhoto(photo);
+                  setSelectedPhotoVaultRef(vaultRef);
+                }}
               />
             ) : (
               <CullingWorkspaceView
                 photos={photos}
                 onUpdatePhotos={updatePhotos}
-                onSelectPhoto={(photo) => setSelectedPhoto(photo)}
+                onSelectPhoto={(photo) => {
+                  setSelectedPhoto(photo);
+                  setSelectedPhotoVaultRef(null);
+                }}
                 userApiKey={userApiKey}
                 filterSharpness={filterSharpness}
                 setFilterSharpness={setFilterSharpness}
@@ -5692,19 +5747,26 @@ const handleDeletePhotoInViewer = async (photoId) => {
               <InteractivePhotoViewer
                 key={selectedPhoto.id}
                 photo={selectedPhoto}
-                onClose={() => setSelectedPhoto(null)}
-                onUpdatePhoto={(updated) => {
-                  updatePhotos(prev => prev.map(p => p.id === updated.id ? updated : p));
-                  setSelectedPhoto(updated);
-                  saveFingerprintMetadata(updated);
+                onClose={() => {
+                  setSelectedPhoto(null);
+                  setSelectedPhotoVaultRef(null);
                 }}
+                onUpdatePhoto={handleUpdateSelectedPhoto}
                 onSaveToVault={handleSaveToVault}
                 onDeletePhoto={handleDeletePhotoInViewer}
                 userApiKey={userApiKey}
                 initialLocation={userLocation}
                 onUpdateLocation={setUserLocation}
-                onNextPhoto={() => hasNext && setSelectedPhoto(processedPhotos[selectedIndex + 1])}
-                onPrevPhoto={() => hasPrev && setSelectedPhoto(processedPhotos[selectedIndex - 1])}
+                onNextPhoto={() => {
+                  if (!hasNext) return;
+                  setSelectedPhoto(processedPhotos[selectedIndex + 1]);
+                  setSelectedPhotoVaultRef(null);
+                }}
+                onPrevPhoto={() => {
+                  if (!hasPrev) return;
+                  setSelectedPhoto(processedPhotos[selectedIndex - 1]);
+                  setSelectedPhotoVaultRef(null);
+                }}
                 hasNext={hasNext}
                 hasPrev={hasPrev}
                 vaultEntries={vaultEntries}
