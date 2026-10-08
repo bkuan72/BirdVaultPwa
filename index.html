@@ -234,10 +234,38 @@
       } catch (e) {}
     }
 
+    function stripEphemeralVaultImageUrls(image) {
+      if (!image || typeof image !== 'object') return image;
+      const clearBlobUrl = value => typeof value === 'string' && value.startsWith('blob:') ? null : value;
+      const stripVersionUrls = version => ({
+        ...version,
+        blobUrl: clearBlobUrl(version.blobUrl),
+        thumbnailUrl: clearBlobUrl(version.thumbnailUrl),
+        url: clearBlobUrl(version.url)
+      });
+      return {
+        ...image,
+        blobUrl: clearBlobUrl(image.blobUrl),
+        thumbnailUrl: clearBlobUrl(image.thumbnailUrl),
+        url: clearBlobUrl(image.url),
+        versions: image.versions?.map(stripVersionUrls)
+      };
+    }
+
+    function sanitizeVaultImageUrls(entries) {
+      return (entries || []).map(entry => ({
+        ...entry,
+        sightings: (entry.sightings || []).map(sighting => ({
+          ...stripEphemeralVaultImageUrls(sighting),
+          photo: stripEphemeralVaultImageUrls(sighting.photo)
+        }))
+      }));
+    }
+
     function getStoredVault() {
       try {
         const raw = localStorage.getItem('birdvault_entries_v5');
-        return raw ? JSON.parse(raw) : [];
+        return raw ? sanitizeVaultImageUrls(JSON.parse(raw)) : [];
       } catch (e) {
         return [];
       }
@@ -245,7 +273,7 @@
 
     function saveVaultToStorage(entries) {
       try {
-        localStorage.setItem('birdvault_entries_v5', JSON.stringify(entries));
+        localStorage.setItem('birdvault_entries_v5', JSON.stringify(sanitizeVaultImageUrls(entries)));
       } catch (e) {}
     }
 
@@ -2401,6 +2429,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
       const [isHoldingOriginal, setIsHoldingOriginal] = useState(false);
       const [enhancementNotes, setEnhancementNotes] = useState('');
       const [enhancementSaveError, setEnhancementSaveError] = useState('');
+      const [versionLoadError, setVersionLoadError] = useState('');
 
       const loupeCanvasRef = useRef(null);
       const cachedLoupeImgRef = useRef(null);
@@ -2444,38 +2473,67 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
         const selectedVer = activeVersions.find(v => v.versionId === versionId);
         if (!selectedVer) return;
 
-        let newBlobUrl = selectedVer.blobUrl;
-        let newThumbUrl = selectedVer.thumbnailUrl;
+        setVersionLoadError('');
+        try {
+          let newBlobUrl = selectedVer.blobUrl;
+          let newThumbUrl = selectedVer.thumbnailUrl;
 
-        if (!newBlobUrl && selectedVer.opfsFileName) {
-          const idInfo = photo.identification || {};
-          const blob = await getOpfsSightingFileBlob(idInfo.category || 'Other', idInfo.speciesName || 'Uncategorized', selectedVer.opfsFileName);
-          if (blob) {
-            newBlobUrl = URL.createObjectURL(blob);
+          if (newBlobUrl && newBlobUrl.startsWith('blob:')) {
+            try {
+              const response = await fetch(newBlobUrl);
+              if (!response.ok) newBlobUrl = null;
+            } catch (err) {
+              console.warn(`Cached image URL is no longer available for ${selectedVer.label}:`, err);
+              newBlobUrl = null;
+            }
+          }
+          if (newThumbUrl && newThumbUrl.startsWith('blob:')) {
+            try {
+              const response = await fetch(newThumbUrl);
+              if (!response.ok) newThumbUrl = null;
+            } catch (err) {
+              console.warn(`Cached thumbnail URL is no longer available for ${selectedVer.label}:`, err);
+              newThumbUrl = null;
+            }
+          }
+
+          if (!newBlobUrl && selectedVer.opfsFileName) {
+            const idInfo = photo.identification || {};
+            const blob = await getOpfsSightingFileBlob(idInfo.category || 'Other', idInfo.speciesName || 'Uncategorized', selectedVer.opfsFileName);
+            if (blob) {
+              newBlobUrl = URL.createObjectURL(blob);
+              newThumbUrl = newBlobUrl;
+            }
+          }
+
+          if (!newBlobUrl && selectedVer.isOriginal && photo.file) {
+            newBlobUrl = URL.createObjectURL(photo.file);
             newThumbUrl = newBlobUrl;
           }
+
+          if (!newBlobUrl) {
+            throw new Error(`Could not load "${selectedVer.label}". Its saved image file may be missing from local storage.`);
+          }
+
+          const updatedVersions = activeVersions.map(v =>
+            v.versionId === versionId ? { ...v, blobUrl: newBlobUrl, thumbnailUrl: newThumbUrl || newBlobUrl } : v
+          );
+
+          const updated = {
+            ...photo,
+            activeVersionId: versionId,
+            cropBox: selectedVer.cropBox !== undefined ? selectedVer.cropBox : photo.cropBox,
+            blobUrl: newBlobUrl,
+            thumbnailUrl: newThumbUrl || newBlobUrl,
+            versions: updatedVersions
+          };
+          onUpdatePhoto(updated);
+          saveFingerprintMetadata(updated);
+          setShowCroppedPreview(!!selectedVer.isOriginal && !!updated.cropBox && updated.cropBox.width > 0);
+        } catch (err) {
+          console.error('Image version load failed:', err);
+          setVersionLoadError(err.message || 'Could not load the selected image version.');
         }
-
-        if (!newBlobUrl && selectedVer.isOriginal && photo.file) {
-          newBlobUrl = URL.createObjectURL(photo.file);
-          newThumbUrl = newBlobUrl;
-        }
-
-        const updatedVersions = activeVersions.map(v => 
-          v.versionId === versionId ? { ...v, blobUrl: newBlobUrl, thumbnailUrl: newThumbUrl } : v
-        );
-
-        const updated = {
-          ...photo,
-          activeVersionId: versionId,
-          cropBox: selectedVer.cropBox !== undefined ? selectedVer.cropBox : photo.cropBox,
-          blobUrl: newBlobUrl || photo.blobUrl,
-          thumbnailUrl: newThumbUrl || photo.thumbnailUrl,
-          versions: updatedVersions
-        };
-        onUpdatePhoto(updated);
-        saveFingerprintMetadata(updated);
-        setShowCroppedPreview(!!selectedVer.isOriginal && !!updated.cropBox && updated.cropBox.width > 0);
       };
 
       const handleAutoTuneAiParams = async () => {
@@ -3535,6 +3593,9 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                       </button>
                     ))}
                   </div>
+                  {versionLoadError && (
+                    <p role="alert" className="text-[11px] text-rose-300">{versionLoadError}</p>
+                  )}
                 </div>
 
                 <div className="pt-2 border-t border-slate-800 space-y-2.5">
