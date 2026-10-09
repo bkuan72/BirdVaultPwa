@@ -277,36 +277,257 @@
       } catch (e) {}
     }
 
+    function getVaultBlobStorageKey(category, speciesName, fileName) {
+      return JSON.stringify([category || 'Other', speciesName || 'Uncategorized', fileName]);
+    }
+
+    function getSightingImageFileNames(sighting) {
+      const names = new Set();
+      const addFileName = (fileName) => {
+        if (fileName === undefined || fileName === null || fileName === '') return;
+        if (typeof fileName !== 'string' || fileName === '.' || fileName === '..' || fileName.includes('/') || fileName.includes('\\')) {
+          throw new Error('The vault manifest contains an invalid image filename.');
+        }
+        names.add(fileName);
+      };
+      addFileName(sighting?.opfsFileName);
+      addFileName(sighting?.photo?.opfsFileName);
+      (sighting?.versions || []).forEach(version => addFileName(version?.opfsFileName));
+      (sighting?.photo?.versions || []).forEach(version => addFileName(version?.opfsFileName));
+      return Array.from(names);
+    }
+
     async function exportOpfsVaultToZip(vaultEntries) {
       if (typeof JSZip === 'undefined') {
         throw new Error('JSZip library is not loaded.');
       }
       const zip = new JSZip();
       const manifest = {
+        format: 'BirdVaultVaultBackup',
+        version: 2,
         exportDate: new Date().toISOString(),
         totalSpecies: vaultEntries.length,
-        vaultEntries: vaultEntries
+        vaultEntries: sanitizeVaultImageUrls(vaultEntries)
       };
       zip.file('vault_manifest.json', JSON.stringify(manifest, null, 2));
 
+      const missingFiles = [];
+      const exportedFiles = new Set();
       for (const entry of vaultEntries) {
-        const catDir = (entry.category || 'Other').replace(/[^a-zA-Z0-9_-]/g, '_');
-        const speciesDir = (entry.speciesName || 'Unknown').replace(/[^a-zA-Z0-9_-]/g, '_');
+        const catDir = await sanitizeDirectoryName(entry.category || 'Other');
+        const speciesDir = await sanitizeDirectoryName(entry.speciesName || 'Unknown');
         const folder = zip.folder(`${catDir}/${speciesDir}`);
 
         for (const s of (entry.sightings || [])) {
-          const fileName = s.opfsFileName || s.photo?.opfsFileName;
-          if (fileName) {
+          for (const fileName of getSightingImageFileNames(s)) {
+            const assetKey = getVaultBlobStorageKey(entry.category, entry.speciesName, fileName);
+            if (exportedFiles.has(assetKey)) continue;
             const blob = await getOpfsSightingFileBlob(entry.category, entry.speciesName, fileName);
-            if (blob) {
-              folder.file(fileName, blob);
+            if (!blob) {
+              missingFiles.push(`${entry.speciesName}/${fileName}`);
+              continue;
+            }
+            folder.file(fileName, blob);
+            exportedFiles.add(assetKey);
+          }
+        }
+      }
+
+      if (missingFiles.length) {
+        throw new Error(`Could not include ${missingFiles.length} referenced image file(s): ${missingFiles.slice(0, 5).join(', ')}${missingFiles.length > 5 ? ', ...' : ''}`);
+      }
+
+      const content = await zip.generateAsync({ type: 'blob' });
+      return new File([content], `BirdVault_Lifer_Export_${new Date().toISOString().split('T')[0]}.zip`, { type: 'application/zip' });
+    }
+
+    function mergeVaultEntries(existingEntries, restoredEntries) {
+      const mergedEntries = existingEntries.map(entry => ({ ...entry, sightings: [...(entry.sightings || [])] }));
+      const entriesBySpecies = new Map(mergedEntries.map(entry => [entry.speciesName.toLowerCase(), entry]));
+
+      const mergeRecords = (existing, restored) => {
+        const result = { ...restored, ...existing };
+        const versions = new Map();
+        [...(restored?.versions || []), ...(existing?.versions || [])].forEach(version => {
+          if (version?.versionId) versions.set(version.versionId, { ...versions.get(version.versionId), ...version });
+        });
+        if (versions.size) result.versions = Array.from(versions.values());
+
+        if (existing?.photo || restored?.photo) {
+          result.photo = mergeRecords(existing?.photo || {}, restored?.photo || {});
+        }
+        return result;
+      };
+
+      for (const restoredEntry of restoredEntries) {
+        const speciesKey = restoredEntry.speciesName.toLowerCase();
+        const existingEntry = entriesBySpecies.get(speciesKey);
+        if (!existingEntry) {
+          const newEntry = { ...restoredEntry, sightings: [...(restoredEntry.sightings || [])] };
+          mergedEntries.push(newEntry);
+          entriesBySpecies.set(speciesKey, newEntry);
+          continue;
+        }
+
+        const sightingsById = new Map(existingEntry.sightings.map((sighting, index) => [sighting.id, index]));
+        for (const restoredSighting of restoredEntry.sightings || []) {
+          const existingIndex = sightingsById.get(restoredSighting.id);
+          if (existingIndex === undefined) {
+            sightingsById.set(restoredSighting.id, existingEntry.sightings.length);
+            existingEntry.sightings.push(restoredSighting);
+          } else {
+            existingEntry.sightings[existingIndex] = mergeRecords(existingEntry.sightings[existingIndex], restoredSighting);
+          }
+        }
+      }
+
+      return mergedEntries;
+    }
+
+    async function importVaultArchive(zipFile, existingEntries) {
+      if (typeof JSZip === 'undefined') {
+        throw new Error('JSZip library is not loaded.');
+      }
+      const zip = await JSZip.loadAsync(zipFile);
+      const manifestFile = zip.file('vault_manifest.json');
+      if (!manifestFile) throw new Error('This ZIP does not contain a BirdVault vault manifest.');
+
+      let manifest;
+      try {
+        manifest = JSON.parse(await manifestFile.async('string'));
+      } catch (err) {
+        throw new Error('The vault manifest is invalid or unreadable.');
+      }
+      if (
+        !manifest ||
+        !Array.isArray(manifest.vaultEntries) ||
+        (manifest.format && manifest.format !== 'BirdVaultVaultBackup') ||
+        (manifest.version !== undefined && (!Number.isInteger(manifest.version) || manifest.version < 1 || manifest.version > 2)) ||
+        (manifest.format === 'BirdVaultVaultBackup' && manifest.version !== 2)
+      ) {
+        throw new Error('The ZIP is not a supported BirdVault vault backup.');
+      }
+
+      const isCompleteBackup = manifest.format === 'BirdVaultVaultBackup' && manifest.version === 2;
+      const archiveDirectoryName = name => (name || 'Uncategorized').replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 60);
+      const findArchiveImage = (entry, fileName) => {
+        const category = entry.category || 'Other';
+        const modernPath = `${archiveDirectoryName(category)}/${archiveDirectoryName(entry.speciesName)}/${fileName}`;
+        const legacyCatDir = category.replace(/[^a-zA-Z0-9_-]/g, '_');
+        const legacySpeciesDir = entry.speciesName.replace(/[^a-zA-Z0-9_-]/g, '_');
+        return zip.file(modernPath) || zip.file(`${legacyCatDir}/${legacySpeciesDir}/${fileName}`);
+      };
+
+      for (const entry of manifest.vaultEntries) {
+        if (
+          !entry ||
+          typeof entry.speciesName !== 'string' ||
+          !entry.speciesName.trim() ||
+          (entry.category !== undefined && typeof entry.category !== 'string') ||
+          !Array.isArray(entry.sightings)
+        ) {
+          throw new Error('The vault manifest contains an invalid species record.');
+        }
+        for (const sighting of entry.sightings) {
+          if (
+            !sighting ||
+            typeof sighting.id !== 'string' ||
+            !sighting.id ||
+            (sighting.photo !== undefined && sighting.photo !== null && (typeof sighting.photo !== 'object' || Array.isArray(sighting.photo))) ||
+            (sighting.versions !== undefined && !Array.isArray(sighting.versions)) ||
+            (sighting.photo?.versions !== undefined && !Array.isArray(sighting.photo.versions))
+          ) {
+            throw new Error(`Species "${entry.speciesName}" contains an invalid sighting record.`);
+          }
+          for (const version of [...(sighting.versions || []), ...(sighting.photo?.versions || [])]) {
+            if (!version || typeof version !== 'object' || typeof version.versionId !== 'string') {
+              throw new Error(`Sighting "${sighting.id}" contains invalid image-version metadata.`);
+            }
+          }
+          for (const fileName of getSightingImageFileNames(sighting)) {
+            if (isCompleteBackup && !findArchiveImage(entry, fileName)) {
+              throw new Error(`The backup is missing "${fileName}" for ${entry.speciesName}.`);
             }
           }
         }
       }
 
-      const content = await zip.generateAsync({ type: 'blob' });
-      return new File([content], `BirdVault_Lifer_Export_${new Date().toISOString().split('T')[0]}.zip`, { type: 'application/zip' });
+      const restoredEntries = [];
+      let restoredImageCount = 0;
+      let skippedSightings = 0;
+      let skippedVersionCount = 0;
+      const restoredFiles = new Set();
+
+      for (const rawEntry of manifest.vaultEntries) {
+        if (
+          !rawEntry ||
+          typeof rawEntry.speciesName !== 'string' ||
+          !rawEntry.speciesName.trim() ||
+          !Array.isArray(rawEntry.sightings)
+        ) {
+          throw new Error('The vault manifest contains an invalid species record.');
+        }
+
+        const entry = { ...rawEntry, sightings: [] };
+        const category = entry.category || 'Other';
+        for (const rawSighting of rawEntry.sightings) {
+          if (!rawSighting || typeof rawSighting.id !== 'string' || !rawSighting.id) {
+            throw new Error(`Species "${entry.speciesName}" contains an invalid sighting record.`);
+          }
+          const sighting = {
+            ...rawSighting,
+            versions: (rawSighting.versions || rawSighting.photo?.versions || []).map(version => ({ ...version })),
+            photo: rawSighting.photo ? { ...rawSighting.photo } : rawSighting.photo
+          };
+          const missingVersionIds = new Set();
+          const fileNames = getSightingImageFileNames(rawSighting);
+          let availableFileCount = 0;
+          for (const fileName of fileNames) {
+            const blobFile = findArchiveImage(entry, fileName);
+            if (!blobFile) {
+              (rawSighting.versions || rawSighting.photo?.versions || []).forEach(version => {
+                if (version?.opfsFileName === fileName) missingVersionIds.add(version.versionId);
+              });
+              continue;
+            }
+
+            const blob = await blobFile.async('blob');
+            if (blob.size <= 100) throw new Error(`The backup image "${fileName}" is empty or invalid.`);
+            const assetKey = getVaultBlobStorageKey(category, entry.speciesName, fileName);
+            if (!restoredFiles.has(assetKey)) {
+              const written = await writeOpfsSightingFile(category, entry.speciesName, fileName, blob);
+              if (!written) throw new Error(`Could not restore "${fileName}" to local image storage. Previously copied files may remain; retrying the restore is safe.`);
+              restoredFiles.add(assetKey);
+              restoredImageCount++;
+            }
+            availableFileCount++;
+          }
+
+          if (fileNames.length && !availableFileCount) {
+            skippedSightings++;
+            continue;
+          }
+
+          if (missingVersionIds.size) {
+            skippedVersionCount += missingVersionIds.size;
+            sighting.versions = sighting.versions.filter(version => !missingVersionIds.has(version.versionId));
+            if (sighting.photo?.versions) {
+              sighting.photo.versions = sighting.photo.versions.filter(version => !missingVersionIds.has(version.versionId));
+            }
+          }
+          entry.sightings.push(sighting);
+        }
+        restoredEntries.push(entry);
+      }
+
+      if (!restoredEntries.length) throw new Error('The backup contains no restorable vault records.');
+      const mergedEntries = sanitizeVaultImageUrls(mergeVaultEntries(existingEntries, restoredEntries));
+      try {
+        localStorage.setItem('birdvault_entries_v5', JSON.stringify(mergedEntries));
+      } catch (err) {
+        throw new Error(`Image files were restored, but vault metadata could not be saved: ${err.message || 'local storage error'}`);
+      }
+      return { entries: mergedEntries, restoredImageCount, skippedSightings, skippedVersionCount };
     }
 
     function scoreToStars(score) {
@@ -385,9 +606,17 @@
         return new Promise((resolve) => {
           const tx = db.transaction(storeName, 'readwrite');
           const store = tx.objectStore(storeName);
-          const req = store.delete(key);
-          req.onsuccess = () => resolve(true);
-          req.onerror = () => resolve(false);
+          const getRequest = store.get(key);
+          getRequest.onsuccess = () => {
+            if (getRequest.result === undefined) {
+              resolve(false);
+              return;
+            }
+            const deleteRequest = store.delete(key);
+            deleteRequest.onsuccess = () => resolve(true);
+            deleteRequest.onerror = () => resolve(false);
+          };
+          getRequest.onerror = () => resolve(false);
         });
       } catch (e) {
         return false;
@@ -434,6 +663,7 @@
         }
 
         const root = await getOpfsRootHandle();
+        let persisted = false;
         if (root) {
           const catDirName = await sanitizeDirectoryName(category || 'Other');
           const speciesDirName = await sanitizeDirectoryName(speciesName);
@@ -446,14 +676,24 @@
             const writable = await fileHandle.createWritable();
             await writable.write(blobToWrite);
             await writable.close();
+            persisted = true;
           }
         }
 
-        if (blobToWrite instanceof Blob && fileName.toLowerCase().endsWith('.jpg')) {
-          await saveBlobToIdb('vault_blobs', fileName, blobToWrite);
+        if (
+          blobToWrite instanceof Blob &&
+          fileName.toLowerCase() !== 'species_info.json' &&
+          (fileName.toLowerCase().endsWith('.jpg') || !persisted)
+        ) {
+          const storedInIdb = await saveBlobToIdb(
+            'vault_blobs',
+            getVaultBlobStorageKey(category, speciesName, fileName),
+            blobToWrite
+          );
+          persisted = persisted || storedInIdb;
         }
 
-        return true;
+        return persisted;
       } catch (err) {
         console.warn('OPFS File Write Warning:', err);
         return false;
@@ -480,7 +720,11 @@
         }
       } catch (err) {}
 
-      const idbBlob = await getBlobFromIdb('vault_blobs', fileName);
+      const scopedBlob = await getBlobFromIdb(
+        'vault_blobs',
+        getVaultBlobStorageKey(category, speciesName, fileName)
+      );
+      const idbBlob = scopedBlob || await getBlobFromIdb('vault_blobs', fileName);
       if (idbBlob && idbBlob.size > 100) {
         return idbBlob;
       }
@@ -508,8 +752,10 @@
         }
       }
 
-      const idbDeleted = await deleteFromIdb('vault_blobs', fileName);
-      if (!opfsDeleted && !idbDeleted) {
+      const scopedKey = getVaultBlobStorageKey(category, speciesName, fileName);
+      const idbDeleted = await deleteFromIdb('vault_blobs', scopedKey);
+      const legacyIdbDeleted = await deleteFromIdb('vault_blobs', fileName);
+      if (!opfsDeleted && !idbDeleted && !legacyIdbDeleted) {
         throw new Error('Could not delete the processed image from local storage.');
       }
     }
@@ -5890,7 +6136,9 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
       const [showAuthModal, setShowAuthModal] = useState(false);
       const [showHeaderMenu, setShowHeaderMenu] = useState(false);
       const [isExportingVault, setIsExportingVault] = useState(false);
+      const [isRestoringVault, setIsRestoringVault] = useState(false);
       const headerMenuRef = useRef(null);
+      const vaultImportInputRef = useRef(null);
       const [userApiKey, setUserApiKey] = useState(() => localStorage.getItem('birdvault_gemini_token') || '');
       const [userLocation, setUserLocation] = useState('Auckland, New Zealand');
       const [currentPage, setCurrentPage] = useState(1);
@@ -5953,6 +6201,31 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
           alert('Vault directory export failed: ' + (err.message || 'Permission or storage error'));
         } finally {
           setIsExportingVault(false);
+        }
+      };
+
+      const handleImportVaultZip = async (event) => {
+        const file = event.target.files?.[0];
+        event.target.value = '';
+        if (!file) return;
+
+        setIsRestoringVault(true);
+        try {
+          const result = await importVaultArchive(file, vaultEntries);
+          setVaultEntries(result.entries);
+          setActiveTab('vault');
+          const skippedMessage = result.skippedSightings
+            ? ` ${result.skippedSightings} sighting(s) without available image files were skipped.`
+            : '';
+          const skippedVersionMessage = result.skippedVersionCount
+            ? ` ${result.skippedVersionCount} version(s) absent from this older backup were omitted.`
+            : '';
+          alert(`Vault restore complete: ${result.restoredImageCount} image file(s) restored and records merged.${skippedMessage}${skippedVersionMessage}`);
+        } catch (err) {
+          console.error('Vault import error:', err);
+          alert('Vault restore failed: ' + (err.message || 'Invalid archive or local storage error'));
+        } finally {
+          setIsRestoringVault(false);
         }
       };
 
@@ -6499,33 +6772,63 @@ const handleDeletePhotoInViewer = async (photoId) => {
             </div>
 
             <div className="relative" ref={headerMenuRef}>
+              <input
+                ref={vaultImportInputRef}
+                type="file"
+                accept=".zip,application/zip"
+                onChange={handleImportVaultZip}
+                className="hidden"
+                aria-label="Select BirdVault backup archive"
+              />
               <button
                 type="button"
                 onClick={() => setShowHeaderMenu(open => !open)}
-                aria-label="Open app actions"
+                aria-label={
+                  isRestoringVault ? 'Restoring vault backup' :
+                  isExportingVault ? 'Exporting vault backup' :
+                  showHeaderMenu ? 'Close app actions' : 'Open app actions'
+                }
                 aria-expanded={showHeaderMenu}
                 aria-haspopup="menu"
                 title="App actions"
                 className="min-w-10 min-h-10 p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl border border-slate-700 transition flex items-center justify-center touch-manipulation"
               >
-                <Icon name="more" className="w-5 h-5" />
+                <Icon
+                  name={isRestoringVault ? 'upload' : isExportingVault ? 'download' : 'more'}
+                  className={`w-5 h-5 ${isRestoringVault || isExportingVault ? 'animate-pulse text-emerald-400' : ''}`}
+                />
               </button>
               {showHeaderMenu && (
                 <div role="menu" className="absolute right-0 top-full mt-2 w-56 p-1.5 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl z-50">
                   {activeTab === 'vault' && (
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={() => {
-                        setShowHeaderMenu(false);
-                        handleExportVaultZip();
-                      }}
-                      disabled={isExportingVault || vaultEntries.length === 0}
-                      className="w-full px-3 py-2.5 text-left text-sm text-slate-200 hover:bg-slate-800 rounded-lg flex items-center gap-2.5 disabled:opacity-50 touch-manipulation"
-                    >
-                      <Icon name="download" className={`w-4 h-4 text-emerald-400 ${isExportingVault ? 'animate-bounce' : ''}`} />
-                      <span>{isExportingVault ? 'Packaging vault...' : 'Export Vault (.zip)'}</span>
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setShowHeaderMenu(false);
+                          handleExportVaultZip();
+                        }}
+                        disabled={isExportingVault || isRestoringVault || vaultEntries.length === 0}
+                        className="w-full px-3 py-2.5 text-left text-sm text-slate-200 hover:bg-slate-800 rounded-lg flex items-center gap-2.5 disabled:opacity-50 touch-manipulation"
+                      >
+                        <Icon name="download" className={`w-4 h-4 text-emerald-400 ${isExportingVault ? 'animate-bounce' : ''}`} />
+                        <span>{isExportingVault ? 'Packaging vault...' : 'Export Vault (.zip)'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setShowHeaderMenu(false);
+                          vaultImportInputRef.current?.click();
+                        }}
+                        disabled={isRestoringVault || isExportingVault}
+                        className="w-full px-3 py-2.5 text-left text-sm text-slate-200 hover:bg-slate-800 rounded-lg flex items-center gap-2.5 disabled:opacity-50 touch-manipulation"
+                      >
+                        <Icon name="upload" className={`w-4 h-4 text-emerald-400 ${isRestoringVault ? 'animate-pulse' : ''}`} />
+                        <span>{isRestoringVault ? 'Restoring vault...' : 'Merge backup into vault'}</span>
+                      </button>
+                    </>
                   )}
                   <button
                     type="button"
