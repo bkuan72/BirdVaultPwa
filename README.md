@@ -9,7 +9,7 @@ Designed specifically for wildlife photographers handling high-resolution DSLR a
 ## 🌟 Key Features
 
 ### 1. High-Performance Ingestion & Dual-Proxy Memory Pipeline
-* **Hardware Thumbnail Downscaling**: Utilizes native browser `createImageBitmap()` to asynchronously decode high-resolution source files into lightweight $300 \times 300\text{ px}$ JPEGs ($\approx 15\text{ KB}$ per image) on ingestion.
+* **Hardware Thumbnail Downscaling**: Uses native browser `createImageBitmap()` to asynchronously create lightweight $240 \times 240\text{ px}$ JPEG previews. Culling cards with a saved crop get a separate crop-aware preview (up to $600\text{ px}$ on its longest edge), cached in IndexedDB to retain detail when zooming into tight crops.
 * **Dual-Proxy Memory Architecture**: Retains lightweight thumbnail blob URLs alongside original `File` handles in client memory. Explicit `URL.revokeObjectURL()` calls execute automatically during photo deletion or batch culling to prevent browser memory leaks during long culling sessions.
 * **Paged Workspace Grid**: Displays workspace thumbnails in paginated batches of 20 images per page to maintain low DOM node counts, fluid scrolling, and optimal GPU performance.
 * **Folder-Order Ingestion**: Keeps the order returned by the browser's folder or file picker instead of sorting imports by modification date. Folder-handle imports begin displaying each 20-file batch as it is read; thumbnail generation remains limited to the visible page. Browsers do not guarantee that picker order matches the order shown by the operating system's file browser.

@@ -1153,29 +1153,56 @@ Return STRICT JSON ONLY:
       });
     }
 
+    function getCropThumbnailCacheKey(photo) {
+      const cropBox = photo?.cropBox;
+      if (!cropBox || cropBox.width <= 0 || cropBox.height <= 0) return null;
+      const fpId = photo.fingerprintId || photo.id;
+      if (!fpId) return null;
+      const cropKey = [cropBox.x, cropBox.y, cropBox.width, cropBox.height]
+        .map(value => Number(value).toFixed(3))
+        .join('_');
+      return `${fpId}_crop_v1_${cropKey}`;
+    }
+
     async function generateFastThumbnail(photo, targetSize = 240) {
       const fpId = photo.fingerprintId || photo.id;
       const file = photo.file;
-      const thumbnailCacheKey = fpId ? `${fpId}_oriented_v2` : null;
+      const thumbnailCacheKey = fpId ? `${fpId}_oriented_v3` : null;
+      const cropCacheKey = getCropThumbnailCacheKey(photo);
+      const cropBox = cropCacheKey ? photo.cropBox : null;
+      let cachedThumbnail = null;
+      let cachedCropThumbnail = null;
 
       if (thumbnailCacheKey) {
-        const cachedBlob = await getBlobFromIdb('birdvault_thumbs', thumbnailCacheKey);
-        if (cachedBlob && cachedBlob.size > 50) {
-          try {
-            const bitmap = await createImageBitmap(cachedBlob, { imageOrientation: 'from-image' });
-            const width = bitmap.width;
-            const height = bitmap.height;
-            bitmap.close();
-            return { thumbUrl: URL.createObjectURL(cachedBlob), width, height };
-          } catch (err) {
-            console.warn('Cached thumbnail dimensions unavailable; regenerating thumbnail:', err);
-          }
+        cachedThumbnail = await getBlobFromIdb('birdvault_thumbs', thumbnailCacheKey);
+        if (cachedThumbnail?.size <= 50) cachedThumbnail = null;
+      }
+      if (cropCacheKey) {
+        cachedCropThumbnail = await getBlobFromIdb('birdvault_thumbs', cropCacheKey);
+        if (cachedCropThumbnail?.size <= 50) cachedCropThumbnail = null;
+      }
+
+      if (cachedThumbnail && (!cropCacheKey || cachedCropThumbnail)) {
+        try {
+          const bitmap = await createImageBitmap(cachedThumbnail, { imageOrientation: 'from-image' });
+          const width = bitmap.width;
+          const height = bitmap.height;
+          bitmap.close();
+          return {
+            thumbUrl: URL.createObjectURL(cachedThumbnail),
+            cropThumbUrl: cachedCropThumbnail ? URL.createObjectURL(cachedCropThumbnail) : null,
+            cropCacheKey,
+            width,
+            height
+          };
+        } catch (err) {
+          console.warn('Cached thumbnail dimensions unavailable; regenerating thumbnail:', err);
         }
       }
 
       if (!file) {
         const source = photo.thumbnailUrl || photo.blobUrl || photo.url;
-        if (!source) return { thumbUrl: '', width: 1000, height: 750 };
+        if (!source) return { thumbUrl: '', cropThumbUrl: null, cropCacheKey, width: 1000, height: 750 };
         try {
           const img = new Image();
           const dimensions = await new Promise((resolve, reject) => {
@@ -1183,44 +1210,73 @@ Return STRICT JSON ONLY:
             img.onerror = () => reject(new Error('Could not read thumbnail dimensions'));
             img.src = source;
           });
-          return { thumbUrl: source, ...dimensions };
+          return { thumbUrl: source, cropThumbUrl: null, cropCacheKey, ...dimensions };
         } catch (err) {
           console.warn('Thumbnail dimensions unavailable:', err);
-          return { thumbUrl: source, width: 1000, height: 750 };
+          return { thumbUrl: source, cropThumbUrl: null, cropCacheKey, width: 1000, height: 750 };
         }
       }
 
       try {
         if ('createImageBitmap' in window) {
+          const needsCropBitmap = !!cropBox && !cachedCropThumbnail;
           const bitmap = await createImageBitmap(file, {
-            resizeWidth: targetSize,
-            resizeHeight: targetSize,
-            resizeMode: 'aspect-fit',
+            resizeWidth: needsCropBitmap ? 1800 : targetSize,
+            resizeQuality: 'high',
             imageOrientation: 'from-image'
           });
-          const width = bitmap.width;
-          const height = bitmap.height;
-          const canvas = document.createElement('canvas');
-          canvas.width = width;
-          canvas.height = height;
-          const ctx = canvas.getContext('2d', { alpha: false });
-          ctx.imageSmoothingEnabled = true;
-          ctx.imageSmoothingQuality = 'medium';
-          ctx.drawImage(bitmap, 0, 0);
+          const thumbnailScale = Math.min(targetSize / bitmap.width, targetSize / bitmap.height);
+          const width = Math.max(1, Math.round(bitmap.width * thumbnailScale));
+          const height = Math.max(1, Math.round(bitmap.height * thumbnailScale));
+          const thumbnailCanvas = document.createElement('canvas');
+          thumbnailCanvas.width = width;
+          thumbnailCanvas.height = height;
+          const thumbnailContext = thumbnailCanvas.getContext('2d', { alpha: false });
+          thumbnailContext.imageSmoothingEnabled = true;
+          thumbnailContext.imageSmoothingQuality = 'high';
+          thumbnailContext.drawImage(bitmap, 0, 0, width, height);
+
+          const thumbnailBlob = cachedThumbnail ? null : await new Promise(resolve => {
+            thumbnailCanvas.toBlob(resolve, 'image/jpeg', 0.82);
+          });
+          thumbnailCanvas.width = 0;
+          thumbnailCanvas.height = 0;
+
+          let cropBlob = cachedCropThumbnail;
+          if (needsCropBitmap) {
+            const sx = Math.max(0, Math.min(bitmap.width, cropBox.x / 100 * bitmap.width));
+            const sy = Math.max(0, Math.min(bitmap.height, cropBox.y / 100 * bitmap.height));
+            const sw = Math.max(1, Math.min(bitmap.width - sx, cropBox.width / 100 * bitmap.width));
+            const sh = Math.max(1, Math.min(bitmap.height - sy, cropBox.height / 100 * bitmap.height));
+            const outputScale = Math.min((targetSize * 2.5) / sw, (targetSize * 2.5) / sh);
+            const cropCanvas = document.createElement('canvas');
+            cropCanvas.width = Math.max(1, Math.round(sw * outputScale));
+            cropCanvas.height = Math.max(1, Math.round(sh * outputScale));
+            const cropContext = cropCanvas.getContext('2d', { alpha: false });
+            cropContext.imageSmoothingEnabled = true;
+            cropContext.imageSmoothingQuality = 'high';
+            cropContext.drawImage(bitmap, sx, sy, sw, sh, 0, 0, cropCanvas.width, cropCanvas.height);
+            cropBlob = await new Promise(resolve => cropCanvas.toBlob(resolve, 'image/jpeg', 0.9));
+            cropCanvas.width = 0;
+            cropCanvas.height = 0;
+          }
           bitmap.close();
 
-          return new Promise((resolve) => {
-            canvas.toBlob((blob) => {
-              canvas.width = 0;
-              canvas.height = 0;
-              if (blob) {
-                if (thumbnailCacheKey) saveBlobToIdb('birdvault_thumbs', thumbnailCacheKey, blob);
-                resolve({ thumbUrl: URL.createObjectURL(blob), width, height });
-              } else {
-                resolve({ thumbUrl: URL.createObjectURL(file), width, height });
-              }
-            }, 'image/jpeg', 0.65);
-          });
+          if (thumbnailBlob && thumbnailCacheKey) {
+            saveBlobToIdb('birdvault_thumbs', thumbnailCacheKey, thumbnailBlob);
+          }
+          if (cropBlob && cropCacheKey && !cachedCropThumbnail) {
+            saveBlobToIdb('birdvault_thumbs', cropCacheKey, cropBlob);
+          }
+          return {
+            thumbUrl: cachedThumbnail
+              ? URL.createObjectURL(cachedThumbnail)
+              : thumbnailBlob ? URL.createObjectURL(thumbnailBlob) : URL.createObjectURL(file),
+            cropThumbUrl: cropBlob ? URL.createObjectURL(cropBlob) : null,
+            cropCacheKey,
+            width,
+            height
+          };
         }
       } catch (err) {
         console.warn('createImageBitmap fallback:', err);
@@ -1286,6 +1342,13 @@ Return STRICT JSON ONLY:
       const concurrency = 4;
 
       let pendingBatch = [];
+      const revokePendingBatch = () => {
+        pendingBatch.forEach(item => {
+          if (item.thumbUrl) try { URL.revokeObjectURL(item.thumbUrl); } catch(e){}
+          if (item.cropThumbUrl) try { URL.revokeObjectURL(item.cropThumbUrl); } catch(e){}
+        });
+        pendingBatch = [];
+      };
 
       return new Promise((resolve) => {
         if (!total) return resolve();
@@ -1295,24 +1358,38 @@ Return STRICT JSON ONLY:
             if (signal?.aborted) break;
             const currentPhoto = neededPhotos[index++];
             let thumbUrl = null;
+            let cropThumbUrl = null;
             try {
               const res = await generateFastThumbnail(currentPhoto, 240);
               thumbUrl = res.thumbUrl;
+              cropThumbUrl = res.cropThumbUrl;
+              if (signal?.aborted) {
+                if (thumbUrl) URL.revokeObjectURL(thumbUrl);
+                if (cropThumbUrl) URL.revokeObjectURL(cropThumbUrl);
+                break;
+              }
               pendingBatch.push({
                 id: currentPhoto.id,
                 thumbUrl: res.thumbUrl,
+                cropThumbUrl: res.cropThumbUrl,
+                cropCacheKey: res.cropCacheKey,
                 thumbWidth: res.width,
                 thumbHeight: res.height
               });
 
               if (pendingBatch.length >= 2 || index === total) {
-                if (!signal?.aborted) updateBatchCallback([...pendingBatch]);
-                pendingBatch = [];
+                if (!signal?.aborted) {
+                  updateBatchCallback([...pendingBatch]);
+                  pendingBatch = [];
+                } else {
+                  revokePendingBatch();
+                }
                 await new Promise(r => setTimeout(r, 0));
               }
             } catch (err) {
               console.warn('Thumbnail generation error:', err);
               if (thumbUrl) try { URL.revokeObjectURL(thumbUrl); } catch(e){}
+              if (cropThumbUrl) try { URL.revokeObjectURL(cropThumbUrl); } catch(e){}
             } finally {
               completed++;
               if (!signal?.aborted) progressCallback(completed, total);
@@ -1322,8 +1399,9 @@ Return STRICT JSON ONLY:
 
         const workers = Array.from({ length: Math.min(concurrency, total) }, () => worker());
         Promise.all(workers).then(() => {
-          if (pendingBatch.length > 0 && !signal?.aborted) {
-            updateBatchCallback([...pendingBatch]);
+          if (pendingBatch.length > 0) {
+            if (!signal?.aborted) updateBatchCallback([...pendingBatch]);
+            else revokePendingBatch();
           }
           resolve();
         });
@@ -4479,6 +4557,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
           }
           try { if (photo.blobUrl) URL.revokeObjectURL(photo.blobUrl); } catch (err) {}
           try { if (photo.thumbnailUrl) URL.revokeObjectURL(photo.thumbnailUrl); } catch (err) {}
+          try { if (photo.cropThumbnailUrl) URL.revokeObjectURL(photo.cropThumbnailUrl); } catch (err) {}
           deleteFingerprintMetadata(photo.fingerprintId || photo.id);
         }
         
@@ -4723,6 +4802,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
             }
             try { if (photo.blobUrl) URL.revokeObjectURL(photo.blobUrl); } catch (e) {}
             try { if (photo.thumbnailUrl) URL.revokeObjectURL(photo.thumbnailUrl); } catch (e) {}
+            try { if (photo.cropThumbnailUrl) URL.revokeObjectURL(photo.cropThumbnailUrl); } catch (e) {}
             deleteFingerprintMetadata(photo.fingerprintId || photo.id);
           }
           onUpdatePhotos(prev => prev.filter(p => !selectedIds.has(p.id)));
@@ -4737,6 +4817,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
             }
             try { if (photo.blobUrl) URL.revokeObjectURL(photo.blobUrl); } catch (e) {}
             try { if (photo.thumbnailUrl) URL.revokeObjectURL(photo.thumbnailUrl); } catch (e) {}
+            try { if (photo.cropThumbnailUrl) URL.revokeObjectURL(photo.cropThumbnailUrl); } catch (e) {}
             deleteFingerprintMetadata(photo.fingerprintId || photo.id);
           }
 
@@ -4823,7 +4904,9 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
         const pageEnd = Math.min(total, currentPage * pageSize);
         return processedPhotos.slice(pageStart, pageEnd);
       }, [processedPhotos, currentPage, pageSize]);
-      const bufferedPhotoIds = bufferedPhotos.map(photo => photo.id).join('|');
+      const bufferedThumbnailKey = bufferedPhotos
+        .map(photo => `${photo.id}:${getCropThumbnailCacheKey(photo) || ''}`)
+        .join('|');
 
       useEffect(() => {
         if (isPreviewOpen) {
@@ -4840,7 +4923,13 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
         }
 
         const bufferedIds = new Set(bufferedPhotos.map(p => p.id));
-        const needed = bufferedPhotos.filter(p => !p.thumbnailUrl);
+        const needed = bufferedPhotos.filter(p =>
+          !p.thumbnailUrl ||
+          (getCropThumbnailCacheKey(p) && (
+            !p.cropThumbnailUrl ||
+            p.cropThumbnailCacheKey !== getCropThumbnailCacheKey(p)
+          ))
+        );
 
         if (needed.length > 0) {
           setLoadingThumbnails(true);
@@ -4855,9 +4944,14 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                 return prev.map(p => {
                   const u = mapUpdates.get(p.id);
                   if (u) {
+                    if (p.cropThumbnailUrl && p.cropThumbnailUrl !== u.cropThumbUrl) {
+                      try { URL.revokeObjectURL(p.cropThumbnailUrl); } catch(e){}
+                    }
                     return {
                       ...p,
                       thumbnailUrl: u.thumbUrl,
+                      cropThumbnailUrl: u.cropThumbUrl,
+                      cropThumbnailCacheKey: u.cropCacheKey,
                       naturalWidth: u.width,
                       naturalHeight: u.height
                     };
@@ -4891,6 +4985,12 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                 changed = true;
               }
 
+              if (p.cropThumbnailUrl && p.cropThumbnailUrl.startsWith('blob:')) {
+                try { URL.revokeObjectURL(p.cropThumbnailUrl); } catch(e){}
+                updatedPhoto = { ...updatedPhoto, cropThumbnailUrl: null };
+                changed = true;
+              }
+
               if (p.blobUrl && p.blobUrl.startsWith('blob:')) {
                 try { URL.revokeObjectURL(p.blobUrl); } catch(e){}
                 updatedPhoto = { ...updatedPhoto, blobUrl: null };
@@ -4908,7 +5008,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
           isMounted = false; 
           abortController.abort(); 
         };
-      }, [currentPage, bufferedPhotoIds, filterSharpness, sortBy, isPreviewOpen]);
+      }, [currentPage, bufferedThumbnailKey, filterSharpness, sortBy, isPreviewOpen]);
 
       const isSelectionActive = selectedIds.size > 0;
       const unratedCount = photos.filter(p => p.sharpness === null && p.userStars === null).length;
@@ -5057,7 +5157,11 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                   {paginatedPhotos.map(photo => {
                     const currentStars = photo.userStars || photo.stars || scoreToStars(photo.sharpness);
                     const isChecked = selectedIds.has(photo.id);
-                    const activeSrc = photo.thumbnailUrl || photo.blobUrl || photo.url;
+                    const hasCurrentCropThumbnail = photo.cropThumbnailUrl &&
+                      photo.cropThumbnailCacheKey === getCropThumbnailCacheKey(photo);
+                    const activeSrc = hasCurrentCropThumbnail
+                      ? photo.cropThumbnailUrl
+                      : photo.thumbnailUrl || photo.blobUrl || photo.url;
                     
                     return (
                       <div
@@ -5069,7 +5173,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                           <CroppedImage
                             src={activeSrc}
                             alt={photo.name}
-                            cropBox={photo.cropBox}
+                            cropBox={hasCurrentCropThumbnail ? null : photo.cropBox}
                             photo={photo}
                             fitMode="contain"
                             className="w-full h-full"
@@ -5379,6 +5483,7 @@ const handleDeletePhotoInViewer = async (photoId) => {
           
           try { if (photo.blobUrl) URL.revokeObjectURL(photo.blobUrl); } catch (e) {}
           try { if (photo.thumbnailUrl) URL.revokeObjectURL(photo.thumbnailUrl); } catch (e) {}
+          try { if (photo.cropThumbnailUrl) URL.revokeObjectURL(photo.cropThumbnailUrl); } catch (e) {}
           deleteFingerprintMetadata(photo.fingerprintId || photo.id);
         }
         
