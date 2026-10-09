@@ -488,6 +488,32 @@
       return null;
     }
 
+    async function deleteOpfsSightingFile(category, speciesName, fileName) {
+      if (!fileName) throw new Error('The processed version has no saved file reference.');
+
+      const root = await getOpfsRootHandle();
+      let opfsDeleted = false;
+      if (root) {
+        try {
+          const catDirName = await sanitizeDirectoryName(category || 'Other');
+          const speciesDirName = await sanitizeDirectoryName(speciesName);
+          const catHandle = await root.getDirectoryHandle(catDirName, { create: false });
+          const speciesHandle = await catHandle.getDirectoryHandle(speciesDirName, { create: false });
+          await speciesHandle.removeEntry(fileName);
+          opfsDeleted = true;
+        } catch (err) {
+          if (err.name !== 'NotFoundError') {
+            throw new Error(`Could not delete the processed image from vault storage: ${err.message || 'storage error'}`);
+          }
+        }
+      }
+
+      const idbDeleted = await deleteFromIdb('vault_blobs', fileName);
+      if (!opfsDeleted && !idbDeleted) {
+        throw new Error('Could not delete the processed image from local storage.');
+      }
+    }
+
     async function updateOpfsMasterManifest(manifestData) {
       try {
         const root = await getOpfsRootHandle();
@@ -2483,7 +2509,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
       }
     }
 
-    function InteractivePhotoViewer({ photo, onClose, onUpdatePhoto, onSaveToVault, onDeletePhoto, userApiKey, initialLocation = '', onUpdateLocation, onNextPhoto, onPrevPhoto, hasNext = false, hasPrev = false, vaultEntries = [], onCommitNewVersion = null }) {
+    function InteractivePhotoViewer({ photo, onClose, onUpdatePhoto, onSaveToVault, onDeletePhoto, onDeleteVersion, userApiKey, initialLocation = '', onUpdateLocation, onNextPhoto, onPrevPhoto, hasNext = false, hasPrev = false, vaultEntries = [], onCommitNewVersion = null, vaultSpeciesName = null, isVaultPreview = false }) {
       const [loupeImgPos, setLoupeImgPos] = useState({ xPct: 50, yPct: 50 });
       const [loupeScreenPos, setLoupeScreenPos] = useState({ x: 0, y: 0 });
       const [isLoupeActive, setIsLoupeActive] = useState(false);
@@ -2507,11 +2533,13 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
       });
       const [isEstimatingParams, setIsEstimatingParams] = useState(false);
       const [isProcessingEnhancement, setIsProcessingEnhancement] = useState(false);
+      const [isDeletingVersion, setIsDeletingVersion] = useState(false);
       const [enhancedPreviewUrl, setEnhancedPreviewUrl] = useState(null);
       const [isHoldingOriginal, setIsHoldingOriginal] = useState(false);
       const [enhancementNotes, setEnhancementNotes] = useState('');
       const [enhancementSaveError, setEnhancementSaveError] = useState('');
       const [versionLoadError, setVersionLoadError] = useState('');
+      const [pendingDeleteVersionId, setPendingDeleteVersionId] = useState(null);
 
       const loupeCanvasRef = useRef(null);
       const cachedLoupeImgRef = useRef(null);
@@ -2581,7 +2609,14 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
 
           if (!newBlobUrl && selectedVer.opfsFileName) {
             const idInfo = photo.identification || {};
-            const blob = await getOpfsSightingFileBlob(idInfo.category || 'Other', idInfo.speciesName || 'Uncategorized', selectedVer.opfsFileName);
+            const versionEntry = vaultEntries.find(entry =>
+              entry.speciesName.toLowerCase() === (vaultSpeciesName || idInfo.speciesName || '').toLowerCase()
+            );
+            const blob = await getOpfsSightingFileBlob(
+              versionEntry?.category || idInfo.category || 'Other',
+              vaultSpeciesName || idInfo.speciesName || 'Uncategorized',
+              selectedVer.opfsFileName
+            );
             if (blob) {
               newBlobUrl = URL.createObjectURL(blob);
               newThumbUrl = newBlobUrl;
@@ -2612,9 +2647,41 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
           onUpdatePhoto(updated);
           saveFingerprintMetadata(updated);
           setShowCroppedPreview(!!selectedVer.isOriginal && !!updated.cropBox && updated.cropBox.width > 0);
+          return updated;
         } catch (err) {
           console.error('Image version load failed:', err);
           setVersionLoadError(err.message || 'Could not load the selected image version.');
+          return null;
+        }
+      };
+
+      const handleDeleteVersion = async (versionId) => {
+        const version = activeVersions.find(item => item.versionId === versionId);
+        if (!version || version.isOriginal) return;
+
+        setVersionLoadError('');
+        setIsDeletingVersion(true);
+        try {
+          let photoAfterSwitch = photo;
+          if (activeVersionId === versionId) {
+            const originalVersion = activeVersions.find(item => item.isOriginal);
+            if (!originalVersion) {
+              throw new Error('Cannot delete the active version because no original version is available.');
+            }
+            photoAfterSwitch = await handleSelectVersion(originalVersion.versionId);
+            if (!photoAfterSwitch) return;
+          }
+
+          if (!onDeleteVersion) {
+            throw new Error('Processed-version deletion is not available.');
+          }
+          await onDeleteVersion(photoAfterSwitch, versionId);
+          setPendingDeleteVersionId(null);
+        } catch (err) {
+          console.error('Image version delete failed:', err);
+          setVersionLoadError(err.message || 'Could not delete the selected version.');
+        } finally {
+          setIsDeletingVersion(false);
         }
       };
 
@@ -3261,6 +3328,14 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                 <Icon name="trash" className="w-5 h-5 text-red-400 hover:text-white" />
               </button>
 
+              {vaultSpeciesName && (
+                <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 max-w-[calc(100%-7rem)] px-3 py-1.5 bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-full shadow-xl pointer-events-none">
+                  <span className="block truncate text-xs sm:text-sm font-bold text-white text-center" title={vaultSpeciesName}>
+                    {vaultSpeciesName}
+                  </span>
+                </div>
+              )}
+
               <div className="absolute bottom-3 sm:bottom-5 left-1/2 -translate-x-1/2 z-30 px-3.5 py-1.5 sm:px-4 sm:py-2 bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-full shadow-2xl flex items-center space-x-2">
                 <span className="text-[10px] sm:text-xs font-bold text-slate-300">Rating:</span>
                 <StarRating
@@ -3436,20 +3511,53 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                 {activeVersions.length > 1 && (
                   <div className="flex gap-1.5 overflow-x-auto">
                     {activeVersions.map(version => (
-                      <button
-                        key={version.versionId}
-                        type="button"
-                        onClick={() => handleSelectVersion(version.versionId)}
-                        aria-pressed={activeVersionId === version.versionId}
-                        className={`flex-shrink-0 text-[10px] font-semibold px-2 py-1 rounded-lg border touch-manipulation ${
-                          activeVersionId === version.versionId
-                            ? 'bg-emerald-600 text-white border-emerald-500'
-                            : 'bg-slate-950 text-slate-400 border-slate-700'
-                        }`}
-                      >
-                        {version.label}
-                      </button>
+                      <div key={version.versionId} className="flex flex-shrink-0 items-center rounded-lg border border-slate-700 bg-slate-950">
+                        <button
+                          type="button"
+                          onClick={() => handleSelectVersion(version.versionId)}
+                          disabled={isDeletingVersion}
+                          aria-pressed={activeVersionId === version.versionId}
+                          aria-label={`Show ${version.label}${activeVersionId === version.versionId ? ', active version' : ''}`}
+                          className={`text-[10px] font-semibold px-2 py-1 rounded-l-lg touch-manipulation ${
+                            activeVersionId === version.versionId
+                              ? 'bg-emerald-600 text-white'
+                              : 'text-slate-400'
+                          }`}
+                        >
+                          {version.label}
+                        </button>
+                        {!version.isOriginal && (
+                          <button
+                            type="button"
+                            onClick={() => setPendingDeleteVersionId(version.versionId)}
+                            disabled={isDeletingVersion}
+                            aria-label={`Delete ${version.label}`}
+                            title={`Delete ${version.label}`}
+                            className="px-1.5 py-1 text-slate-500 hover:text-red-400 touch-manipulation"
+                          >
+                            <Icon name="trash" className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
                     ))}
+                  </div>
+                )}
+
+                {pendingDeleteVersionId && (
+                  <div className="flex items-center justify-between gap-2 bg-red-950/40 border border-red-500/40 px-2 py-1.5 rounded-lg">
+                    <span className="text-[10px] text-red-200">Delete this processed version?</span>
+                    <div className="flex items-center gap-1.5">
+                      <button type="button" onClick={() => setPendingDeleteVersionId(null)} disabled={isDeletingVersion} className="px-2 py-1 text-[10px] text-slate-300 touch-manipulation disabled:opacity-50">Cancel</button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteVersion(pendingDeleteVersionId)}
+                        disabled={isDeletingVersion}
+                        aria-busy={isDeletingVersion}
+                        className="px-2 py-1 text-[10px] font-bold text-white bg-red-600 rounded touch-manipulation disabled:opacity-50"
+                      >
+                        {isDeletingVersion ? 'Deleting...' : 'Delete'}
+                      </button>
+                    </div>
                   </div>
                 )}
 
@@ -3519,6 +3627,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                     type="button"
                     onClick={handleGenerateEnhancementPreview}
                     disabled={isProcessingEnhancement}
+                    aria-busy={isProcessingEnhancement}
                     aria-label={isProcessingEnhancement ? 'Rendering preview' : 'Show live preview'}
                     className="flex-1 min-h-9 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs rounded-lg border border-slate-700 transition flex items-center justify-center gap-1 touch-manipulation disabled:opacity-50"
                   >
@@ -3835,21 +3944,54 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                 <div className="space-y-1.5">
                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Image Versions & History</span>
                   <div className="flex flex-wrap gap-1.5">
-                    {activeVersions.map(v => (
-                      <button
-                        key={v.versionId}
-                        type="button"
-                        onClick={() => handleSelectVersion(v.versionId)}
-                        className={`text-[10px] font-semibold px-2.5 py-1 rounded-lg border transition touch-manipulation ${
-                          activeVersionId === v.versionId
-                            ? 'bg-emerald-600 text-white border-emerald-500 shadow'
-                            : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
-                        }`}
-                      >
-                        {v.label}
-                      </button>
+                    {activeVersions.map(version => (
+                      <div key={version.versionId} className={`flex items-center rounded-lg border transition ${
+                        activeVersionId === version.versionId
+                          ? 'bg-emerald-600 text-white border-emerald-500 shadow'
+                          : 'bg-slate-950 text-slate-400 border-slate-800'
+                      }`}>
+                        <button
+                          type="button"
+                          onClick={() => handleSelectVersion(version.versionId)}
+                          disabled={isDeletingVersion}
+                          aria-pressed={activeVersionId === version.versionId}
+                          aria-label={`Show ${version.label}${activeVersionId === version.versionId ? ', active version' : ''}`}
+                          className="text-[10px] font-semibold px-2.5 py-1 touch-manipulation"
+                        >
+                          {version.label}
+                        </button>
+                        {!version.isOriginal && (
+                          <button
+                            type="button"
+                            onClick={() => setPendingDeleteVersionId(version.versionId)}
+                            disabled={isDeletingVersion}
+                            aria-label={`Delete ${version.label}`}
+                            title={`Delete ${version.label}`}
+                            className="px-1.5 py-1 text-slate-400 hover:text-red-400 touch-manipulation"
+                          >
+                            <Icon name="trash" className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
                     ))}
                   </div>
+                  {pendingDeleteVersionId && (
+                    <div className="mt-2 flex items-center justify-between gap-2 bg-red-950/40 border border-red-500/40 px-2.5 py-2 rounded-lg">
+                      <span className="text-[10px] text-red-200">Delete this processed version?</span>
+                      <div className="flex items-center gap-1.5">
+                        <button type="button" onClick={() => setPendingDeleteVersionId(null)} disabled={isDeletingVersion} className="px-2 py-1 text-[10px] text-slate-300 touch-manipulation disabled:opacity-50">Cancel</button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteVersion(pendingDeleteVersionId)}
+                          disabled={isDeletingVersion}
+                          aria-busy={isDeletingVersion}
+                          className="px-2 py-1 text-[10px] font-bold text-white bg-red-600 rounded touch-manipulation disabled:opacity-50"
+                        >
+                          {isDeletingVersion ? 'Deleting...' : 'Delete'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
                   {versionLoadError && (
                     <p role="alert" className="text-[11px] text-rose-300">{versionLoadError}</p>
                   )}
@@ -4103,10 +4245,14 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                 <p className="hidden sm:block text-[11px] text-slate-400 leading-relaxed">
                   Save this sighting & species record into your permanent master life-list catalog.
                 </p>
+                {isVaultPreview && (
+                  <p className="text-[10px] text-slate-400">This image is already saved in the Lifer Vault.</p>
+                )}
                 <button
                   type="button"
-                  disabled={!aiResult || !!aiResult.error}
-                  aria-label="Save or update this sighting in the Lifer Vault"
+                  disabled={!aiResult || !!aiResult.error || isVaultPreview}
+                  aria-label={isVaultPreview ? 'Already viewing a Lifer Vault sighting' : 'Save or update this sighting in the Lifer Vault'}
+                  title={isVaultPreview ? 'This photo is already in the Lifer Vault' : 'Save or update this sighting in the Lifer Vault'}
                   onClick={() => onSaveToVault({ ...photo, identification: aiResult, cropBox, focusSpot: photo.focusSpot || cameraExif?.focusArea, locationText: locationInput, stars: activeStars })}
                   className="w-full py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow transition flex items-center justify-center space-x-1 touch-manipulation"
                 >
@@ -4158,7 +4304,9 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                       onSaveToVault(congratData.photoMeta);
                     }}
                     aria-label="Add sighting to Lifer Vault"
-                    className="w-full sm:w-1/2 py-2.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-lg transition flex items-center justify-center space-x-1.5 touch-manipulation"
+                    title={isVaultPreview ? 'This image is already in the Lifer Vault' : 'Add sighting to Lifer Vault'}
+                    disabled={isVaultPreview}
+                    className="w-full sm:w-1/2 py-2.5 px-3 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-xs rounded-xl shadow-lg transition flex items-center justify-center space-x-1.5 touch-manipulation"
                   >
                     <Icon name="check" className="w-4 h-4" />
                     <span><span className="sm:hidden">Add to Vault</span><span className="hidden sm:inline">Add to Lifer Vault</span></span>
@@ -6104,13 +6252,27 @@ const handleDeletePhotoInViewer = async (photoId) => {
 
       const handleCommitNewVersion = async (photo, enhancedBlob, versionMeta) => {
         const idInfo = photo.identification || {};
-        const category = idInfo.category || 'Other';
-        const speciesName = idInfo.speciesName || 'Uncategorized';
-        const verId = versionMeta.versionId;
-        const verFileName = `${new Date().toISOString().split('T')[0]}_${photo.id}_${verId}.jpg`;
+        const vaultPreviewRef = selectedPhotoVaultRef;
+        const vaultEntry = vaultPreviewRef
+          ? vaultEntries.find(entry => entry.speciesName.toLowerCase() === vaultPreviewRef.speciesName.toLowerCase())
+          : null;
+        const vaultSighting = vaultEntry?.sightings.find(sighting => sighting.id === vaultPreviewRef.sightingId);
+        if (vaultPreviewRef && !vaultSighting) {
+          throw new Error('The vault sighting could not be found. The enhanced version was not saved.');
+        }
 
-        if (enhancedBlob) {
-          await writeOpfsSightingFile(category, speciesName, verFileName, enhancedBlob);
+        const category = vaultEntry?.category || idInfo.category || 'Other';
+        const speciesName = vaultEntry?.speciesName || idInfo.speciesName || 'Uncategorized';
+        const verId = versionMeta.versionId;
+        const sightingSuffix = vaultSighting ? `_${vaultSighting.id}` : '';
+        const verFileName = `${new Date().toISOString().split('T')[0]}_${photo.id}_${verId}${sightingSuffix}.jpg`;
+
+        if (!enhancedBlob) {
+          throw new Error('The enhanced image is empty. No version was saved.');
+        }
+        const writeSucceeded = await writeOpfsSightingFile(category, speciesName, verFileName, enhancedBlob);
+        if (!writeSucceeded) {
+          throw new Error('Could not save the enhanced image to vault storage. The active version was not changed.');
         }
 
         const freshBlobUrl = URL.createObjectURL(enhancedBlob);
@@ -6151,15 +6313,20 @@ const handleDeletePhotoInViewer = async (photoId) => {
           versions: updatedVersions
         };
 
-        updatePhotos(prev => prev.map(p => p.id === photo.id ? updatedPhoto : p));
-        saveFingerprintMetadata(updatedPhoto);
-        setSelectedPhoto(updatedPhoto);
-
-        if (idInfo.speciesName) {
-          const updatedVault = vaultEntries.map(entry => {
-            if (entry.speciesName.toLowerCase() === idInfo.speciesName.toLowerCase()) {
+        let updatedVault = null;
+        if (vaultPreviewRef || idInfo.speciesName) {
+          let updatedSightingFound = false;
+          updatedVault = vaultEntries.map(entry => {
+            const matchesSpecies = vaultPreviewRef
+              ? entry.speciesName.toLowerCase() === vaultPreviewRef.speciesName.toLowerCase()
+              : entry.speciesName.toLowerCase() === idInfo.speciesName.toLowerCase();
+            if (matchesSpecies) {
               const updatedSightings = entry.sightings.map(s => {
-                if (s.photoFingerprintId === photo.id || s.photo?.id === photo.id) {
+                const matchesSighting = vaultPreviewRef
+                  ? s.id === vaultPreviewRef.sightingId
+                  : s.photoFingerprintId === photo.id || s.photo?.id === photo.id;
+                if (matchesSighting) {
+                  updatedSightingFound = true;
                   return {
                     ...s,
                     activeVersionId: verId,
@@ -6181,6 +6348,17 @@ const handleDeletePhotoInViewer = async (photoId) => {
             }
             return entry;
           });
+          if (vaultPreviewRef && !updatedSightingFound) {
+            URL.revokeObjectURL(freshBlobUrl);
+            throw new Error('The vault sighting could not be updated. The enhanced image was saved, but its version was not activated.');
+          }
+        }
+
+        updatePhotos(prev => prev.map(p => p.id === photo.id ? updatedPhoto : p));
+        saveFingerprintMetadata(updatedPhoto);
+        setSelectedPhoto(updatedPhoto);
+
+        if (updatedVault) {
           saveVaultToStorage(updatedVault);
           setVaultEntries(updatedVault);
         }
@@ -6205,6 +6383,43 @@ const handleDeletePhotoInViewer = async (photoId) => {
 
         setVaultEntries(updated);
         saveVaultToStorage(updated);
+      };
+
+      const handleDeletePhotoVersion = async (photo, versionId) => {
+        const version = photo.versions?.find(item => item.versionId === versionId);
+        if (!version || version.isOriginal) {
+          throw new Error('Only processed versions can be deleted.');
+        }
+        if (!version.opfsFileName) {
+          throw new Error('The processed version has no saved file reference.');
+        }
+
+        const remainingVersions = photo.versions.filter(item => item.versionId !== versionId);
+        const activeVersion = remainingVersions.find(item => item.versionId === photo.activeVersionId)
+          || remainingVersions.find(item => item.isOriginal)
+          || remainingVersions[0];
+        if (!activeVersion) {
+          throw new Error('Cannot delete the processed version because no image version would remain.');
+        }
+
+        const vaultRef = selectedPhotoVaultRef;
+        const vaultEntry = vaultRef
+          ? vaultEntries.find(entry => entry.speciesName.toLowerCase() === vaultRef.speciesName.toLowerCase())
+          : null;
+        await deleteOpfsSightingFile(
+          vaultEntry?.category || photo.identification?.category || 'Other',
+          vaultEntry?.speciesName || photo.identification?.speciesName || 'Uncategorized',
+          version.opfsFileName
+        );
+
+        const updatedPhoto = {
+          ...photo,
+          versions: remainingVersions,
+          activeVersionId: activeVersion.versionId,
+          opfsFileName: activeVersion.opfsFileName || photo.opfsFileName,
+          cropBox: activeVersion.cropBox !== undefined ? activeVersion.cropBox : photo.cropBox
+        };
+        handleUpdateSelectedPhoto(updatedPhoto);
       };
 
       const handleUpdateSelectedPhoto = (updatedPhoto) => {
@@ -6371,8 +6586,11 @@ const handleDeletePhotoInViewer = async (photoId) => {
                 onUpdatePhoto={handleUpdateSelectedPhoto}
                 onSaveToVault={handleSaveToVault}
                 onDeletePhoto={handleDeletePhotoInViewer}
+                onDeleteVersion={handleDeletePhotoVersion}
                 userApiKey={userApiKey}
                 initialLocation={userLocation}
+                vaultSpeciesName={isVaultPreview ? selectedPhotoVaultRef.speciesName : null}
+                isVaultPreview={isVaultPreview}
                 onUpdateLocation={setUserLocation}
                 onNextPhoto={() => {
                   if (!hasNext) return;
