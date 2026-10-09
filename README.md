@@ -22,6 +22,7 @@ Designed specifically for wildlife photographers handling high-resolution DSLR a
      across BT.601 luminance values ($Y = 0.299R + 0.587G + 0.114B$) to pinpoint peak micro-contrast hotspots.
 * **5-Star Rating Conversion**: Focus quality scores ($0$–$10$) automatically map to a 5-star scale ($\bigstar \bigstar \bigstar \bigstar \bigstar$).
 * **Manual Star Overrides & Filtering**: Adjust star ratings directly on thumbnail cards or inside the Photo Inspector sidebar. Filter the workspace by star rating (All, 5 Stars [Tack Sharp], 4+ Stars [Sharp], 1–3 Stars [Blurry/Soft], Unrated) and sort by filename, capture date, or star rating.
+* **Photo Sequence Video**: Select multiple culling photos to create a crossfade video, with landscape/portrait/square formats, resolution, display duration, and image-fit controls. Video encoding is componentized for reuse; MP4 is used when supported, otherwise the browser's supported WebM format is offered.
 
 ### 3. Precision Photo Inspector Tools
 * **Lightbox Mode**: Features non-passive wheel zooming (`{ passive: false }`), touch pinch-to-zoom, double-click/double-tap $1\times \leftrightarrow 2.5\times$ zoom toggling, pan dragging, and actual-size ($1:1$) pixel inspection up to $800\%$.
