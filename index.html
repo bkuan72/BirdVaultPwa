@@ -1778,7 +1778,7 @@ Return STRICT JSON ONLY:
       );
     }
 
-    function Accordion({ title, icon, children, defaultOpen = false, badge = null }) {
+    function Accordion({ title, mobileTitle = null, icon, children, defaultOpen = false, badge = null }) {
       const [isOpen, setIsOpen] = useState(defaultOpen);
 
       return (
@@ -1786,11 +1786,14 @@ Return STRICT JSON ONLY:
           <button
             type="button"
             onClick={() => setIsOpen(!isOpen)}
+            aria-label={`${title}, ${isOpen ? 'collapse' : 'expand'}`}
             className="w-full px-3.5 py-3 flex items-center justify-between text-left hover:bg-slate-900/60 transition touch-manipulation"
           >
             <div className="flex items-center space-x-2.5 truncate">
               {icon && <Icon name={icon} className="w-4 h-4 text-emerald-400 flex-shrink-0" />}
-              <span className="text-xs font-bold text-slate-200 truncate">{title}</span>
+              <span className="text-xs font-bold text-slate-200 truncate">
+                {mobileTitle ? <><span className="sm:hidden">{mobileTitle}</span><span className="hidden sm:inline">{title}</span></> : title}
+              </span>
               {badge && <span className="ml-2">{badge}</span>}
             </div>
             <Icon
@@ -3224,35 +3227,8 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                 )}
               </div>
 
-              <div className="flex items-center space-x-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
-                <button
-                  type="button"
-                  onClick={toggleCropTool}
-                  className={`px-3 py-1.5 rounded-lg transition font-medium flex items-center space-x-1.5 ${isCropToolActive ? 'bg-emerald-600 text-white shadow-lg' : 'bg-slate-900 text-slate-400 hover:text-white'}`}
-                >
-                  <Icon name="crop" className="w-3.5 h-3.5" />
-                  <span>Crop Box {isCropToolActive ? '(ON)' : '(OFF)'}</span>
-                </button>
-                
-                <button
-                  type="button"
-                  onClick={() => setIsLoupeActive(!isLoupeActive)}
-                  className={`px-3 py-1.5 rounded-lg transition font-medium flex items-center space-x-1.5 ${isLoupeActive ? 'bg-emerald-600 text-white shadow-lg' : 'bg-slate-900 text-slate-400 hover:text-white'}`}
-                >
-                  <Icon name="search" className="w-3.5 h-3.5" />
-                  <span>Loupe Tool {isLoupeActive ? '(ON)' : '(OFF)'}</span>
-                </button>
-              </div>
-
-              <div className="flex items-center space-x-1">
-                <button
-                  type="button"
-                  onClick={() => setShowMobileSidebar(!showMobileSidebar)}
-                  className="md:hidden p-2 text-slate-300 hover:text-white rounded-lg bg-slate-800 flex items-center justify-center touch-manipulation"
-                >
-                  <Icon name="info" className="w-5 h-5 text-emerald-400" />
-                </button>
-                <button type="button" onClick={onClose} className="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 touch-manipulation">
+              <div className="flex items-center">
+                <button type="button" onClick={onClose} aria-label="Close preview" title="Close preview" className="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 touch-manipulation">
                   <Icon name="x" className="w-6 h-6" />
                 </button>
               </div>
@@ -3270,18 +3246,6 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
               onPointerCancel={handlePointerUp}
               className={`flex-1 relative flex items-center justify-center p-2 sm:p-4 overflow-hidden select-none ${isCropToolActive ? 'cursor-crosshair' : panZoom.scale > 1 ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'} touch-canvas`}
             >
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (onDeletePhoto) onDeletePhoto(photo.id);
-                }}
-                className="absolute top-3 left-3 sm:top-4 sm:left-4 z-30 p-2 sm:p-2.5 bg-slate-900/80 hover:bg-red-600 text-slate-300 hover:text-white rounded-full border border-slate-700/80 shadow-xl backdrop-blur-md transition-all touch-manipulation"
-                title="Delete photo"
-              >
-                <Icon name="trash" className="w-4 h-4 sm:w-5 sm:h-5 text-red-400 hover:text-white" />
-              </button>
-
               <div className="absolute bottom-3 sm:bottom-5 left-1/2 -translate-x-1/2 z-30 px-3.5 py-1.5 sm:px-4 sm:py-2 bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-full shadow-2xl flex items-center space-x-2">
                 <span className="text-[10px] sm:text-xs font-bold text-slate-300">Rating:</span>
                 <StarRating
@@ -3436,86 +3400,141 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
               )}
             </div>
 
-            <div className="h-14 bg-slate-900/90 border-t border-slate-800 px-3 sm:px-4 flex items-center justify-between z-20 gap-2 pb-safe sm:pb-0">
-              <div className="flex items-center space-x-2">
-                {isLoupeActive ? (
-                  <div className="flex items-center space-x-1.5 sm:space-x-2 border-r border-slate-800 pr-3 mr-1">
-                    <span className="text-[10px] sm:text-xs font-semibold text-emerald-400 flex-shrink-0">
-                      Loupe:
-                    </span>
-                    <input
-                      type="range"
-                      min="1"
-                      max="20"
-                      step="0.5"
-                      value={zoomLevel}
-                      onChange={(e) => setZoomLevel(parseFloat(e.target.value))}
-                      className="w-20 sm:w-28 accent-emerald-500 h-1.5 cursor-pointer min-w-0"
-                    />
-                    <span className="text-[11px] sm:text-xs font-bold text-emerald-400 font-mono">
-                      {zoomLevel.toFixed(1)}x
-                    </span>
-                  </div>
-                ) : (
-                  <div className="flex items-center space-x-1 bg-slate-950 p-1 rounded-xl border border-slate-800">
-                    <button
-                      type="button"
-                      onClick={() => setPanZoom(prev => ({ ...prev, scale: Math.min(8, prev.scale + 0.5) }))}
-                      className="p-1.5 text-slate-300 hover:text-white rounded-lg hover:bg-slate-800 touch-manipulation"
-                      title="Zoom In"
-                    >
-                      <Icon name="zoomIn" className="w-3.5 h-3.5" />
-                    </button>
-                    <span className="text-[11px] font-mono text-emerald-400 px-1 font-bold">
-                      {panZoom.scale.toFixed(1)}x
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setPanZoom(prev => ({ ...prev, scale: Math.max(1, prev.scale - 0.5), x: prev.scale <= 1.5 ? 0 : prev.x, y: prev.scale <= 1.5 ? 0 : prev.y }))}
-                      className="p-1.5 text-slate-300 hover:text-white rounded-lg hover:bg-slate-800 touch-manipulation"
-                      title="Zoom Out"
-                    >
-                      <Icon name="zoomOut" className="w-3.5 h-3.5" />
-                    </button>
-                    {panZoom.scale > 1 && (
-                      <button
-                        type="button"
-                        onClick={() => setPanZoom({ scale: 1, x: 0, y: 0 })}
-                        className="px-1.5 py-0.5 text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 rounded font-semibold touch-manipulation"
-                      >
-                        Reset
-                      </button>
-                    )}
-                  </div>
-                )}
+            <div className="bg-slate-900/95 border-t border-slate-800 px-3 sm:px-4 py-2 flex flex-col sm:flex-row sm:items-center sm:justify-between z-20 gap-2 pb-safe sm:pb-2">
+              <div className="flex items-center justify-between sm:justify-start gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (onDeletePhoto) onDeletePhoto(photo.id);
+                  }}
+                  aria-label="Delete photo"
+                  title="Delete photo"
+                  className="flex-shrink-0 min-w-10 min-h-10 p-2 bg-slate-950 hover:bg-red-600 text-slate-300 hover:text-white rounded-xl border border-slate-700/80 shadow transition-all touch-manipulation"
+                >
+                  <Icon name="trash" className="w-5 h-5 text-red-400 hover:text-white" />
+                </button>
+
+                <div role="group" aria-label="Photo tools" className="flex items-center gap-1.5 pl-4 border-l border-slate-700">
+                  <button
+                    type="button"
+                    onClick={toggleCropTool}
+                    aria-label={isCropToolActive ? 'Turn crop tool off' : 'Turn crop tool on'}
+                    aria-pressed={isCropToolActive}
+                    title={isCropToolActive ? 'Crop tool on' : 'Crop tool off'}
+                    className={`min-w-10 min-h-10 px-2 sm:px-3 rounded-xl transition font-medium flex items-center justify-center sm:justify-start gap-1.5 touch-manipulation ${isCropToolActive ? 'bg-emerald-600 text-white shadow-lg' : 'bg-slate-950 text-slate-300 hover:text-white border border-slate-700'}`}
+                  >
+                    <Icon name="crop" className="w-4 h-4" />
+                    <span className="hidden sm:inline">Crop</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsLoupeActive(!isLoupeActive)}
+                    aria-label={isLoupeActive ? 'Turn loupe off' : 'Turn loupe on'}
+                    aria-pressed={isLoupeActive}
+                    title={isLoupeActive ? 'Loupe on' : 'Loupe off'}
+                    className={`min-w-10 min-h-10 px-2 sm:px-3 rounded-xl transition font-medium flex items-center justify-center sm:justify-start gap-1.5 touch-manipulation ${isLoupeActive ? 'bg-emerald-600 text-white shadow-lg' : 'bg-slate-950 text-slate-300 hover:text-white border border-slate-700'}`}
+                  >
+                    <Icon name="search" className="w-4 h-4" />
+                    <span className="hidden sm:inline">Loupe</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowMobileSidebar(!showMobileSidebar)}
+                    aria-label={showMobileSidebar ? 'Close photo details' : 'Open photo details'}
+                    aria-expanded={showMobileSidebar}
+                    title={showMobileSidebar ? 'Close photo details' : 'Open photo details'}
+                    className="md:hidden min-w-10 min-h-10 px-2 rounded-xl bg-slate-950 text-slate-300 hover:text-white border border-slate-700 flex items-center justify-center touch-manipulation"
+                  >
+                    <Icon name="info" className="w-4 h-4 text-emerald-400" />
+                  </button>
+                </div>
               </div>
 
-              <div className="flex items-center space-x-2">
-                <button
-                  type="button"
-                  onClick={() => setShowCroppedPreview(!showCroppedPreview)}
-                  disabled={!hasValidCropBox || isShowingBakedCrop}
-                  className={`text-[10px] sm:text-xs px-3 py-2 rounded-xl font-semibold transition flex items-center space-x-1.5 touch-manipulation ${
-                    !hasValidCropBox || isShowingBakedCrop
-                      ? 'bg-slate-800/50 text-slate-600 border border-slate-800/80 cursor-not-allowed' 
-                      : showCroppedPreview 
-                        ? 'bg-emerald-600 text-white shadow-lg' 
-                        : 'bg-slate-800 text-slate-200 border border-slate-700'
-                  }`}
-                >
-                  <Icon name="crop" className="w-3.5 h-3.5" />
-                  <span>{isShowingBakedCrop ? 'Crop Baked into Image' : showCroppedPreview ? 'View Full Image' : 'Cropped Preview'}</span>
-                </button>
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center justify-between gap-2">
+                  {isLoupeActive ? (
+                    <div className="flex items-center space-x-1.5 sm:space-x-2 border-r border-slate-800 pr-3 mr-1">
+                      <span className="text-[10px] sm:text-xs font-semibold text-emerald-400 flex-shrink-0">
+                        Loupe:
+                      </span>
+                      <input
+                        type="range"
+                        min="1"
+                        max="20"
+                        step="0.5"
+                        value={zoomLevel}
+                        onChange={(e) => setZoomLevel(parseFloat(e.target.value))}
+                        className="w-20 sm:w-28 accent-emerald-500 h-1.5 cursor-pointer min-w-0"
+                      />
+                      <span className="text-[11px] sm:text-xs font-bold text-emerald-400 font-mono">
+                        {zoomLevel.toFixed(1)}x
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="flex items-center space-x-1 bg-slate-950 p-1 rounded-xl border border-slate-800">
+                      <button
+                        type="button"
+                        onClick={() => setPanZoom(prev => ({ ...prev, scale: Math.min(8, prev.scale + 0.5) }))}
+                        className="p-1.5 text-slate-300 hover:text-white rounded-lg hover:bg-slate-800 touch-manipulation"
+                        title="Zoom In"
+                      >
+                        <Icon name="zoomIn" className="w-3.5 h-3.5" />
+                      </button>
+                      <span className="text-[11px] font-mono text-emerald-400 px-1 font-bold">
+                        {panZoom.scale.toFixed(1)}x
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setPanZoom(prev => ({ ...prev, scale: Math.max(1, prev.scale - 0.5), x: prev.scale <= 1.5 ? 0 : prev.x, y: prev.scale <= 1.5 ? 0 : prev.y }))}
+                        className="p-1.5 text-slate-300 hover:text-white rounded-lg hover:bg-slate-800 touch-manipulation"
+                        title="Zoom Out"
+                      >
+                        <Icon name="zoomOut" className="w-3.5 h-3.5" />
+                      </button>
+                      {panZoom.scale > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => setPanZoom({ scale: 1, x: 0, y: 0 })}
+                          className="px-1.5 py-0.5 text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 rounded font-semibold touch-manipulation"
+                        >
+                          Reset
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
 
-                <button
-                  type="button"
-                  onClick={handleRunAiIdentification}
-                  disabled={identifying || evaluatingFocus}
-                  className="px-3 sm:px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-semibold text-xs rounded-xl shadow-lg transition flex items-center space-x-1.5 flex-shrink-0 touch-manipulation"
-                >
-                  <Icon name="sparkles" className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-                  <span>{identifying ? 'Analyzing...' : evaluatingFocus ? 'Rating...' : 'Identify Bird'}</span>
-                </button>
+                <div className="flex items-center space-x-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowCroppedPreview(!showCroppedPreview)}
+                    disabled={!hasValidCropBox || isShowingBakedCrop}
+                    aria-label={isShowingBakedCrop ? 'Crop baked into image' : showCroppedPreview ? 'View full image' : 'View cropped preview'}
+                    title={isShowingBakedCrop ? 'Crop baked into image' : showCroppedPreview ? 'View full image' : 'View cropped preview'}
+                    className={`text-[10px] sm:text-xs px-3 py-2 rounded-xl font-semibold transition flex items-center space-x-1.5 touch-manipulation ${
+                      !hasValidCropBox || isShowingBakedCrop
+                        ? 'bg-slate-800/50 text-slate-600 border border-slate-800/80 cursor-not-allowed'
+                        : showCroppedPreview
+                          ? 'bg-emerald-600 text-white shadow-lg'
+                          : 'bg-slate-800 text-slate-200 border border-slate-700'
+                    }`}
+                  >
+                    <Icon name="crop" className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">{isShowingBakedCrop ? 'Crop Baked into Image' : showCroppedPreview ? 'View Full Image' : 'Cropped Preview'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleRunAiIdentification}
+                    disabled={identifying || evaluatingFocus}
+                    aria-label={identifying ? 'Analyzing image' : evaluatingFocus ? 'Rating image' : 'Identify bird'}
+                    title={identifying ? 'Analyzing image' : evaluatingFocus ? 'Rating image' : 'Identify bird'}
+                    className="px-3 sm:px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-semibold text-xs rounded-xl shadow-lg transition flex items-center space-x-1.5 flex-shrink-0 touch-manipulation"
+                  >
+                    <Icon name="sparkles" className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                    <span>{identifying ? <><span className="sm:hidden">Wait...</span><span className="hidden sm:inline">Analyzing...</span></> : evaluatingFocus ? <><span className="sm:hidden">Wait...</span><span className="hidden sm:inline">Rating...</span></> : <><span className="sm:hidden">ID</span><span className="hidden sm:inline">Identify Bird</span></>}</span>
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -3533,6 +3552,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
 
             <Accordion 
               title="Image Metadata & Focus Grade" 
+              mobileTitle="Metadata"
               icon="info" 
               defaultOpen={true}
               badge={
@@ -3590,6 +3610,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
 
             <Accordion
               title="Camera EXIF Data"
+              mobileTitle="Camera"
               icon="camera"
               defaultOpen={false}
               badge={
@@ -3642,6 +3663,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
 
             <Accordion 
               title="AI Photo Enhancement Studio" 
+              mobileTitle="Enhance"
               icon="sparkles" 
               defaultOpen={false}
               badge={
@@ -3702,10 +3724,11 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                     type="button"
                     onClick={handleAutoTuneAiParams}
                     disabled={isEstimatingParams}
+                    aria-label={isEstimatingParams ? 'Tuning image parameters' : 'Auto-tune image parameters with AI'}
                     className="w-full py-1.5 bg-slate-800 hover:bg-slate-700 text-emerald-300 font-semibold text-xs rounded-xl border border-slate-700 transition flex items-center justify-center space-x-1.5 touch-manipulation"
                   >
                     <Icon name="sparkles" className={`w-3.5 h-3.5 ${isEstimatingParams ? 'animate-spin' : ''}`} />
-                    <span>{isEstimatingParams ? 'Analyzing Image...' : 'Auto-Tune Parameters with AI'}</span>
+                    <span>{isEstimatingParams ? <><span className="sm:hidden">Tuning...</span><span className="hidden sm:inline">Analyzing Image...</span></> : <><span className="sm:hidden">Auto-Tune</span><span className="hidden sm:inline">Auto-Tune Parameters with AI</span></>}</span>
                   </button>
 
                   {enhancementNotes && (
@@ -3787,10 +3810,11 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                       type="button"
                       onClick={handleGenerateEnhancementPreview}
                       disabled={isProcessingEnhancement}
+                      aria-label={isProcessingEnhancement ? 'Rendering preview' : 'Show live preview'}
                       className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs rounded-xl border border-slate-700 transition flex items-center justify-center space-x-1 touch-manipulation"
                     >
                       <Icon name="eye" className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>{isProcessingEnhancement ? 'Rendering...' : 'Live Preview'}</span>
+                      <span>{isProcessingEnhancement ? <><span className="sm:hidden">Wait...</span><span className="hidden sm:inline">Rendering...</span></> : <><span className="sm:hidden">Preview</span><span className="hidden sm:inline">Live Preview</span></>}</span>
                     </button>
 
                     {enhancedPreviewUrl && (
@@ -3811,10 +3835,11 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                     type="button"
                     onClick={handleSaveEnhancementVersion}
                     disabled={isProcessingEnhancement}
+                    aria-label={`Save as version ${activeVersions.length + 1}`}
                     className="w-full py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-lg transition flex items-center justify-center space-x-1.5 touch-manipulation"
                   >
                     <Icon name="check" className="w-4 h-4" />
-                    <span>Commit & Save as Version v{activeVersions.length + 1}</span>
+                    <span><span className="sm:hidden">Save Version</span><span className="hidden sm:inline">Commit & Save as Version v{activeVersions.length + 1}</span></span>
                   </button>
                 </div>
               </div>
@@ -3822,6 +3847,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
 
             <Accordion 
               title="AI Identification & Species Traits" 
+              mobileTitle="Identify"
               icon="sparkles" 
               defaultOpen={true}
               badge={
@@ -3905,16 +3931,17 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                     type="button"
                     onClick={handleRunAiIdentification}
                     disabled={identifying}
+                    aria-label={identifying ? 'Identifying species' : 'Identify species with AI'}
                     className="w-full py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow transition flex items-center justify-center space-x-1.5 touch-manipulation"
                   >
                     <Icon name="sparkles" className="w-3.5 h-3.5" />
-                    <span>Run AI Species Identification</span>
+                    <span>{identifying ? <><span className="sm:hidden">Working...</span><span className="hidden sm:inline">Identifying species...</span></> : <><span className="sm:hidden">Identify</span><span className="hidden sm:inline">Run AI Species Identification</span></>}</span>
                   </button>
                 )}
               </div>
             </Accordion>
 
-            <Accordion title="Lifer List Vault Sync" icon="feather" defaultOpen={!!aiResult}>
+            <Accordion title="Lifer List Vault Sync" mobileTitle="Vault" icon="feather" defaultOpen={!!aiResult}>
               <div className="space-y-2">
                 <p className="hidden sm:block text-[11px] text-slate-400 leading-relaxed">
                   Save this sighting & species record into your permanent master life-list catalog.
@@ -3922,11 +3949,12 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                 <button
                   type="button"
                   disabled={!aiResult || !!aiResult.error}
+                  aria-label="Save or update this sighting in the Lifer Vault"
                   onClick={() => onSaveToVault({ ...photo, identification: aiResult, cropBox, focusSpot: photo.focusSpot || cameraExif?.focusArea, locationText: locationInput, stars: activeStars })}
                   className="w-full py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow transition flex items-center justify-center space-x-1 touch-manipulation"
                 >
                   <Icon name="check" className="w-4 h-4" />
-                  <span>Save / Update Lifer Vault</span>
+                  <span><span className="sm:hidden">Save to Vault</span><span className="hidden sm:inline">Save / Update Lifer Vault</span></span>
                 </button>
               </div>
             </Accordion>
@@ -3961,9 +3989,10 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                   <button
                     type="button"
                     onClick={() => setShowCongratModal(false)}
+                    aria-label="Do not add this species to the vault"
                     className="w-full sm:w-1/2 py-2.5 px-3 bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs rounded-xl transition touch-manipulation"
                   >
-                    Do Not Add
+                    <span className="sm:hidden">Not now</span><span className="hidden sm:inline">Do Not Add</span>
                   </button>
                   <button
                     type="button"
@@ -3971,10 +4000,11 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                       setShowCongratModal(false);
                       onSaveToVault(congratData.photoMeta);
                     }}
+                    aria-label="Add sighting to Lifer Vault"
                     className="w-full sm:w-1/2 py-2.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-lg transition flex items-center justify-center space-x-1.5 touch-manipulation"
                   >
                     <Icon name="check" className="w-4 h-4" />
-                    <span>Add to Lifer Vault</span>
+                    <span><span className="sm:hidden">Add to Vault</span><span className="hidden sm:inline">Add to Lifer Vault</span></span>
                   </button>
                 </div>
               </div>
