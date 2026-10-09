@@ -27,6 +27,7 @@ Designed specifically for wildlife photographers handling high-resolution DSLR a
 * **Lightbox Mode**: Features non-passive wheel zooming (`{ passive: false }`), touch pinch-to-zoom, double-click/double-tap $1\times \leftrightarrow 2.5\times$ zoom toggling, pan dragging, and actual-size ($1:1$) pixel inspection up to $800\%$.
 * **Crop AI Tool**: Interactive region of interest (ROI) framing box to isolate diagnostic visual features (head, beak, eyes) prior to AI evaluation.
 * **Screen-Calibrated & Persistent Loupe Magnifier**: Calibrates magnification relative to displayed on-screen image dimensions ($1.0\times$ baseline matching screen resolution up to $20.0\times$ detail zoom). The lens remains anchored on the photo during adjustment without vanishing.
+* **AI Photo Processing Controls**: On mobile, open processing tools from the preview toolbar; adjustments appear in a compact panel below the image so the live preview remains visible while tuning sliders.
 * **Conditional Focus Target Overlay**: Displays a sky-blue target marker over camera AF spot coordinates or computed micro-contrast hotspots, automatically hiding during active zoom or crop preview.
 
 ### 4. Selection, Deletion & Local Export

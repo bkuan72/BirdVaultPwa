@@ -1778,11 +1778,11 @@ Return STRICT JSON ONLY:
       );
     }
 
-    function Accordion({ title, mobileTitle = null, icon, children, defaultOpen = false, badge = null }) {
+    function Accordion({ title, mobileTitle = null, icon, children, defaultOpen = false, badge = null, className = '' }) {
       const [isOpen, setIsOpen] = useState(defaultOpen);
 
       return (
-        <div className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden transition-all duration-200">
+        <div className={`bg-slate-950 border border-slate-800 rounded-xl overflow-hidden transition-all duration-200 ${className}`}>
           <button
             type="button"
             onClick={() => setIsOpen(!isOpen)}
@@ -2491,6 +2491,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
       
       const [zoomLevel, setZoomLevel] = useState(3.0);
       const [showMobileSidebar, setShowMobileSidebar] = useState(false);
+      const [showEnhancementPanel, setShowEnhancementPanel] = useState(false);
       const [showHeatmapOverlay, setShowHeatmapOverlay] = useState(true);
 
       const [showCongratModal, setShowCongratModal] = useState(false);
@@ -3214,7 +3215,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
 
       return (
         <div className="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-md flex flex-col md:flex-row overflow-hidden select-none">
-          <div className="flex-1 flex flex-col relative bg-black/80 overflow-hidden h-full">
+          <div className="flex-1 min-h-0 flex flex-col relative bg-black/80 overflow-hidden h-full">
             
             <div className="h-14 sm:h-16 px-3 sm:px-4 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between z-20 gap-2">
               <div className="flex items-center space-x-2 truncate min-w-0">
@@ -3244,8 +3245,22 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
               onPointerMove={handlePointerMove}
               onPointerUp={handlePointerUp}
               onPointerCancel={handlePointerUp}
-              className={`flex-1 relative flex items-center justify-center p-2 sm:p-4 overflow-hidden select-none ${isCropToolActive ? 'cursor-crosshair' : panZoom.scale > 1 ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'} touch-canvas`}
+              className={`flex-1 min-h-0 relative flex items-center justify-center p-2 sm:p-4 overflow-hidden select-none ${isCropToolActive ? 'cursor-crosshair' : panZoom.scale > 1 ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'} touch-canvas`}
             >
+              <button
+                type="button"
+                onPointerDown={event => event.stopPropagation()}
+                onClick={event => {
+                  event.stopPropagation();
+                  if (onDeletePhoto) onDeletePhoto(photo.id);
+                }}
+                aria-label="Delete photo"
+                title="Delete photo"
+                className="absolute top-3 left-3 sm:top-4 sm:left-4 z-30 min-w-10 min-h-10 p-2 bg-slate-900/90 hover:bg-red-600 text-slate-300 hover:text-white rounded-xl border border-slate-700/80 shadow-xl backdrop-blur-md transition-all touch-manipulation"
+              >
+                <Icon name="trash" className="w-5 h-5 text-red-400 hover:text-white" />
+              </button>
+
               <div className="absolute bottom-3 sm:bottom-5 left-1/2 -translate-x-1/2 z-30 px-3.5 py-1.5 sm:px-4 sm:py-2 bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-full shadow-2xl flex items-center space-x-2">
                 <span className="text-[10px] sm:text-xs font-bold text-slate-300">Rating:</span>
                 <StarRating
@@ -3400,20 +3415,145 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
               )}
             </div>
 
+            {showEnhancementPanel && (
+              <div className="md:hidden flex-shrink-0 max-h-[38vh] overflow-y-auto overscroll-contain bg-slate-900 border-t border-slate-700 px-3 py-2 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-slate-100">
+                    <Icon name="sparkles" className="w-4 h-4 text-emerald-400" />
+                    <span>AI Processing</span>
+                    {activeVersions.length > 1 && <span className="text-[9px] text-emerald-300">{activeVersionId}</span>}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowEnhancementPanel(false)}
+                    aria-label="Close AI processing controls"
+                    className="p-1 text-slate-400 hover:text-white rounded touch-manipulation"
+                  >
+                    <Icon name="x" className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {activeVersions.length > 1 && (
+                  <div className="flex gap-1.5 overflow-x-auto">
+                    {activeVersions.map(version => (
+                      <button
+                        key={version.versionId}
+                        type="button"
+                        onClick={() => handleSelectVersion(version.versionId)}
+                        aria-pressed={activeVersionId === version.versionId}
+                        className={`flex-shrink-0 text-[10px] font-semibold px-2 py-1 rounded-lg border touch-manipulation ${
+                          activeVersionId === version.versionId
+                            ? 'bg-emerald-600 text-white border-emerald-500'
+                            : 'bg-slate-950 text-slate-400 border-slate-700'
+                        }`}
+                      >
+                        {version.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[10px] font-semibold text-slate-400">Scope</span>
+                  <div className="flex bg-slate-950 p-0.5 rounded-lg border border-slate-800">
+                    <button
+                      type="button"
+                      onClick={() => setEnhanceScope('full')}
+                      aria-pressed={enhanceScope === 'full'}
+                      className={`text-[10px] px-2.5 py-1 rounded font-semibold touch-manipulation ${enhanceScope === 'full' ? 'bg-emerald-600 text-white' : 'text-slate-400'}`}
+                    >
+                      Full
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEnhanceScope('crop')}
+                      disabled={!cropBox || cropBox.width <= 0}
+                      aria-pressed={enhanceScope === 'crop'}
+                      className={`text-[10px] px-2.5 py-1 rounded font-semibold touch-manipulation ${enhanceScope === 'crop' ? 'bg-emerald-600 text-white' : 'text-slate-400 disabled:opacity-40'}`}
+                    >
+                      Crop
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleAutoTuneAiParams}
+                    disabled={isEstimatingParams}
+                    aria-label={isEstimatingParams ? 'Tuning image parameters' : 'Auto-tune parameters with AI'}
+                    className="px-2.5 py-1.5 bg-slate-800 text-emerald-300 border border-slate-700 rounded-lg text-[10px] font-semibold disabled:opacity-50 touch-manipulation"
+                  >
+                    {isEstimatingParams ? 'Tuning...' : 'Auto-Tune'}
+                  </button>
+                </div>
+
+                {enhancementNotes && <p className="text-[10px] text-slate-400 truncate" title={enhancementNotes}>{enhancementNotes}</p>}
+                {enhancementSaveError && <p role="alert" className="text-[10px] text-red-300">{enhancementSaveError}</p>}
+                {versionLoadError && <p role="alert" className="text-[10px] text-rose-300">{versionLoadError}</p>}
+
+                <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
+                  {[
+                    ['sharpness', 'Sharpness'],
+                    ['denoise', 'Noise reduction'],
+                    ['vibrance', 'Vibrance'],
+                    ['contrast', 'Contrast']
+                  ].map(([key, label]) => (
+                    <label key={key} className="min-w-0">
+                      <span className="flex items-center justify-between text-[10px] text-slate-300">
+                        <span className="truncate">{label}</span>
+                        <span className="text-emerald-400 font-bold">{enhanceParams[key]}%</span>
+                      </span>
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        value={enhanceParams[key]}
+                        onChange={event => setEnhanceParams(prev => ({ ...prev, [key]: parseInt(event.target.value) }))}
+                        aria-label={label}
+                        className="w-full accent-emerald-500 h-1.5 cursor-pointer touch-manipulation"
+                      />
+                    </label>
+                  ))}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleGenerateEnhancementPreview}
+                    disabled={isProcessingEnhancement}
+                    aria-label={isProcessingEnhancement ? 'Rendering preview' : 'Show live preview'}
+                    className="flex-1 min-h-9 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs rounded-lg border border-slate-700 transition flex items-center justify-center gap-1 touch-manipulation disabled:opacity-50"
+                  >
+                    <Icon name="eye" className="w-3.5 h-3.5 text-emerald-400" />
+                    {isProcessingEnhancement ? 'Rendering...' : 'Preview'}
+                  </button>
+                  {enhancedPreviewUrl && (
+                    <button
+                      type="button"
+                      onPointerDown={() => setIsHoldingOriginal(true)}
+                      onPointerUp={() => setIsHoldingOriginal(false)}
+                      onPointerCancel={() => setIsHoldingOriginal(false)}
+                      onPointerLeave={() => setIsHoldingOriginal(false)}
+                      aria-label="Hold to compare with original"
+                      className="min-h-9 px-2.5 py-1.5 bg-amber-600/20 text-amber-300 border border-amber-500/40 font-semibold text-[10px] rounded-lg touch-manipulation select-none"
+                    >
+                      Hold A/B
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleSaveEnhancementVersion}
+                    disabled={isProcessingEnhancement}
+                    aria-label={`Save as version ${activeVersions.length + 1}`}
+                    className="flex-1 min-h-9 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-lg shadow transition flex items-center justify-center gap-1 touch-manipulation disabled:opacity-50"
+                  >
+                    <Icon name="check" className="w-3.5 h-3.5" />
+                    Save
+                  </button>
+                </div>
+              </div>
+            )}
+
             <div className="bg-slate-900/95 border-t border-slate-800 px-3 sm:px-4 py-2 flex flex-col sm:flex-row sm:items-center sm:justify-between z-20 gap-2 pb-safe sm:pb-2">
               <div className="flex items-center justify-between sm:justify-start gap-3">
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (onDeletePhoto) onDeletePhoto(photo.id);
-                  }}
-                  aria-label="Delete photo"
-                  title="Delete photo"
-                  className="flex-shrink-0 min-w-10 min-h-10 p-2 bg-slate-950 hover:bg-red-600 text-slate-300 hover:text-white rounded-xl border border-slate-700/80 shadow transition-all touch-manipulation"
-                >
-                  <Icon name="trash" className="w-5 h-5 text-red-400 hover:text-white" />
-                </button>
-
                 <div role="group" aria-label="Photo tools" className="flex items-center gap-1.5 pl-4 border-l border-slate-700">
                   <button
                     type="button"
@@ -3439,13 +3579,29 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                   </button>
                   <button
                     type="button"
-                    onClick={() => setShowMobileSidebar(!showMobileSidebar)}
+                    onClick={() => {
+                      setShowMobileSidebar(!showMobileSidebar);
+                      if (!showMobileSidebar) setShowEnhancementPanel(false);
+                    }}
                     aria-label={showMobileSidebar ? 'Close photo details' : 'Open photo details'}
                     aria-expanded={showMobileSidebar}
                     title={showMobileSidebar ? 'Close photo details' : 'Open photo details'}
                     className="md:hidden min-w-10 min-h-10 px-2 rounded-xl bg-slate-950 text-slate-300 hover:text-white border border-slate-700 flex items-center justify-center touch-manipulation"
                   >
                     <Icon name="info" className="w-4 h-4 text-emerald-400" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowEnhancementPanel(!showEnhancementPanel);
+                      setShowMobileSidebar(false);
+                    }}
+                    aria-label={showEnhancementPanel ? 'Close AI processing controls' : 'Open AI processing controls'}
+                    aria-expanded={showEnhancementPanel}
+                    title="AI processing"
+                    className={`md:hidden min-w-10 min-h-10 px-2 rounded-xl border flex items-center justify-center touch-manipulation ${showEnhancementPanel ? 'bg-emerald-600 text-white border-emerald-500' : 'bg-slate-950 text-slate-300 hover:text-white border-slate-700'}`}
+                  >
+                    <Icon name="sparkles" className="w-4 h-4" />
                   </button>
                 </div>
               </div>
@@ -3665,6 +3821,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
               title="AI Photo Enhancement Studio" 
               mobileTitle="Enhance"
               icon="sparkles" 
+              className="hidden md:block"
               defaultOpen={false}
               badge={
                 activeVersions.length > 1 ? (
