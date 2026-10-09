@@ -4332,6 +4332,13 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
         });
       }, [vaultEntries, selectedCategory, searchQuery]);
 
+      const vaultNavigationItems = useMemo(
+        () => filteredEntries.flatMap(entry =>
+          (entry.sightings || []).map(sighting => ({ entry, sighting }))
+        ),
+        [filteredEntries]
+      );
+
       useEffect(() => {
         setVaultPage(1);
       }, [selectedCategory, searchQuery]);
@@ -4452,7 +4459,9 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                       onToggleExpand={() => setExpandedSpecies(expandedSpecies === entry.speciesName ? null : entry.speciesName)}
                       onDeleteSpecies={onDeleteSpecies}
                       onDeleteSighting={onDeleteSighting}
-                      onSelectPhoto={onSelectPhoto}
+                      onSelectPhoto={(photo, vaultRef) =>
+                        onSelectPhoto(photo, vaultRef, vaultNavigationItems)
+                      }
                     />
                   ))}
                 </div>
@@ -5388,6 +5397,8 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
       const [vaultEntries, setVaultEntries] = useState(() => getStoredVault());
       const [selectedPhoto, setSelectedPhoto] = useState(null);
       const [selectedPhotoVaultRef, setSelectedPhotoVaultRef] = useState(null);
+      const [selectedPhotoVaultItems, setSelectedPhotoVaultItems] = useState([]);
+      const vaultNavigationUrlRef = useRef(null);
       const [showTokenModal, setShowTokenModal] = useState(false);
       const [showAuthModal, setShowAuthModal] = useState(false);
       const [userApiKey, setUserApiKey] = useState(() => localStorage.getItem('birdvault_gemini_token') || '');
@@ -5453,6 +5464,62 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
           setPhotos(prev => action(prev));
         } else {
           setPhotos(action);
+        }
+      };
+
+      const vaultSelectedIndex = selectedPhotoVaultRef
+        ? selectedPhotoVaultItems.findIndex(({ entry, sighting }) =>
+            entry.speciesName === selectedPhotoVaultRef.speciesName &&
+            sighting.id === selectedPhotoVaultRef.sightingId
+          )
+        : -1;
+
+      const openVaultNavigationItem = async (index) => {
+        const item = selectedPhotoVaultItems[index];
+        if (!item) return;
+
+        const { entry, sighting } = item;
+        const savedPhoto = sighting.photo || {};
+        const fingerprintId = sighting.photoFingerprintId || savedPhoto.fingerprintId || savedPhoto.id;
+        const livePhoto = photos.find(photo =>
+          photo.id === fingerprintId || photo.fingerprintId === fingerprintId
+        );
+        let nextPhoto = livePhoto || {
+          ...savedPhoto,
+          id: savedPhoto.id || fingerprintId || sighting.id,
+          fingerprintId: fingerprintId || savedPhoto.fingerprintId,
+          cropBox: sighting.cropBox ?? savedPhoto.cropBox ?? null,
+          opfsFileName: sighting.opfsFileName || savedPhoto.opfsFileName
+        };
+        let nextNavigationUrl = null;
+        const hasImageSource = nextPhoto.file || nextPhoto.blobUrl || nextPhoto.thumbnailUrl || nextPhoto.url;
+
+        if (!hasImageSource) {
+          const opfsFileName = sighting.opfsFileName || savedPhoto.opfsFileName || savedPhoto.name;
+          if (!opfsFileName) {
+            console.warn(`Vault sighting "${sighting.id}" has no image file reference.`);
+            return;
+          }
+          const blob = await getOpfsSightingFileBlob(entry.category || 'Other', entry.speciesName, opfsFileName);
+          if (!blob) {
+            console.warn(`Could not load vault image "${opfsFileName}" for ${entry.speciesName}.`);
+            return;
+          }
+          nextNavigationUrl = URL.createObjectURL(blob);
+          nextPhoto = {
+            ...nextPhoto,
+            blobUrl: nextNavigationUrl,
+            thumbnailUrl: nextNavigationUrl,
+            url: nextNavigationUrl
+          };
+        }
+
+        const previousNavigationUrl = vaultNavigationUrlRef.current;
+        vaultNavigationUrlRef.current = nextNavigationUrl;
+        setSelectedPhoto({ ...nextPhoto, vaultSightingId: sighting.id });
+        setSelectedPhotoVaultRef({ speciesName: entry.speciesName, sightingId: sighting.id });
+        if (previousNavigationUrl && previousNavigationUrl !== nextNavigationUrl) {
+          setTimeout(() => URL.revokeObjectURL(previousNavigationUrl), 0);
         }
       };
 
@@ -5871,9 +5938,10 @@ const handleDeletePhotoInViewer = async (photoId) => {
                 photos={photos}
                 onDeleteSighting={handleDeleteSighting}
                 onDeleteSpecies={handleDeleteSpecies}
-                onSelectPhoto={(photo, vaultRef) => {
+                onSelectPhoto={(photo, vaultRef, navigationItems) => {
                   setSelectedPhoto(photo);
                   setSelectedPhotoVaultRef(vaultRef);
+                  setSelectedPhotoVaultItems(navigationItems || []);
                 }}
               />
             ) : (
@@ -5883,6 +5951,7 @@ const handleDeletePhotoInViewer = async (photoId) => {
                 onSelectPhoto={(photo) => {
                   setSelectedPhoto(photo);
                   setSelectedPhotoVaultRef(null);
+                  setSelectedPhotoVaultItems([]);
                 }}
                 userApiKey={userApiKey}
                 filterSharpness={filterSharpness}
@@ -5899,16 +5968,26 @@ const handleDeletePhotoInViewer = async (photoId) => {
 
           {selectedPhoto && (() => {
             const selectedIndex = processedPhotos.findIndex(p => p.id === selectedPhoto.id);
-            const hasPrev = selectedIndex > 0;
-            const hasNext = selectedIndex >= 0 && selectedIndex < processedPhotos.length - 1;
+            const isVaultPreview = !!selectedPhotoVaultRef;
+            const hasPrev = isVaultPreview
+              ? vaultSelectedIndex > 0
+              : selectedIndex > 0;
+            const hasNext = isVaultPreview
+              ? vaultSelectedIndex >= 0 && vaultSelectedIndex < selectedPhotoVaultItems.length - 1
+              : selectedIndex >= 0 && selectedIndex < processedPhotos.length - 1;
 
             return (
               <InteractivePhotoViewer
-                key={selectedPhoto.id}
+                key={isVaultPreview ? `vault-${selectedPhotoVaultRef.speciesName}-${selectedPhotoVaultRef.sightingId}` : selectedPhoto.id}
                 photo={selectedPhoto}
                 onClose={() => {
                   setSelectedPhoto(null);
                   setSelectedPhotoVaultRef(null);
+                  setSelectedPhotoVaultItems([]);
+                  if (vaultNavigationUrlRef.current) {
+                    URL.revokeObjectURL(vaultNavigationUrlRef.current);
+                    vaultNavigationUrlRef.current = null;
+                  }
                 }}
                 onUpdatePhoto={handleUpdateSelectedPhoto}
                 onSaveToVault={handleSaveToVault}
@@ -5918,11 +5997,19 @@ const handleDeletePhotoInViewer = async (photoId) => {
                 onUpdateLocation={setUserLocation}
                 onNextPhoto={() => {
                   if (!hasNext) return;
+                  if (isVaultPreview) {
+                    void openVaultNavigationItem(vaultSelectedIndex + 1);
+                    return;
+                  }
                   setSelectedPhoto(processedPhotos[selectedIndex + 1]);
                   setSelectedPhotoVaultRef(null);
                 }}
                 onPrevPhoto={() => {
                   if (!hasPrev) return;
+                  if (isVaultPreview) {
+                    void openVaultNavigationItem(vaultSelectedIndex - 1);
+                    return;
+                  }
                   setSelectedPhoto(processedPhotos[selectedIndex - 1]);
                   setSelectedPhotoVaultRef(null);
                 }}
