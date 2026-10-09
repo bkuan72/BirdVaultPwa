@@ -1791,6 +1791,7 @@ Return STRICT JSON ONLY:
         clock: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>,
         bolt: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>,
         download: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>,
+        more: <><circle cx="5" cy="12" r="1" fill="currentColor"/><circle cx="12" cy="12" r="1" fill="currentColor"/><circle cx="19" cy="12" r="1" fill="currentColor"/></>,
         chevronLeft: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7"/>,
         chevronRight: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7"/>,
         chevronDown: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"/>,
@@ -4675,7 +4676,6 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
       const [selectedCategory, setSelectedCategory] = useState('All');
       const [searchQuery, setSearchQuery] = useState('');
       const [expandedSpecies, setExpandedSpecies] = useState(null);
-      const [isExportingOpfs, setIsExportingOpfs] = useState(false);
       const [vaultImageUrls, setVaultImageUrls] = useState({});
       const vaultImageUrlsRef = useRef(new Map());
       const vaultImageObjectUrlsRef = useRef(new Set());
@@ -4850,46 +4850,6 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
         return filteredEntries.slice(start, start + VAULT_PAGE_SIZE);
       }, [filteredEntries, vaultPage]);
 
-      const handleExportVaultZip = async () => {
-        setIsExportingOpfs(true);
-        try {
-          const zipFile = await exportOpfsVaultToZip(vaultEntries);
-          const zipBlobUrl = URL.createObjectURL(zipFile);
-
-          let sharedSuccessfully = false;
-          if (navigator.share && navigator.canShare) {
-            try {
-              if (navigator.canShare({ files: [zipFile] })) {
-                await navigator.share({
-                  title: 'BirdVault Lifer Catalog Backup',
-                  text: 'Complete species catalog and photos.',
-                  files: [zipFile]
-                });
-                sharedSuccessfully = true;
-              }
-            } catch (shareErr) {
-              console.warn('Web Share API permission or gesture expiration error; falling back to direct download:', shareErr);
-            }
-          }
-
-          if (!sharedSuccessfully) {
-            const a = document.createElement('a');
-            a.href = zipBlobUrl;
-            a.download = zipFile.name;
-            a.style.display = 'none';
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            setTimeout(() => URL.revokeObjectURL(zipBlobUrl), 10000);
-          }
-        } catch (err) {
-          console.error('Vault export error:', err);
-          alert('Vault directory export failed: ' + (err.message || 'Permission or storage error'));
-        } finally {
-          setIsExportingOpfs(false);
-        }
-      };
-
       return (
         <div className="flex-1 flex flex-col overflow-hidden min-h-0 p-3 sm:p-4 md:p-6 gap-3 sm:gap-4 pb-[calc(5rem+env(safe-area-inset-bottom))] md:pb-4">
           <div className="flex-shrink-0 space-y-3">
@@ -4914,15 +4874,6 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                   />
                 </div>
 
-                <button
-                  onClick={handleExportVaultZip}
-                  disabled={isExportingOpfs || vaultEntries.length === 0}
-                  className="px-3 sm:px-3.5 py-1.5 sm:py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-semibold text-xs rounded-xl shadow-lg transition flex items-center space-x-1.5 flex-shrink-0 touch-manipulation"
-                >
-                  <Icon name="download" className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${isExportingOpfs ? 'animate-bounce' : ''}`} />
-                  <span className="hidden sm:inline">{isExportingOpfs ? 'Packaging...' : 'Export Vault (.zip)'}</span>
-                  <span className="sm:hidden">{isExportingOpfs ? '...' : 'Export'}</span>
-                </button>
               </div>
             </div>
 
@@ -5937,6 +5888,9 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
       const vaultNavigationUrlRef = useRef(null);
       const [showTokenModal, setShowTokenModal] = useState(false);
       const [showAuthModal, setShowAuthModal] = useState(false);
+      const [showHeaderMenu, setShowHeaderMenu] = useState(false);
+      const [isExportingVault, setIsExportingVault] = useState(false);
+      const headerMenuRef = useRef(null);
       const [userApiKey, setUserApiKey] = useState(() => localStorage.getItem('birdvault_gemini_token') || '');
       const [userLocation, setUserLocation] = useState('Auckland, New Zealand');
       const [currentPage, setCurrentPage] = useState(1);
@@ -5945,6 +5899,62 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
         window.birdvault_open_auth_modal = () => setShowAuthModal(true);
         return () => { delete window.birdvault_open_auth_modal; };
       }, []);
+
+      useEffect(() => {
+        if (!showHeaderMenu) return undefined;
+        const handleOutsidePointerDown = (event) => {
+          if (!headerMenuRef.current?.contains(event.target)) setShowHeaderMenu(false);
+        };
+        const handleKeyDown = (event) => {
+          if (event.key === 'Escape') setShowHeaderMenu(false);
+        };
+        document.addEventListener('pointerdown', handleOutsidePointerDown);
+        document.addEventListener('keydown', handleKeyDown);
+        return () => {
+          document.removeEventListener('pointerdown', handleOutsidePointerDown);
+          document.removeEventListener('keydown', handleKeyDown);
+        };
+      }, [showHeaderMenu]);
+
+      const handleExportVaultZip = async () => {
+        setIsExportingVault(true);
+        try {
+          const zipFile = await exportOpfsVaultToZip(vaultEntries);
+          const zipBlobUrl = URL.createObjectURL(zipFile);
+
+          let sharedSuccessfully = false;
+          if (navigator.share && navigator.canShare) {
+            try {
+              if (navigator.canShare({ files: [zipFile] })) {
+                await navigator.share({
+                  title: 'BirdVault Lifer Catalog Backup',
+                  text: 'Complete species catalog and photos.',
+                  files: [zipFile]
+                });
+                sharedSuccessfully = true;
+              }
+            } catch (shareErr) {
+              console.warn('Web Share API permission or gesture expiration error; falling back to direct download:', shareErr);
+            }
+          }
+
+          if (!sharedSuccessfully) {
+            const a = document.createElement('a');
+            a.href = zipBlobUrl;
+            a.download = zipFile.name;
+            a.style.display = 'none';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(() => URL.revokeObjectURL(zipBlobUrl), 10000);
+          }
+        } catch (err) {
+          console.error('Vault export error:', err);
+          alert('Vault directory export failed: ' + (err.message || 'Permission or storage error'));
+        } finally {
+          setIsExportingVault(false);
+        }
+      };
 
       const setActiveTab = (tab) => {
         setActiveTabState(tab);
@@ -6488,27 +6498,61 @@ const handleDeletePhotoInViewer = async (photoId) => {
               </div>
             </div>
 
-            <div className="flex items-center space-x-1.5">
+            <div className="relative" ref={headerMenuRef}>
               <button
-                onClick={() => setShowTokenModal(true)}
-                className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-semibold rounded-xl border border-slate-700 transition flex items-center space-x-1.5 touch-manipulation"
-                title="View Gemini AI API Quotas"
+                type="button"
+                onClick={() => setShowHeaderMenu(open => !open)}
+                aria-label="Open app actions"
+                aria-expanded={showHeaderMenu}
+                aria-haspopup="menu"
+                title="App actions"
+                className="min-w-10 min-h-10 p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl border border-slate-700 transition flex items-center justify-center touch-manipulation"
               >
-                <Icon name="bolt" className="w-3.5 h-3.5 text-emerald-400" />
-                <span className="hidden sm:inline">Quotas</span>
+                <Icon name="more" className="w-5 h-5" />
               </button>
-
-              <button
-                onClick={() => setShowAuthModal(true)}
-                className={`px-3 py-1.5 text-xs font-semibold rounded-xl border transition flex items-center space-x-1.5 touch-manipulation ${
-                  userApiKey 
-                    ? 'bg-emerald-950/60 text-emerald-300 border-emerald-500/40' 
-                    : 'bg-amber-950/60 text-amber-300 border-amber-500/40'
-                }`}
-              >
-                <Icon name="key" className="w-3.5 h-3.5" />
-                <span>{userApiKey ? 'API Key Set' : 'Set Gemini Key'}</span>
-              </button>
+              {showHeaderMenu && (
+                <div role="menu" className="absolute right-0 top-full mt-2 w-56 p-1.5 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl z-50">
+                  {activeTab === 'vault' && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setShowHeaderMenu(false);
+                        handleExportVaultZip();
+                      }}
+                      disabled={isExportingVault || vaultEntries.length === 0}
+                      className="w-full px-3 py-2.5 text-left text-sm text-slate-200 hover:bg-slate-800 rounded-lg flex items-center gap-2.5 disabled:opacity-50 touch-manipulation"
+                    >
+                      <Icon name="download" className={`w-4 h-4 text-emerald-400 ${isExportingVault ? 'animate-bounce' : ''}`} />
+                      <span>{isExportingVault ? 'Packaging vault...' : 'Export Vault (.zip)'}</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setShowHeaderMenu(false);
+                      setShowTokenModal(true);
+                    }}
+                    className="w-full px-3 py-2.5 text-left text-sm text-slate-200 hover:bg-slate-800 rounded-lg flex items-center gap-2.5 touch-manipulation"
+                  >
+                    <Icon name="bolt" className="w-4 h-4 text-emerald-400" />
+                    <span>API quotas</span>
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setShowHeaderMenu(false);
+                      setShowAuthModal(true);
+                    }}
+                    className="w-full px-3 py-2.5 text-left text-sm text-slate-200 hover:bg-slate-800 rounded-lg flex items-center gap-2.5 touch-manipulation"
+                  >
+                    <Icon name="key" className={`w-4 h-4 ${userApiKey ? 'text-emerald-400' : 'text-amber-400'}`} />
+                    <span>{userApiKey ? 'API key settings' : 'Set Gemini API key'}</span>
+                  </button>
+                </div>
+              )}
             </div>
           </header>
 

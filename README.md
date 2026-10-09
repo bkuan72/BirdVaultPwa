@@ -44,7 +44,7 @@ Designed specifically for wildlife photographers handling high-resolution DSLR a
 * **Multimodal Identification**: Transmits cropped ROI JPEG payloads to Google's `gemini-3-flash-preview` model along with localized spatial prompts.
 * **Geographic Grounding Context**: Incorporates device GPS or user-defined regional location text into the system prompt to restrict candidate species strictly to local avifauna.
 * **Diagnostic Heatmap Grounding**: Returns diagnostic visual feature points (eye contrast, beak structure, wing plumage) rendered as pulsing target overlays.
-* **Lifer List Vault**: Persistent master catalog recording species taxonomy, scientific names, sighting timestamps, cropped focus thumbnails, location context, and star ratings.
+* **Lifer List Vault**: Persistent master catalog recording species taxonomy, scientific names, sighting timestamps, cropped focus thumbnails, location context, and star ratings. Export the vault and open API key/quota settings from the header actions menu.
 
 ---
 
