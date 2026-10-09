@@ -3984,7 +3984,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
       );
     }
 
-    function SpeciesVaultCard({ entry, workspacePhotosMap, vaultImageUrls, isExpanded, onToggleExpand, onDeleteSpecies, onDeleteSighting, onSelectPhoto }) {
+    function SpeciesVaultCard({ entry, workspacePhotosMap, vaultImageUrls, ensureVaultImage, isExpanded, onToggleExpand, onDeleteSpecies, onDeleteSighting, onSelectPhoto }) {
       const [selectedSightingId, setSelectedSightingId] = useState(entry.sightings[0]?.id || null);
       const [timelinePage, setTimelinePage] = useState(1);
 
@@ -4010,20 +4010,52 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
 
       const livePhoto = workspacePhotosMap.get(fpId);
       const sightingKey = `${entry.category}_${entry.speciesName}_${activeSighting.id}`;
-      const hydratedUrl = vaultImageUrls[sightingKey];
+      const hydratedImage = vaultImageUrls[sightingKey];
+      const photoCropBox = activeSighting.cropBox ?? savedPhoto.cropBox ?? livePhoto?.cropBox ?? null;
+      const cropCacheKey = getCropThumbnailCacheKey({
+        ...savedPhoto,
+        fingerprintId: fpId || savedPhoto.fingerprintId,
+        cropBox: photoCropBox
+      });
+      const hydratedCropKeyMatches = hydratedImage?.cropThumbnailCacheKey === cropCacheKey;
+      const hasHydratedCrop = !!(
+        hydratedImage?.cropThumbnailUrl &&
+        hydratedCropKeyMatches
+      );
 
       const photoObj = useMemo(() => {
-        return livePhoto || (hydratedUrl ? { ...savedPhoto, thumbnailUrl: hydratedUrl, blobUrl: hydratedUrl, url: hydratedUrl } : savedPhoto);
-      }, [livePhoto, hydratedUrl, savedPhoto]);
+        if (livePhoto) return { ...livePhoto, cropBox: photoCropBox };
+        if (hydratedImage) {
+          return {
+            ...savedPhoto,
+            cropBox: photoCropBox,
+            blobUrl: hydratedImage.sourceUrl,
+            thumbnailUrl: hydratedImage.thumbnailUrl || hydratedImage.sourceUrl,
+            url: hydratedImage.sourceUrl || hydratedImage.thumbnailUrl
+          };
+        }
+        return { ...savedPhoto, cropBox: photoCropBox };
+      }, [livePhoto, hydratedImage, savedPhoto, photoCropBox]);
 
       let activeSrc = null;
-      if (livePhoto && (livePhoto.thumbnailUrl || livePhoto.blobUrl || livePhoto.url)) {
+      const liveCropCacheKey = getCropThumbnailCacheKey({ ...livePhoto, cropBox: photoCropBox });
+      if (livePhoto?.cropThumbnailUrl && livePhoto.cropThumbnailCacheKey === liveCropCacheKey) {
+        activeSrc = livePhoto.cropThumbnailUrl;
+      } else if (hasHydratedCrop) {
+        activeSrc = hydratedImage.cropThumbnailUrl;
+      } else if (livePhoto && (livePhoto.thumbnailUrl || livePhoto.blobUrl || livePhoto.url)) {
         activeSrc = livePhoto.thumbnailUrl || livePhoto.blobUrl || livePhoto.url;
-      } else if (hydratedUrl) {
-        activeSrc = hydratedUrl;
+      } else if (hydratedImage) {
+        activeSrc = hydratedImage.thumbnailUrl || hydratedImage.sourceUrl;
       } else if (savedPhoto && (savedPhoto.thumbnailUrl || savedPhoto.blobUrl || savedPhoto.url)) {
         activeSrc = savedPhoto.thumbnailUrl || savedPhoto.blobUrl || savedPhoto.url;
       }
+
+      useEffect(() => {
+        if (!activeSrc || (photoCropBox && !hydratedCropKeyMatches && livePhoto?.cropThumbnailCacheKey !== cropCacheKey)) {
+          ensureVaultImage(entry, activeSighting);
+        }
+      }, [activeSrc, entry, activeSighting, ensureVaultImage, photoCropBox, hydratedCropKeyMatches, livePhoto, cropCacheKey]);
 
       const hasActiveFile = !!(photoObj && (photoObj.file || activeSrc));
 
@@ -4041,7 +4073,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                 <CroppedImage
                   src={activeSrc}
                   alt={entry.speciesName}
-                  cropBox={photoObj.cropBox}
+                  cropBox={hasHydratedCrop || (livePhoto?.cropThumbnailUrl && livePhoto.cropThumbnailCacheKey === liveCropCacheKey) ? null : photoObj.cropBox}
                   photo={photoObj}
                   fitMode="contain"
                   className="w-full h-full"
@@ -4146,25 +4178,50 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                     const cameraExif = sPhoto.cameraExif;
                     const isSelected = s.id === activeSighting.id;
                     const sKey = `${entry.category}_${entry.speciesName}_${s.id}`;
-                    const sHydratedUrl = vaultImageUrls[sKey];
+                    const sHydratedImage = vaultImageUrls[sKey];
                     const sFpId = s.photoFingerprintId || sPhoto.fingerprintId || sPhoto.id;
                     const sLivePhoto = workspacePhotosMap.get(sFpId);
+                    const sCropBox = s.cropBox ?? sPhoto.cropBox ?? sLivePhoto?.cropBox ?? null;
+                    const sCropCacheKey = getCropThumbnailCacheKey({
+                      ...sPhoto,
+                      fingerprintId: sFpId || sPhoto.fingerprintId,
+                      cropBox: sCropBox
+                    });
+                    const sHydratedCropKeyMatches = sHydratedImage?.cropThumbnailCacheKey === sCropCacheKey;
+                    const sHasHydratedCrop = !!(
+                      sHydratedImage?.cropThumbnailUrl &&
+                      sHydratedCropKeyMatches
+                    );
 
                     let sSrc = null;
-                    if (sLivePhoto && (sLivePhoto.thumbnailUrl || sLivePhoto.blobUrl || sLivePhoto.url)) {
+                    const sLiveCropCacheKey = getCropThumbnailCacheKey({ ...sLivePhoto, cropBox: sCropBox });
+                    if (sLivePhoto?.cropThumbnailUrl && sLivePhoto.cropThumbnailCacheKey === sLiveCropCacheKey) {
+                      sSrc = sLivePhoto.cropThumbnailUrl;
+                    } else if (sHasHydratedCrop) {
+                      sSrc = sHydratedImage.cropThumbnailUrl;
+                    } else if (sLivePhoto && (sLivePhoto.thumbnailUrl || sLivePhoto.blobUrl || sLivePhoto.url)) {
                       sSrc = sLivePhoto.thumbnailUrl || sLivePhoto.blobUrl || sLivePhoto.url;
-                    } else if (sHydratedUrl) {
-                      sSrc = sHydratedUrl;
+                    } else if (sHydratedImage) {
+                      sSrc = sHydratedImage.thumbnailUrl || sHydratedImage.sourceUrl;
                     } else if (sPhoto && (sPhoto.thumbnailUrl || sPhoto.blobUrl || sPhoto.url)) {
                       sSrc = sPhoto.thumbnailUrl || sPhoto.blobUrl || sPhoto.url;
                     }
 
-                    const sPhotoObj = sLivePhoto || (sHydratedUrl ? { ...sPhoto, thumbnailUrl: sHydratedUrl, blobUrl: sHydratedUrl, url: sHydratedUrl } : sPhoto);
+                    const sPhotoObj = sLivePhoto ? { ...sLivePhoto, cropBox: sCropBox } : (sHydratedImage ? {
+                      ...sPhoto,
+                      cropBox: sCropBox,
+                      blobUrl: sHydratedImage.sourceUrl,
+                      thumbnailUrl: sHydratedImage.thumbnailUrl || sHydratedImage.sourceUrl,
+                      url: sHydratedImage.sourceUrl || sHydratedImage.thumbnailUrl
+                    } : { ...sPhoto, cropBox: sCropBox });
 
                     return (
                       <div 
                         key={s.id} 
-                        onClick={() => setSelectedSightingId(s.id)}
+                        onClick={() => {
+                          setSelectedSightingId(s.id);
+                          ensureVaultImage(entry, s);
+                        }}
                         className={`p-2 rounded-xl text-xs border cursor-pointer transition-all flex items-center space-x-2.5 touch-manipulation ${
                           isSelected 
                             ? 'bg-emerald-950/60 border-emerald-500/60 ring-1 ring-emerald-500/30' 
@@ -4176,7 +4233,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                             <CroppedImage
                               src={sSrc}
                               alt={sPhoto.name || 'Sighting'}
-                              cropBox={sPhotoObj.cropBox}
+                              cropBox={sHasHydratedCrop || (sLivePhoto?.cropThumbnailUrl && sLivePhoto.cropThumbnailCacheKey === sLiveCropCacheKey) ? null : sPhotoObj.cropBox}
                               photo={sPhotoObj}
                               fitMode="cover"
                               className="w-full h-full"
@@ -4276,6 +4333,11 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
       const [expandedSpecies, setExpandedSpecies] = useState(null);
       const [isExportingOpfs, setIsExportingOpfs] = useState(false);
       const [vaultImageUrls, setVaultImageUrls] = useState({});
+      const vaultImageUrlsRef = useRef(new Map());
+      const vaultImageObjectUrlsRef = useRef(new Set());
+      const vaultImageLoadsRef = useRef(new Map());
+      const vaultImageQueueRef = useRef({ active: 0, pending: [] });
+      const vaultImageMountedRef = useRef(true);
       const [vaultPage, setVaultPage] = useState(1);
       const vaultGridScrollRef = useRef(null);
 
@@ -4284,33 +4346,16 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
       }, [vaultPage]);
 
       useEffect(() => {
-        let isMounted = true;
-        const createdUrls = [];
-        async function hydrateMissingImages() {
-          for (const entry of vaultEntries) {
-            for (const s of (entry.sightings || [])) {
-              const opfsName = s.opfsFileName || s.photo?.opfsFileName || (s.photo ? `${s.photo.name}` : null);
-              const key = `${entry.category}_${entry.speciesName}_${s.id}`;
-              
-              if (opfsName && !vaultImageUrls[key] && (!s.photo?.thumbnailUrl || s.photo.thumbnailUrl.startsWith('blob:'))) {
-                const blob = await getOpfsSightingFileBlob(entry.category, entry.speciesName, opfsName);
-                if (blob && isMounted) {
-                  const freshUrl = URL.createObjectURL(blob);
-                  createdUrls.push(freshUrl);
-                  setVaultImageUrls(prev => ({ ...prev, [key]: freshUrl }));
-                }
-              }
-            }
-          }
-        }
-        hydrateMissingImages();
+        vaultImageMountedRef.current = true;
         return () => {
-          isMounted = false;
-          createdUrls.forEach(url => {
+          vaultImageMountedRef.current = false;
+          vaultImageObjectUrlsRef.current.forEach(url => {
             try { URL.revokeObjectURL(url); } catch(e){}
           });
+          vaultImageObjectUrlsRef.current.clear();
+          vaultImageUrlsRef.current.clear();
         };
-      }, [vaultEntries]);
+      }, []);
 
       const workspacePhotosMap = useMemo(() => {
         const map = new Map();
@@ -4320,6 +4365,106 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
         });
         return map;
       }, [photos]);
+
+      const ensureVaultImage = useCallback((entry, sighting) => {
+        if (!sighting?.id) return Promise.resolve(null);
+        const key = `${entry.category}_${entry.speciesName}_${sighting.id}`;
+        const savedPhoto = sighting.photo || {};
+        const fingerprintId = sighting.photoFingerprintId || savedPhoto.fingerprintId || savedPhoto.id;
+        const livePhoto = workspacePhotosMap.get(fingerprintId);
+        const cropBox = sighting.cropBox ?? savedPhoto.cropBox ?? livePhoto?.cropBox ?? null;
+        const thumbnailPhoto = {
+          ...savedPhoto,
+          ...livePhoto,
+          id: livePhoto?.id || savedPhoto.id || fingerprintId || sighting.id,
+          fingerprintId: fingerprintId || livePhoto?.fingerprintId,
+          cropBox
+        };
+        const cropCacheKey = getCropThumbnailCacheKey(thumbnailPhoto);
+        const liveCropCacheKey = getCropThumbnailCacheKey({ ...livePhoto, cropBox });
+        if (livePhoto && (!cropBox || (livePhoto.cropThumbnailUrl && livePhoto.cropThumbnailCacheKey === liveCropCacheKey))) {
+          return Promise.resolve(null);
+        }
+        const cachedUrl = vaultImageUrlsRef.current.get(key);
+        if (cachedUrl && cachedUrl.cropThumbnailCacheKey === cropCacheKey) {
+          return Promise.resolve(cachedUrl);
+        }
+        const existingLoad = vaultImageLoadsRef.current.get(key);
+        if (existingLoad) return existingLoad;
+
+        const opfsName = sighting.opfsFileName || savedPhoto.opfsFileName || savedPhoto.name;
+        if (!livePhoto?.file && !opfsName) return Promise.resolve(null);
+
+        const promise = new Promise(resolve => {
+          const queue = vaultImageQueueRef.current;
+          const runNext = () => {
+            while (queue.active < 3 && queue.pending.length) {
+              const task = queue.pending.shift();
+              queue.active++;
+              task().finally(() => {
+                queue.active--;
+                runNext();
+              });
+            }
+          };
+
+          queue.pending.push(async () => {
+            if (!vaultImageMountedRef.current) {
+              resolve(null);
+              vaultImageLoadsRef.current.delete(key);
+              return;
+            }
+            try {
+              const sourceBlob = livePhoto?.file || await getOpfsSightingFileBlob(entry.category || 'Other', entry.speciesName, opfsName);
+              if (!sourceBlob) {
+                console.warn(`Could not load vault image "${opfsName}" for ${entry.speciesName}.`);
+                resolve(null);
+                return;
+              }
+              if (!vaultImageMountedRef.current) {
+                resolve(null);
+                return;
+              }
+              const generated = await generateFastThumbnail({ ...thumbnailPhoto, file: sourceBlob }, 320);
+              if (!vaultImageMountedRef.current) {
+                [generated.thumbUrl, generated.cropThumbUrl].forEach(url => {
+                  if (url?.startsWith('blob:')) URL.revokeObjectURL(url);
+                });
+                resolve(null);
+                return;
+              }
+              const ownsSourceUrl = !livePhoto?.blobUrl && !livePhoto?.url;
+              const sourceUrl = livePhoto?.blobUrl || livePhoto?.url || URL.createObjectURL(sourceBlob);
+              const image = {
+                sourceUrl,
+                thumbnailUrl: generated.thumbUrl,
+                cropThumbnailUrl: generated.cropThumbUrl,
+                cropThumbnailCacheKey: generated.cropCacheKey ?? cropCacheKey
+              };
+              [ownsSourceUrl ? sourceUrl : null, generated.thumbUrl, generated.cropThumbUrl].forEach(url => {
+                if (url?.startsWith('blob:')) vaultImageObjectUrlsRef.current.add(url);
+              });
+              const previousImage = vaultImageUrlsRef.current.get(key);
+              if (previousImage) {
+                [previousImage.sourceUrl, previousImage.thumbnailUrl, previousImage.cropThumbnailUrl].forEach(url => {
+                  if (url?.startsWith('blob:')) vaultImageObjectUrlsRef.current.add(url);
+                });
+              }
+              vaultImageUrlsRef.current.set(key, image);
+              setVaultImageUrls(prev => ({ ...prev, [key]: image }));
+              resolve(image);
+            } catch (err) {
+              console.warn(`Could not load vault image "${opfsName}" for ${entry.speciesName}:`, err);
+              resolve(null);
+            } finally {
+              vaultImageLoadsRef.current.delete(key);
+            }
+          });
+          runNext();
+        });
+        vaultImageLoadsRef.current.set(key, promise);
+        return promise;
+      }, [workspacePhotosMap]);
 
       const categories = useMemo(() => {
         const cats = new Set(vaultEntries.map(e => e.category || 'Other'));
@@ -4460,6 +4605,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                       entry={entry}
                       workspacePhotosMap={workspacePhotosMap}
                       vaultImageUrls={vaultImageUrls}
+                      ensureVaultImage={ensureVaultImage}
                       isExpanded={expandedSpecies === entry.speciesName}
                       onToggleExpand={() => setExpandedSpecies(expandedSpecies === entry.speciesName ? null : entry.speciesName)}
                       onDeleteSpecies={onDeleteSpecies}

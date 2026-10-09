@@ -64,6 +64,7 @@ Responsible for:
 - species catalog storage
 - category and search filtering
 - sightings timeline
+- on-demand previews for visible species and selected sightings, with bounded OPFS reads
 - metadata display
 - ZIP export of the vault
 
