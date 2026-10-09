@@ -4499,6 +4499,10 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
           try {
             const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
             setUploading(true);
+            setSortBy('default');
+            onUpdatePhotos([]);
+            setSelectedIds(new Set());
+            setCurrentPage(1);
             const fpDb = getStoredFingerprintDb();
 
             const fileEntries = [];
@@ -4510,27 +4514,21 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
 
             setUploadProgress({ current: 0, total: fileEntries.length });
 
-            const rawPhotoList = [];
-            for (let i = 0; i < fileEntries.length; i++) {
-              try {
-                const file = await fileEntries[i].handle.getFile();
-                file.handle = fileEntries[i].handle;
-                rawPhotoList.push(file);
-              } catch (err) {}
-            }
-
-            rawPhotoList.sort((a, b) => (a.lastModified || 0) - (b.lastModified || 0));
-
-            onUpdatePhotos([]);
-            setSelectedIds(new Set());
-            setCurrentPage(1);
-
-            const total = rawPhotoList.length;
+            const total = fileEntries.length;
             const CHUNK_SIZE = 20;
 
-            let isFirstChunk = true;
             for (let i = 0; i < total; i += CHUNK_SIZE) {
-              const chunkFiles = rawPhotoList.slice(i, i + CHUNK_SIZE);
+              const chunkEntries = fileEntries.slice(i, i + CHUNK_SIZE);
+              const fileResults = await Promise.allSettled(chunkEntries.map(async entry => {
+                const file = await entry.handle.getFile();
+                file.handle = entry.handle;
+                return file;
+              }));
+              const chunkFiles = fileResults.flatMap((result, index) => {
+                if (result.status === 'fulfilled') return [result.value];
+                console.warn(`Could not read folder image "${chunkEntries[index].name}":`, result.reason);
+                return [];
+              });
               const chunkObjs = chunkFiles.map(file => {
                 const fpId = generateFingerprintId(file);
                 const savedMeta = fpDb[fpId] || {};
@@ -4564,19 +4562,13 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                 return photoObj;
               });
 
-              if (isFirstChunk) {
-                onUpdatePhotos(chunkObjs);
-                isFirstChunk = false;
-              } else {
-                onUpdatePhotos(prev => {
-                  const existingIds = new Set(prev.map(p => p.id));
-                  const filteredNew = chunkObjs.filter(p => !existingIds.has(p.id));
-                  return [...prev, ...filteredNew];
-                });
-              }
+              onUpdatePhotos(prev => {
+                const existingIds = new Set(prev.map(p => p.id));
+                const filteredNew = chunkObjs.filter(p => !existingIds.has(p.id));
+                return [...prev, ...filteredNew];
+              });
 
               setUploadProgress({ current: Math.min(i + CHUNK_SIZE, total), total });
-              await new Promise(r => setTimeout(r, 10));
             }
 
             setUploading(false);
@@ -4605,7 +4597,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
         setSelectedIds(new Set());
         setCurrentPage(1);
 
-        files.sort((a, b) => (a.lastModified || 0) - (b.lastModified || 0));
+        setSortBy('default');
 
         setUploadProgress({ current: 0, total: files.length });
 
@@ -4831,6 +4823,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
         const pageEnd = Math.min(total, currentPage * pageSize);
         return processedPhotos.slice(pageStart, pageEnd);
       }, [processedPhotos, currentPage, pageSize]);
+      const bufferedPhotoIds = bufferedPhotos.map(photo => photo.id).join('|');
 
       useEffect(() => {
         if (isPreviewOpen) {
@@ -4915,7 +4908,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
           isMounted = false; 
           abortController.abort(); 
         };
-      }, [currentPage, processedPhotos.length, filterSharpness, sortBy, isPreviewOpen]);
+      }, [currentPage, bufferedPhotoIds, filterSharpness, sortBy, isPreviewOpen]);
 
       const isSelectionActive = selectedIds.size > 0;
       const unratedCount = photos.filter(p => p.sharpness === null && p.userStars === null).length;
@@ -5008,7 +5001,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                     onChange={(e) => setSortBy(e.target.value)}
                     className="bg-slate-950 border border-slate-800 text-slate-200 rounded-lg px-2 py-1 focus:outline-none focus:border-emerald-500 text-[10px] sm:text-xs touch-manipulation"
                   >
-                    <option value="default">Default Order (Date Ascending)</option>
+                    <option value="default">Folder order</option>
                     <option value="name">File Name</option>
                     <option value="date_asc">Captured Date (Oldest First)</option>
                     <option value="date_desc">Captured Date (Newest First)</option>

@@ -39,7 +39,8 @@ BirdVault Pro uses a single-page React app running in the browser. The runtime i
 ### 1. Culling workspace
 Responsible for:
 - file/folder selection
-- photo list state
+- photo list state in the order returned by the browser picker
+- incremental folder loading and visible-page thumbnail generation
 - filtering and sorting
 - selection and deletion
 - star ratings and focus score display
