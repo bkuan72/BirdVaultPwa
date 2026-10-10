@@ -13,6 +13,7 @@
 - Preserve the existing storage boundaries: localStorage for lightweight metadata and preferences, IndexedDB for binary cache, and OPFS for vault media where supported.
 - Handle browser API availability and failures explicitly. Avoid silently substituting success-shaped values when storage or image operations fail.
 - Keep changes focused, follow the existing style in `index.html`, and avoid unrelated refactors.
+- Treat both mobile and desktop as first-class targets for every code and UI design change. Implement responsive layouts and interactions for phone and PC screen sizes, and check both where feasible.
 - Never put API keys, credentials, or private photo data in source code, documentation, logs, or commits.
 
 ## Validation
