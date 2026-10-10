@@ -210,6 +210,7 @@
         db[fingerprintId] = {
           id: photo.id,
           fingerprintId,
+          relativePath: photo.relativePath,
           name: photo.name,
           size: photo.size,
           lastModified: photo.lastModified,
@@ -782,10 +783,17 @@
       };
     }
 
-    function generateFingerprintId(file) {
+    function generateFingerprintId(file, relativePath = '') {
       if (!file) return null;
       const cleanName = (file.name || 'unnamed').replace(/[^a-zA-Z0-9._-]/g, '_');
-      return `fp_${cleanName}_${file.size || 0}_${file.lastModified || 0}`;
+      const fileId = `fp_${cleanName}_${file.size || 0}_${file.lastModified || 0}`;
+      return relativePath.includes('/') ? `${fileId}_${encodeURIComponent(relativePath)}` : fileId;
+    }
+
+    function getFolderRelativePath(file, nativeRelativePath = '') {
+      if (nativeRelativePath) return nativeRelativePath;
+      const pathParts = (file?.webkitRelativePath || '').split('/').filter(Boolean);
+      return pathParts.length > 1 ? pathParts.slice(1).join('/') : '';
     }
 
     const OPFS_VAULT_ROOT = 'BirdVault_Lifer_Catalog';
@@ -6083,7 +6091,13 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
           if (photo.fileHandle && typeof photo.fileHandle.remove === 'function') {
             try {
               await photo.fileHandle.remove();
-            } catch (err) {}
+            } catch (err) {
+              console.warn(`Could not delete "${photo.name}" from its source folder:`, err);
+              alert(`Could not delete "${photo.name}" from its source folder. The photo remains in the culling list.`);
+              return;
+            }
+          } else {
+            alert(`"${photo.name}" will be removed from the culling list, but this browser cannot delete the source file without writable folder access.`);
           }
           try { if (photo.blobUrl) URL.revokeObjectURL(photo.blobUrl); } catch (err) {}
           try { if (photo.thumbnailUrl) URL.revokeObjectURL(photo.thumbnailUrl); } catch (err) {}
@@ -6106,23 +6120,38 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
 
         if (!isSandboxedIframe && 'showDirectoryPicker' in window) {
           abortUploadRef.current = false;
+          let directoryOpened = false;
+          let importedFileCount = 0;
+          let failedFileCount = 0;
           try {
             const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+            directoryOpened = true;
             if (abortUploadRef.current) return;
             setUploading(true);
+            setFilterSharpness('all');
             setSortBy('default');
+
+            const fileEntries = [];
+            const collectImageEntries = async (directoryHandle, parentPath = '') => {
+              for await (const [name, handle] of directoryHandle.entries()) {
+                if (abortUploadRef.current) return;
+                const relativePath = parentPath ? `${parentPath}/${name}` : name;
+                if (handle.kind === 'file' && /\.(jpe?g|png|webp|cr2|nef|arw|dng)$/i.test(name)) {
+                  fileEntries.push({ name, handle, relativePath });
+                } else if (handle.kind === 'directory') {
+                  await collectImageEntries(handle, relativePath);
+                }
+              }
+            };
+            await collectImageEntries(dirHandle);
+            if (abortUploadRef.current) {
+              setUploading(false);
+              return;
+            }
             onUpdatePhotos([]);
             setSelectedIds(new Set());
             setCurrentPage(1);
             const fpDb = getStoredFingerprintDb();
-
-            const fileEntries = [];
-            for await (const [name, handle] of dirHandle.entries()) {
-              if (abortUploadRef.current) break;
-              if (handle.kind === 'file' && /\.(jpe?g|png|webp|cr2|nef|arw|dng)$/i.test(name)) {
-                fileEntries.push({ name, handle });
-              }
-            }
 
             setUploadProgress({ current: 0, total: fileEntries.length });
 
@@ -6135,16 +6164,19 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
               const fileResults = await Promise.allSettled(chunkEntries.map(async entry => {
                 const file = await entry.handle.getFile();
                 file.handle = entry.handle;
+                file.relativePath = entry.relativePath;
                 return file;
               }));
               if (abortUploadRef.current) break;
+              failedFileCount += fileResults.filter(result => result.status === 'rejected').length;
               const chunkFiles = fileResults.flatMap((result, index) => {
                 if (result.status === 'fulfilled') return [result.value];
                 console.warn(`Could not read folder image "${chunkEntries[index].name}":`, result.reason);
                 return [];
               });
               const chunkObjs = chunkFiles.map(file => {
-                const fpId = generateFingerprintId(file);
+                const relativePath = getFolderRelativePath(file, file.relativePath || '');
+                const fpId = generateFingerprintId(file, relativePath);
                 const savedMeta = fpDb[fpId] || {};
                 const cameraExif = savedMeta.cameraExif || null;
                 const photoObj = {
@@ -6153,6 +6185,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                   file: file,
                   fileHandle: file.handle || null,
                   sourceDirectoryHandle: dirHandle,
+                  relativePath,
                   name: file.name,
                   size: file.size,
                   lastModified: file.lastModified,
@@ -6183,14 +6216,28 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                 const filteredNew = chunkObjs.filter(p => !existingIds.has(p.id));
                 return [...prev, ...filteredNew];
               });
+              importedFileCount += chunkFiles.length;
 
               setUploadProgress({ current: Math.min(i + CHUNK_SIZE, total), total });
             }
 
             setUploading(false);
+            if (failedFileCount) {
+              alert(`Loaded ${importedFileCount} photo(s), but could not read ${failedFileCount} file(s). Check the browser console for details.`);
+            }
             return;
           } catch (err) {
-            if (err.name === 'AbortError') return;
+            if (err.name === 'AbortError') {
+              setUploading(false);
+              return;
+            }
+            if (directoryOpened) {
+              console.error('Folder import error:', err);
+              setUploading(false);
+              alert(`Folder import stopped after loading ${importedFileCount} photo(s): ${err.message || 'Could not read the selected folder.'}`);
+              return;
+            }
+            console.warn('Native folder picker unavailable; using the browser folder picker instead:', err);
           }
         }
 
@@ -6213,6 +6260,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
         setSelectedIds(new Set());
         setCurrentPage(1);
 
+        setFilterSharpness('all');
         setSortBy('default');
 
         setUploadProgress({ current: 0, total: files.length });
@@ -6226,7 +6274,8 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
           if (abortUploadRef.current) break;
           const chunkFiles = files.slice(i, i + CHUNK_SIZE);
           const chunkObjs = chunkFiles.map(file => {
-            const fpId = generateFingerprintId(file);
+            const relativePath = getFolderRelativePath(file);
+            const fpId = generateFingerprintId(file, relativePath);
             const savedMeta = fpDb[fpId] || {};
             const cameraExif = savedMeta.cameraExif || null;
             const photoObj = {
@@ -6234,6 +6283,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
               fingerprintId: fpId,
               file: file,
               fileHandle: file.handle || null,
+              relativePath,
               name: file.name,
               size: file.size,
               lastModified: file.lastModified,
@@ -6352,37 +6402,47 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
 
       const confirmAndDeleteFiltered = async () => {
         setShowDeleteConfirmModal(false);
+        const selectedDelete = selectedIds.size > 0;
+        const photosToDelete = selectedDelete
+          ? photos.filter(photo => selectedIds.has(photo.id))
+          : processedPhotos;
+        if (!photosToDelete.length) return;
 
-        if (selectedIds.size > 0) {
-          const toDelete = photos.filter(p => selectedIds.has(p.id));
-          for (const photo of toDelete) {
-            if (photo.fileHandle && typeof photo.fileHandle.remove === 'function') {
-              try { await photo.fileHandle.remove(); } catch (e) {}
-            }
-            try { if (photo.blobUrl) URL.revokeObjectURL(photo.blobUrl); } catch (e) {}
-            try { if (photo.thumbnailUrl) URL.revokeObjectURL(photo.thumbnailUrl); } catch (e) {}
-            try { if (photo.cropThumbnailUrl) URL.revokeObjectURL(photo.cropThumbnailUrl); } catch (e) {}
-            deleteFingerprintMetadata(photo.fingerprintId || photo.id);
-          }
-          onUpdatePhotos(prev => prev.filter(p => !selectedIds.has(p.id)));
-          setSelectedIds(new Set());
-        } else {
-          if (!processedPhotos.length) return;
-          const idsToRemove = new Set(processedPhotos.map(p => p.id));
-          
-          for (const photo of processedPhotos) {
-            if (photo.fileHandle && typeof photo.fileHandle.remove === 'function') {
-              try { await photo.fileHandle.remove(); } catch (e) {}
-            }
-            try { if (photo.blobUrl) URL.revokeObjectURL(photo.blobUrl); } catch (e) {}
-            try { if (photo.thumbnailUrl) URL.revokeObjectURL(photo.thumbnailUrl); } catch (e) {}
-            try { if (photo.cropThumbnailUrl) URL.revokeObjectURL(photo.cropThumbnailUrl); } catch (e) {}
-            deleteFingerprintMetadata(photo.fingerprintId || photo.id);
-          }
+        const removedIds = new Set();
+        const failedDeletions = [];
+        let listOnlyRemovals = 0;
 
-          onUpdatePhotos(prev => prev.filter(p => !idsToRemove.has(p.id)));
+        for (const photo of photosToDelete) {
+          if (photo.fileHandle && typeof photo.fileHandle.remove === 'function') {
+            try {
+              await photo.fileHandle.remove();
+            } catch (err) {
+              console.warn(`Could not delete "${photo.name}" from its source folder:`, err);
+              failedDeletions.push(photo.name);
+              continue;
+            }
+          } else {
+            listOnlyRemovals++;
+          }
+          try { if (photo.blobUrl) URL.revokeObjectURL(photo.blobUrl); } catch (err) {}
+          try { if (photo.thumbnailUrl) URL.revokeObjectURL(photo.thumbnailUrl); } catch (err) {}
+          try { if (photo.cropThumbnailUrl) URL.revokeObjectURL(photo.cropThumbnailUrl); } catch (err) {}
+          deleteFingerprintMetadata(photo.fingerprintId || photo.id);
+          removedIds.add(photo.id);
         }
+
+        onUpdatePhotos(prev => prev.filter(photo => !removedIds.has(photo.id)));
+        setSelectedIds(prev => new Set([...prev].filter(id => !removedIds.has(id))));
         setCurrentPage(1);
+
+        const messages = [];
+        if (failedDeletions.length) {
+          messages.push(`Could not delete ${failedDeletions.length} source file(s); they remain in the culling list: ${failedDeletions.slice(0, 5).join(', ')}${failedDeletions.length > 5 ? ', …' : ''}.`);
+        }
+        if (listOnlyRemovals) {
+          messages.push(`${listOnlyRemovals} photo(s) were removed from the culling list only because this browser has no writable source-folder handle; the files remain on disk.`);
+        }
+        if (messages.length) alert(messages.join('\n'));
       };
 
       const handleExportFiltered = async () => {
@@ -6449,6 +6509,10 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
       };
 
       const totalPages = Math.ceil(processedPhotos.length / pageSize) || 1;
+
+      useEffect(() => {
+        if (currentPage > totalPages) setCurrentPage(totalPages);
+      }, [currentPage, totalPages, setCurrentPage]);
       
       const paginatedPhotos = useMemo(() => {
         const start = (currentPage - 1) * pageSize;
