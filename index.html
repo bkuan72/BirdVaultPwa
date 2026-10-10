@@ -3966,16 +3966,6 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
         let normX = loupeImgPos.xPct / 100;
         let normY = loupeImgPos.yPct / 100;
 
-        if (showCroppedPreview && cropBox && cropBox.width > 0 && cropBox.height > 0) {
-          const cX = cropBox.x || 0;
-          const cY = cropBox.y || 0;
-          const cW = cropBox.width || 100;
-          const cH = cropBox.height || 100;
-
-          normX = (cX + (normX * cW)) / 100;
-          normY = (cY + (normY * cH)) / 100;
-        }
-
         const srcX = normX * img.naturalWidth;
         const srcY = normY * img.naturalHeight;
 
@@ -3998,7 +3988,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
         ctx.stroke();
 
         ctx.restore();
-      }, [loupeImgPos, zoomLevel, loupeImgLoaded, showCroppedPreview, cropBox]);
+      }, [loupeImgPos, zoomLevel, loupeImgLoaded]);
 
       useEffect(() => {
         if (isLoupeActive) {
