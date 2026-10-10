@@ -6331,32 +6331,6 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
 
               <div ref={mobileActionsRef} className="relative flex items-center space-x-1.5 sm:space-x-2 py-0.5 w-full sm:w-auto">
                 <button
-                  onClick={() => setShowFilterBar(!showFilterBar)}
-                  className={`hidden sm:flex font-semibold text-[11px] sm:text-xs px-2.5 sm:px-3.5 py-2 sm:py-2.5 rounded-xl border transition items-center space-x-1 sm:space-x-1.5 flex-1 sm:flex-none justify-center touch-manipulation ${
-                    showFilterBar || filterSharpness !== 'all' 
-                      ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' 
-                      : 'bg-slate-800 text-slate-300 border-slate-700 hover:text-white'
-                  }`}
-                  aria-label="Filter and sort photos"
-                >
-                  <Icon name="filter" className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-400" />
-                  <span className="hidden sm:inline">Filter / Sort</span>
-                  <span className="sm:hidden">Filter</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleSelectAll}
-                  disabled={!processedPhotos.length}
-                  aria-label={canDeselectAll ? "Deselect all photos" : `Select all ${processedPhotos.length} photos`}
-                  className="hidden sm:flex bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 font-semibold text-[11px] sm:text-xs px-2.5 sm:px-3.5 py-2 sm:py-2.5 rounded-xl border border-slate-700 transition items-center justify-center space-x-1 sm:space-x-1.5 flex-1 sm:flex-none touch-manipulation whitespace-nowrap"
-                >
-                  <Icon name="check" className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-400" />
-                  <span className="hidden sm:inline">{canDeselectAll ? 'Deselect All' : `Select All (${processedPhotos.length})`}</span>
-                  <span className="sm:hidden">{canDeselectAll ? 'Deselect' : `Select (${processedPhotos.length})`}</span>
-                </button>
-
-                <button
                   onClick={handleOpenFolderPicker}
                   className="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-[11px] sm:text-xs px-2.5 sm:px-3.5 py-2 sm:py-2.5 rounded-xl shadow-lg transition flex items-center justify-center space-x-1 sm:space-x-1.5 active:scale-95 touch-manipulation flex-1 sm:flex-none"
                   aria-label="Open photo folder"
@@ -6364,18 +6338,6 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                   <Icon name="upload" className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                   <span className="hidden sm:inline">Open Folder</span>
                   <span className="sm:hidden">Folder</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={handleCloseFolder}
-                  disabled={!photos.length && !uploading && !rating}
-                  title="Close folder and clear the culling list; source files and saved ratings are kept"
-                  aria-label="Close folder and clear culling list"
-                  className="hidden sm:flex bg-slate-800 hover:bg-red-950 disabled:opacity-50 disabled:cursor-not-allowed text-slate-300 hover:text-red-200 font-semibold text-[11px] sm:text-xs px-2.5 sm:px-3.5 py-2 sm:py-2.5 rounded-xl border border-slate-700 hover:border-red-800 transition items-center justify-center space-x-1 sm:space-x-1.5 flex-1 sm:flex-none touch-manipulation whitespace-nowrap"
-                >
-                  <Icon name="x" className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-                  <span className="hidden sm:inline">Close Folder</span>
-                  <span className="sm:hidden">Close</span>
                 </button>
                 <input
                   ref={folderInputRef}
@@ -6400,27 +6362,31 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                   disabled={rating || unratedCount === 0}
                   title="Rate focus on this device; this does not call Gemini or use API quota"
                   className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-[11px] sm:text-xs px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl shadow-lg transition flex items-center justify-center space-x-1.5 active:scale-95 touch-manipulation flex-1 sm:flex-none"
-                  aria-label={`Cull blur: rate ${unratedCount} unrated photos locally for free`}
+                  aria-label={`Rate ${unratedCount} unrated photos locally`}
                 >
                   <Icon name="sparkles" className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-200" />
-                  <span className="hidden sm:inline">Cull Blur · Free ({unratedCount})</span>
-                  <span className="sm:hidden">Cull · Free ({unratedCount})</span>
+                  <span>Rate</span>
+                  <span className="rounded-full bg-emerald-800/70 px-1.5 py-0.5 text-[10px] leading-none">{unratedCount}</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setShowMobileActions(open => !open)}
                   aria-expanded={showMobileActions}
-                  aria-controls="culling-mobile-actions"
+                  aria-controls="culling-workspace-actions"
                   aria-label={showMobileActions ? "Close workspace actions" : "More workspace actions"}
-                  className="sm:hidden flex-shrink-0 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-[11px] px-3 py-2.5 rounded-xl border border-slate-700 transition flex items-center justify-center space-x-1 touch-manipulation"
+                  className={`flex-shrink-0 font-semibold text-[11px] sm:text-xs px-3 sm:px-4 py-2.5 rounded-xl border transition flex items-center justify-center space-x-1.5 touch-manipulation ${
+                    showMobileActions || showFilterBar || filterSharpness !== 'all'
+                      ? 'bg-emerald-500/20 text-emerald-200 border-emerald-500/40'
+                      : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
+                  }`}
                 >
                   <Icon name="more" className="w-4 h-4" />
                   <span>More</span>
                 </button>
                 {showMobileActions && (
                   <div
-                    id="culling-mobile-actions"
-                    className="absolute top-full right-0 z-50 mt-2 w-56 rounded-xl border border-slate-700 bg-slate-900 p-1.5 shadow-2xl sm:hidden"
+                    id="culling-workspace-actions"
+                    className="absolute top-full right-0 z-50 mt-2 w-60 max-w-[calc(100vw-2rem)] rounded-xl border border-slate-700 bg-slate-900 p-1.5 shadow-2xl"
                   >
                     <button
                       type="button"
@@ -6429,7 +6395,9 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                         setShowMobileActions(false);
                       }}
                       aria-pressed={showFilterBar || filterSharpness !== 'all'}
-                      className="w-full flex items-center space-x-2 rounded-lg px-3 py-3 text-left text-xs font-semibold text-slate-200 hover:bg-slate-800 touch-manipulation"
+                      className={`w-full flex items-center space-x-2 rounded-lg px-3 py-3 text-left text-xs font-semibold touch-manipulation ${
+                        showFilterBar || filterSharpness !== 'all' ? 'bg-emerald-950/50 text-emerald-200' : 'text-slate-200 hover:bg-slate-800'
+                      }`}
                     >
                       <Icon name="filter" className="w-4 h-4 text-emerald-400" />
                       <span>Filter / Sort</span>
@@ -6441,6 +6409,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                         setShowMobileActions(false);
                       }}
                       disabled={!processedPhotos.length}
+                      aria-label={canDeselectAll ? 'Deselect all photos' : `Select all ${processedPhotos.length} photos`}
                       className="w-full flex items-center space-x-2 rounded-lg px-3 py-3 text-left text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:opacity-50 touch-manipulation"
                     >
                       <Icon name="check" className="w-4 h-4 text-emerald-400" />
@@ -6453,6 +6422,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                         handleCloseFolder();
                       }}
                       disabled={!photos.length && !uploading && !rating}
+                      title="Clear the culling list without deleting source files or saved ratings"
                       className="w-full flex items-center space-x-2 rounded-lg px-3 py-3 text-left text-xs font-semibold text-rose-300 hover:bg-rose-950/60 disabled:opacity-50 touch-manipulation"
                     >
                       <Icon name="x" className="w-4 h-4" />
