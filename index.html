@@ -222,7 +222,9 @@
           versions: photo.versions ? photo.versions.map(v => ({...v, blobUrl: null, thumbnailUrl: null})) : undefined
         };
         localStorage.setItem('birdvault_fingerprints_v1', JSON.stringify(db));
-      } catch (e) {}
+      } catch (e) {
+        console.warn(`Could not save photo metadata for "${photo.name || photo.fingerprintId}":`, e);
+      }
     }
 
     function deleteFingerprintMetadata(fingerprintId) {
@@ -5242,12 +5244,12 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                 <div className="space-y-1.5 max-h-60 overflow-y-auto pr-1">
                   {paginatedSightings.map(s => {
                     const sPhoto = s.photo || {};
-                    const cameraExif = sPhoto.cameraExif;
                     const isSelected = s.id === activeSighting.id;
                     const sKey = `${entry.category}_${entry.speciesName}_${s.id}`;
                     const sHydratedImage = vaultImageUrls[sKey];
                     const sFpId = s.photoFingerprintId || sPhoto.fingerprintId || sPhoto.id;
                     const sLivePhoto = workspacePhotosMap.get(sFpId);
+                    const cameraExif = sPhoto.cameraExif || sLivePhoto?.cameraExif;
                     const sCropBox = s.cropBox ?? sPhoto.cropBox ?? sLivePhoto?.cropBox ?? null;
                     const sCropCacheKey = getCropThumbnailCacheKey({
                       ...sPhoto,
@@ -5731,9 +5733,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
       };
 
       const handleSelectAll = () => {
-        const allProcessedPhotosSelected = processedPhotos.length > 0 &&
-          processedPhotos.every(photo => selectedIds.has(photo.id));
-        if (allProcessedPhotosSelected) {
+        if (selectedIds.size > 1) {
           setSelectedIds(new Set());
         } else {
           setSelectedIds(new Set(processedPhotos.map(p => p.id)));
@@ -5802,9 +5802,10 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                 console.warn(`Could not read folder image "${chunkEntries[index].name}":`, result.reason);
                 return [];
               });
-              const chunkObjs = chunkFiles.map(file => {
+              const chunkObjs = await Promise.all(chunkFiles.map(async file => {
                 const fpId = generateFingerprintId(file);
                 const savedMeta = fpDb[fpId] || {};
+                const cameraExif = savedMeta.cameraExif || await extractCameraExif(file);
                 const photoObj = {
                   id: fpId,
                   fingerprintId: fpId,
@@ -5823,7 +5824,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                   stars: savedMeta.stars !== undefined ? savedMeta.stars : null,
                   userStars: savedMeta.userStars !== undefined ? savedMeta.userStars : null,
                   focusSpot: savedMeta.focusSpot || savedMeta.cameraExif?.focusArea || null,
-                  cameraExif: savedMeta.cameraExif || null,
+                  cameraExif,
                   identification: savedMeta.identification || null,
                   cropBox: savedMeta.cropBox || null,
                   locationText: savedMeta.locationText || null,
@@ -5833,7 +5834,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                 };
                 saveFingerprintMetadata(photoObj);
                 return photoObj;
-              });
+              }));
 
               onUpdatePhotos(prev => {
                 const existingIds = new Set(prev.map(p => p.id));
@@ -5882,9 +5883,10 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
         for (let i = 0; i < total; i += CHUNK_SIZE) {
           if (abortUploadRef.current) break;
           const chunkFiles = files.slice(i, i + CHUNK_SIZE);
-          const chunkObjs = chunkFiles.map(file => {
+          const chunkObjs = await Promise.all(chunkFiles.map(async file => {
             const fpId = generateFingerprintId(file);
             const savedMeta = fpDb[fpId] || {};
+            const cameraExif = savedMeta.cameraExif || await extractCameraExif(file);
             const photoObj = {
               id: fpId,
               fingerprintId: fpId,
@@ -5902,17 +5904,17 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
               stars: savedMeta.stars !== undefined ? savedMeta.stars : null,
               userStars: savedMeta.userStars !== undefined ? savedMeta.userStars : null,
               focusSpot: savedMeta.focusSpot || savedMeta.cameraExif?.focusArea || null,
-              cameraExif: savedMeta.cameraExif || null,
+              cameraExif,
               identification: savedMeta.identification || null,
               cropBox: savedMeta.cropBox || null,
               locationText: savedMeta.locationText || null,
-            opfsFileName: savedMeta.opfsFileName || null,
-            activeVersionId: savedMeta.activeVersionId || null,
-            versions: savedMeta.versions || null
-          };
-          saveFingerprintMetadata(photoObj);
-          return photoObj;
-        });
+              opfsFileName: savedMeta.opfsFileName || null,
+              activeVersionId: savedMeta.activeVersionId || null,
+              versions: savedMeta.versions || null
+            };
+            saveFingerprintMetadata(photoObj);
+            return photoObj;
+          }));
 
         if (isFirstChunk) {
           onUpdatePhotos(chunkObjs);
@@ -6203,10 +6205,8 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
           abortController.abort(); 
         };
       }, [currentPage, bufferedThumbnailKey, filterSharpness, sortBy, isPreviewOpen]);
-
       const isSelectionActive = selectedIds.size > 0;
-      const allProcessedPhotosSelected = processedPhotos.length > 0 &&
-        processedPhotos.every(photo => selectedIds.has(photo.id));
+      const canDeselectAll = selectedIds.size > 1;
       const selectedPhotosForVideo = useMemo(
         () => photos.filter(photo => selectedIds.has(photo.id)),
         [photos, selectedIds]
@@ -6247,12 +6247,12 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                   type="button"
                   onClick={handleSelectAll}
                   disabled={!processedPhotos.length}
-                  aria-label={allProcessedPhotosSelected ? "Deselect all photos" : `Select all ${processedPhotos.length} photos`}
+                  aria-label={canDeselectAll ? "Deselect all photos" : `Select all ${processedPhotos.length} photos`}
                   className="bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 font-semibold text-[11px] sm:text-xs px-2.5 sm:px-3.5 py-2 sm:py-2.5 rounded-xl border border-slate-700 transition flex items-center justify-center space-x-1 sm:space-x-1.5 flex-1 sm:flex-none touch-manipulation whitespace-nowrap"
                 >
                   <Icon name="check" className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-400" />
-                  <span className="hidden sm:inline">{allProcessedPhotosSelected ? 'Deselect All' : `Select All (${processedPhotos.length})`}</span>
-                  <span className="sm:hidden">{allProcessedPhotosSelected ? 'Deselect' : `Select (${processedPhotos.length})`}</span>
+                  <span className="hidden sm:inline">{canDeselectAll ? 'Deselect All' : `Select All (${processedPhotos.length})`}</span>
+                  <span className="sm:hidden">{canDeselectAll ? 'Deselect' : `Select (${processedPhotos.length})`}</span>
                 </button>
 
                 <button
@@ -6641,6 +6641,61 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
       const [currentPage, setCurrentPage] = useState(1);
 
       useEffect(() => {
+        const photoMetadataByFingerprint = new Map();
+        photos.forEach(photo => {
+          const fingerprintId = photo.fingerprintId || photo.id;
+          if (fingerprintId) photoMetadataByFingerprint.set(fingerprintId, photo);
+        });
+        if (!photoMetadataByFingerprint.size) return;
+
+        let hasChanges = false;
+        const updatedEntries = vaultEntries.map(entry => {
+          let entryChanged = false;
+          const sightings = entry.sightings.map(sighting => {
+            const savedPhoto = sighting.photo || {};
+            const fingerprintId = sighting.photoFingerprintId || savedPhoto.fingerprintId || savedPhoto.id;
+            const workspacePhoto = photoMetadataByFingerprint.get(fingerprintId);
+            if (!workspacePhoto) return sighting;
+
+            const cameraExif = { ...(savedPhoto.cameraExif || {}) };
+            let metadataChanged = false;
+            Object.entries(workspacePhoto.cameraExif || {}).forEach(([key, value]) => {
+              if (value !== null && value !== undefined && cameraExif[key] !== value) {
+                cameraExif[key] = value;
+                metadataChanged = true;
+              }
+            });
+            const photoMetadata = { ...savedPhoto };
+            if (metadataChanged) {
+              photoMetadata.cameraExif = cameraExif;
+              photoMetadata.focusSpot = savedPhoto.focusSpot || cameraExif.focusArea || null;
+            }
+            ['stars', 'userStars', 'sharpness'].forEach(key => {
+              const value = workspacePhoto[key];
+              if (value !== null && value !== undefined && photoMetadata[key] !== value) {
+                photoMetadata[key] = value;
+                metadataChanged = true;
+              }
+            });
+            if (!metadataChanged) return sighting;
+
+            entryChanged = true;
+            hasChanges = true;
+            return {
+              ...sighting,
+              photo: photoMetadata
+            };
+          });
+          return entryChanged ? { ...entry, sightings } : entry;
+        });
+
+        if (hasChanges) {
+          setVaultEntries(updatedEntries);
+          saveVaultToStorage(updatedEntries);
+        }
+      }, [photos, vaultEntries]);
+
+      useEffect(() => {
         window.birdvault_open_auth_modal = () => setShowAuthModal(true);
         return () => { delete window.birdvault_open_auth_modal; };
       }, []);
@@ -6880,7 +6935,8 @@ const handleDeletePhotoInViewer = async (photoId) => {
         const idInfo = photoWithAi.identification;
         const { speciesName, scientificName, category } = idInfo;
 
-        const captureTimestamp = photoWithAi.cameraExif?.captureTimestamp || photoWithAi.lastModified || Date.now();
+        const cameraExif = photoWithAi.cameraExif || (photoWithAi.file ? await extractCameraExif(photoWithAi.file) : null);
+        const captureTimestamp = cameraExif?.captureTimestamp || photoWithAi.lastModified || Date.now();
         const fpId = photoWithAi.fingerprintId || photoWithAi.id;
         const sightingId = 'sighting_' + Math.random().toString(36).substring(2, 9);
         const fileName = `${new Date().toISOString().split('T')[0]}_${sightingId}_v1.jpg`;
@@ -6926,8 +6982,8 @@ const handleDeletePhotoInViewer = async (photoId) => {
           sharpness: photoWithAi.sharpness,
           stars: photoWithAi.stars,
           userStars: photoWithAi.userStars,
-          focusSpot: photoWithAi.focusSpot || photoWithAi.cameraExif?.focusArea,
-          cameraExif: photoWithAi.cameraExif,
+          focusSpot: photoWithAi.focusSpot || cameraExif?.focusArea,
+          cameraExif,
           identification: photoWithAi.identification,
           cropBox: photoWithAi.cropBox,
           locationText: photoWithAi.locationText,
@@ -7234,6 +7290,11 @@ const handleDeletePhotoInViewer = async (photoId) => {
                   : sighting.versions,
                 photo: {
                   ...sighting.photo,
+                  focusSpot: updatedPhoto.focusSpot || updatedPhoto.cameraExif?.focusArea || sighting.photo?.focusSpot || null,
+                  cameraExif: updatedPhoto.cameraExif || sighting.photo?.cameraExif || null,
+                  stars: updatedPhoto.stars ?? sighting.photo?.stars ?? null,
+                  userStars: updatedPhoto.userStars ?? sighting.photo?.userStars ?? null,
+                  sharpness: updatedPhoto.sharpness ?? sighting.photo?.sharpness ?? null,
                   cropBox: updatedPhoto.cropBox ?? null,
                   activeVersionId: updatedPhoto.activeVersionId || sighting.photo?.activeVersionId,
                   opfsFileName: updatedPhoto.opfsFileName || sighting.photo?.opfsFileName,
