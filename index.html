@@ -203,12 +203,13 @@
     }
 
     function saveFingerprintMetadata(photo) {
-      if (!photo || !photo.fingerprintId) return;
+      const fingerprintId = photo?.fingerprintId || photo?.id;
+      if (!photo || !fingerprintId) return;
       try {
         const db = getStoredFingerprintDb();
-        db[photo.fingerprintId] = {
+        db[fingerprintId] = {
           id: photo.id,
-          fingerprintId: photo.fingerprintId,
+          fingerprintId,
           name: photo.name,
           size: photo.size,
           lastModified: photo.lastModified,
@@ -2999,38 +3000,84 @@ Return STRICT JSON ONLY:
       );
     }
 
+    function getRegionalLocationLabel(address = {}, fallback = '') {
+      const region = address?.state || address?.province || address?.region || address?.state_district || address?.county;
+      const country = address?.country;
+      if (region && country && region.toLowerCase() !== country.toLowerCase()) return `${region}, ${country}`;
+      return region || country || fallback;
+    }
+
     function LocationAutocomplete({ value, onChange }) {
       const [suggestions, setSuggestions] = useState([]);
       const [isOpen, setIsOpen] = useState(false);
       const [gettingGps, setGettingGps] = useState(false);
+      const [locationMessage, setLocationMessage] = useState('');
+      const [searchQuery, setSearchQuery] = useState('');
       const inputRef = useRef(null);
 
-      const handleInputChange = async (e) => {
+      useEffect(() => {
+        if (searchQuery.trim().length < 3) {
+          setSuggestions([]);
+          return undefined;
+        }
+
+        const controller = new AbortController();
+        const timer = setTimeout(async () => {
+          try {
+            const params = new URLSearchParams({
+              format: 'jsonv2',
+              addressdetails: '1',
+              featuretype: 'state',
+              q: searchQuery.trim(),
+              limit: '5'
+            });
+            const res = await fetch(`https://nominatim.openstreetmap.org/search?${params}`, { signal: controller.signal });
+            if (!res.ok) throw new Error(`Regional search failed (${res.status}).`);
+            const data = await res.json();
+            if (!Array.isArray(data)) throw new Error('Regional search returned an unexpected response.');
+            const regionalSuggestions = data.map(item => ({
+              id: item.place_id,
+              label: getRegionalLocationLabel(item.address, item.name)
+            })).filter(item => item.label);
+            setSuggestions(regionalSuggestions);
+            setIsOpen(true);
+            setLocationMessage(regionalSuggestions.length ? '' : 'No regional matches found. You can still enter a location manually.');
+          } catch (err) {
+            if (err.name !== 'AbortError') {
+              console.warn('Regional location search error:', err);
+              setSuggestions([]);
+              setIsOpen(true);
+              setLocationMessage('Could not load region suggestions. You can still enter a location manually.');
+            }
+          }
+        }, 350);
+
+        return () => {
+          clearTimeout(timer);
+          controller.abort();
+        };
+      }, [searchQuery]);
+
+      const handleInputChange = (e) => {
         const val = e.target.value;
         onChange(val);
-        if (val.length > 2) {
-          try {
-            const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(val)}&limit=5`);
-            if (res.ok) {
-              const data = await res.json();
-              setSuggestions(data.map(item => item.display_name));
-              setIsOpen(true);
-            }
-          } catch (err) {}
-        } else {
-          setSuggestions([]);
-          setIsOpen(false);
-        }
+        setSearchQuery(val);
+        setLocationMessage('');
+        setIsOpen(val.trim().length >= 3);
       };
 
       const handleSelectSuggestion = (suggestion) => {
         onChange(suggestion);
+        setSearchQuery('');
+        setSuggestions([]);
+        setLocationMessage('');
         setIsOpen(false);
       };
 
       const handleDetectGPS = () => {
+        setLocationMessage('');
         if (!navigator.geolocation) {
-          onChange("GPS unavailable");
+          setLocationMessage('GPS is not available in this browser.');
           return;
         }
 
@@ -3039,22 +3086,35 @@ Return STRICT JSON ONLY:
           async (position) => {
             const { latitude, longitude } = position.coords;
             try {
-              const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}`);
-              if (res.ok) {
-                const data = await res.json();
-                const displayName = data.display_name || `${latitude.toFixed(4)}°, ${longitude.toFixed(4)}°`;
-                onChange(displayName);
-              } else {
-                onChange(`GPS: ${latitude.toFixed(4)}°, ${longitude.toFixed(4)}°`);
+              const params = new URLSearchParams({
+                format: 'jsonv2',
+                addressdetails: '1',
+                lat: String(latitude),
+                lon: String(longitude)
+              });
+              const res = await fetch(`https://nominatim.openstreetmap.org/reverse?${params}`);
+              if (!res.ok) throw new Error(`GPS region lookup failed (${res.status}).`);
+              const data = await res.json();
+              const region = getRegionalLocationLabel(data.address);
+              if (!region) {
+                setLocationMessage('GPS location found, but no region could be resolved. Enter a region manually.');
+                return;
               }
+              onChange(region);
+              setSearchQuery('');
+              setSuggestions([]);
+              setIsOpen(false);
+              setLocationMessage('');
             } catch (err) {
-              onChange(`GPS Location: ${latitude.toFixed(4)}°, ${longitude.toFixed(4)}°`);
+              console.warn('GPS region lookup error:', err);
+              setLocationMessage('Could not resolve your GPS position to a region. Enter a region manually.');
+            } finally {
+              setGettingGps(false);
             }
-            setGettingGps(false);
           },
           (error) => {
             console.warn('GPS Error:', error);
-            onChange("Auckland, New Zealand (Fallback)");
+            setLocationMessage(error.message ? `Could not detect GPS location: ${error.message}` : 'Could not detect GPS location. Check your location permission.');
             setGettingGps(false);
           },
           { enableHighAccuracy: true, timeout: 8000 }
@@ -3087,13 +3147,19 @@ Return STRICT JSON ONLY:
               onChange={handleInputChange}
               onFocus={() => setIsOpen(true)}
               onBlur={() => setTimeout(() => setIsOpen(false), 200)}
-              placeholder="Address or birding hotspot..."
+              placeholder="Region, state, province, or country..."
               className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500 pr-10"
             />
             {value && (
               <button
                 type="button"
-                onClick={() => onChange('')}
+                onClick={() => {
+                  onChange('');
+                  setSearchQuery('');
+                  setSuggestions([]);
+                  setLocationMessage('');
+                  setIsOpen(false);
+                }}
                 className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 p-2 touch-manipulation"
               >
                 <Icon name="x" className="w-3.5 h-3.5" />
@@ -3103,18 +3169,21 @@ Return STRICT JSON ONLY:
 
           {isOpen && suggestions.length > 0 && (
             <div className="absolute z-50 left-0 right-0 top-full mt-1 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl max-h-48 overflow-y-auto divide-y divide-slate-800/60">
-              {suggestions.map((sug, i) => (
-                <div
-                  key={i}
-                  onMouseDown={() => handleSelectSuggestion(sug)}
+              {suggestions.map((suggestion, i) => (
+                <button
+                  key={suggestion.id || i}
+                  type="button"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => handleSelectSuggestion(suggestion.label)}
                   className="px-3 py-2 text-xs text-slate-300 hover:bg-emerald-600/20 hover:text-emerald-200 cursor-pointer transition flex items-center space-x-2 touch-manipulation"
                 >
                   <Icon name="mapPin" className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
-                  <span className="truncate">{sug}</span>
-                </div>
+                  <span className="truncate">{suggestion.label}</span>
+                </button>
               ))}
             </div>
           )}
+          {locationMessage && <p role="status" className="text-[10px] text-amber-300">{locationMessage}</p>}
         </div>
       );
     }
@@ -3275,6 +3344,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
       
       const [zoomLevel, setZoomLevel] = useState(3.0);
       const [showMobileSidebar, setShowMobileSidebar] = useState(false);
+      const [showIdentificationDialog, setShowIdentificationDialog] = useState(false);
       const [showEnhancementPanel, setShowEnhancementPanel] = useState(false);
       const [showHeatmapOverlay, setShowHeatmapOverlay] = useState(true);
 
@@ -3653,13 +3723,15 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
             onPrevPhoto();
           } else if (e.key === 'ArrowRight' && hasNext && onNextPhoto) {
             onNextPhoto();
+          } else if (e.key === 'Escape' && showIdentificationDialog) {
+            setShowIdentificationDialog(false);
           } else if (e.key === 'Escape' && onClose) {
             onClose();
           }
         };
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-      }, [hasPrev, hasNext, onPrevPhoto, onNextPhoto, onClose]);
+      }, [hasPrev, hasNext, onPrevPhoto, onNextPhoto, onClose, showIdentificationDialog]);
 
       const activeBlobUrl = useMemo(() => {
         if (photo.blobUrl) return photo.blobUrl;
@@ -4071,7 +4143,6 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
 
         setAiResult(result);
         setIdentifying(false);
-        setShowMobileSidebar(true);
         
         let updatedFocusSpot = currentPhoto.focusSpot;
         const hasAiFocusScore = !result?.error && Number.isFinite(result?.focusScore) && result.focusScore >= 0 && result.focusScore <= 10;
@@ -4673,9 +4744,9 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
 
                   <button
                     type="button"
-                    onClick={handleRunAiIdentification}
+                    onClick={() => setShowIdentificationDialog(true)}
                     disabled={identifying || evaluatingFocus}
-                    aria-label={identifying ? 'Analyzing image' : evaluatingFocus ? 'Rating image' : 'Identify bird'}
+                    aria-label={identifying ? 'Analyzing image' : evaluatingFocus ? 'Rating image' : 'Open bird identification'}
                     title={identifying ? 'Analyzing image' : evaluatingFocus ? 'Rating image' : 'Identify bird'}
                     className="px-3 sm:px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-semibold text-xs rounded-xl shadow-lg transition flex items-center space-x-1.5 flex-shrink-0 touch-manipulation"
                   >
@@ -4759,6 +4830,47 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                 </div>
 
               </div>
+            </Accordion>
+
+            <Accordion
+              key={`identification-result-${aiResult ? 'available' : 'empty'}`}
+              title={aiResult?.speciesName || 'AI Identification Result'}
+              mobileTitle={aiResult?.speciesName || 'Identification'}
+              icon="sparkles"
+              defaultOpen={!!aiResult}
+              badge={aiResult && !aiResult.error ? (
+                <span className="text-[9px] font-bold bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded">
+                  {(aiResult.confidence * 100).toFixed(0)}%
+                </span>
+              ) : null}
+            >
+              {aiResult && !aiResult.error ? (
+                <div className="space-y-2 text-xs">
+                  <div>
+                    <h4 className="font-extrabold text-white">{aiResult.speciesName}</h4>
+                    <p className="text-[11px] text-slate-400 italic font-mono">{aiResult.scientificName}</p>
+                  </div>
+                  {aiResult.category && <p className="text-[10px] text-emerald-300">{aiResult.category}</p>}
+                  <p className="text-[11px] text-slate-300 leading-relaxed">{aiResult.description}</p>
+                  {aiResult.habitat && <p className="text-[10px] text-slate-400"><strong className="text-slate-300">Habitat:</strong> {aiResult.habitat}</p>}
+                  {aiResult.diet && <p className="text-[10px] text-slate-400"><strong className="text-slate-300">Diet & Foraging:</strong> {aiResult.diet}</p>}
+                  {aiResult.keyTraits && <p className="text-[10px] text-slate-400"><strong className="text-slate-300">Field Marks:</strong> {aiResult.keyTraits}</p>}
+                </div>
+              ) : aiResult?.error ? (
+                <div role="status" className="space-y-1 text-xs">
+                  <p className="font-bold text-red-400">{aiResult.error}</p>
+                  <p className="text-slate-300">{aiResult.message}</p>
+                </div>
+              ) : (
+                <p className="text-[11px] text-slate-400">Run AI identification from the preview to see the result here.</p>
+              )}
+              <button
+                type="button"
+                onClick={() => setShowIdentificationDialog(true)}
+                className="w-full mt-3 py-2 bg-slate-800 hover:bg-slate-700 text-emerald-300 font-semibold text-xs rounded-lg border border-slate-700 transition touch-manipulation"
+              >
+                {aiResult && !aiResult.error ? 'View Identification Details' : 'Identify Bird'}
+              </button>
             </Accordion>
 
             <Accordion
@@ -5032,102 +5144,6 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
               </div>
             </Accordion>
 
-            <Accordion 
-              title="AI Identification & Species Traits" 
-              mobileTitle="Identify"
-              icon="sparkles" 
-              defaultOpen={true}
-              badge={
-                aiResult && !aiResult.error ? (
-                  <span className="text-[9px] font-bold bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded">
-                    {(aiResult.confidence * 100).toFixed(0)}%
-                  </span>
-                ) : null
-              }
-            >
-              <div className="space-y-3">
-                <LocationAutocomplete
-                  value={locationInput}
-                  onChange={handleLocationChange}
-                />
-
-                {aiResult && aiResult.heatmapPoints && (
-                  <div className="flex items-center justify-between pt-1">
-                    <span className="text-[11px] font-medium text-slate-400">Heatmap Overlay:</span>
-                    <button
-                      type="button"
-                      onClick={() => setShowHeatmapOverlay(!showHeatmapOverlay)}
-                      className={`text-[10px] px-3 py-1.5 rounded-lg font-semibold transition touch-manipulation ${showHeatmapOverlay ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400'}`}
-                    >
-                      {showHeatmapOverlay ? 'Active' : 'Hidden'}
-                    </button>
-                  </div>
-                )}
-
-                {aiResult && !aiResult.error ? (
-                  <div className="space-y-2 bg-slate-900 border border-slate-800 p-3 rounded-xl">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-emerald-400">{aiResult.category}</span>
-                      <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded font-semibold">
-                        {(aiResult.confidence * 100).toFixed(0)}% Match
-                      </span>
-                    </div>
-                    <div>
-                      <h4 className="text-sm font-extrabold text-white">{aiResult.speciesName}</h4>
-                      <p className="text-[11px] text-slate-400 italic font-mono">{aiResult.scientificName}</p>
-                    </div>
-
-                    {aiResult.conservationStatus && (
-                      <div className="inline-block bg-emerald-950/80 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold px-2 py-0.5 rounded">
-                        Status: {aiResult.conservationStatus}
-                      </div>
-                    )}
-
-                    <p className="text-[11px] text-slate-300 leading-relaxed border-t border-slate-800/80 pt-2">
-                      {aiResult.description}
-                    </p>
-
-                    {aiResult.habitat && (
-                      <div className="text-[10px] text-slate-400 pt-1">
-                        <strong className="text-slate-300">Habitat:</strong> {aiResult.habitat}
-                      </div>
-                    )}
-
-                    {aiResult.diet && (
-                      <div className="text-[10px] text-slate-400 pt-0.5">
-                        <strong className="text-slate-300">Diet & Foraging:</strong> {aiResult.diet}
-                      </div>
-                    )}
-
-                    {aiResult.keyTraits && (
-                      <div className="text-[10px] text-slate-400 pt-0.5">
-                        <strong className="text-slate-300">Field Marks:</strong> {aiResult.keyTraits}
-                      </div>
-                    )}
-                  </div>
-                ) : aiResult && aiResult.error ? (
-                  <div className="space-y-2 bg-red-950/40 border border-red-500/40 p-3 rounded-xl text-xs">
-                    <div className="flex items-center space-x-1.5 text-red-400 font-bold">
-                      <Icon name="shield" className="w-4 h-4" />
-                      <span>{aiResult.error}</span>
-                    </div>
-                    <p className="text-slate-300 text-[11px] leading-relaxed">{aiResult.message}</p>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={handleRunAiIdentification}
-                    disabled={identifying}
-                    aria-label={identifying ? 'Identifying species' : 'Identify species with AI'}
-                    className="w-full py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow transition flex items-center justify-center space-x-1.5 touch-manipulation"
-                  >
-                    <Icon name="sparkles" className="w-3.5 h-3.5" />
-                    <span>{identifying ? <><span className="sm:hidden">Working...</span><span className="hidden sm:inline">Identifying species...</span></> : <><span className="sm:hidden">Identify</span><span className="hidden sm:inline">Run AI Species Identification</span></>}</span>
-                  </button>
-                )}
-              </div>
-            </Accordion>
-
             <Accordion title="Lifer List Vault Sync" mobileTitle="Vault" icon="feather" defaultOpen={!!aiResult}>
               <div className="space-y-2">
                 <p className="hidden sm:block text-[11px] text-slate-400 leading-relaxed">
@@ -5150,6 +5166,107 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
               </div>
             </Accordion>
           </div>
+
+          {showIdentificationDialog && (
+            <div
+              className="fixed inset-0 z-[65] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6"
+              onClick={() => setShowIdentificationDialog(false)}
+            >
+              <div
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="bird-identification-title"
+                className="w-full max-w-2xl max-h-[90vh] overflow-y-auto bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl p-3 sm:p-5"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <div className="flex items-center justify-between gap-3 mb-3">
+                  <div>
+                    <h2 id="bird-identification-title" className="text-base sm:text-lg font-bold text-white">AI Bird Identification</h2>
+                    <p className="text-[11px] text-slate-400">Choose a region to focus the species identification.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowIdentificationDialog(false)}
+                    aria-label="Close bird identification dialog"
+                    className="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 touch-manipulation"
+                  >
+                    <Icon name="x" className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <Accordion
+                  title="AI Identification & Species Traits"
+                  icon="sparkles"
+                  defaultOpen={true}
+                  badge={aiResult && !aiResult.error ? (
+                    <span className="text-[9px] font-bold bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded">
+                      {(aiResult.confidence * 100).toFixed(0)}%
+                    </span>
+                  ) : null}
+                >
+                  <div className="space-y-3">
+                    <LocationAutocomplete value={locationInput} onChange={handleLocationChange} />
+
+                    {aiResult && aiResult.heatmapPoints && (
+                      <div className="flex items-center justify-between pt-1">
+                        <span className="text-[11px] font-medium text-slate-400">Heatmap Overlay:</span>
+                        <button
+                          type="button"
+                          onClick={() => setShowHeatmapOverlay(!showHeatmapOverlay)}
+                          className={`text-[10px] px-3 py-1.5 rounded-lg font-semibold transition touch-manipulation ${showHeatmapOverlay ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400'}`}
+                        >
+                          {showHeatmapOverlay ? 'Active' : 'Hidden'}
+                        </button>
+                      </div>
+                    )}
+
+                    {aiResult && !aiResult.error ? (
+                      <div className="space-y-2 bg-slate-900 border border-slate-800 p-3 rounded-xl">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-emerald-400">{aiResult.category}</span>
+                          <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded font-semibold">
+                            {(aiResult.confidence * 100).toFixed(0)}% Match
+                          </span>
+                        </div>
+                        <div>
+                          <h4 className="text-sm font-extrabold text-white">{aiResult.speciesName}</h4>
+                          <p className="text-[11px] text-slate-400 italic font-mono">{aiResult.scientificName}</p>
+                        </div>
+                        {aiResult.conservationStatus && (
+                          <div className="inline-block bg-emerald-950/80 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold px-2 py-0.5 rounded">
+                            Status: {aiResult.conservationStatus}
+                          </div>
+                        )}
+                        <p className="text-[11px] text-slate-300 leading-relaxed border-t border-slate-800/80 pt-2">{aiResult.description}</p>
+                        {aiResult.habitat && <div className="text-[10px] text-slate-400 pt-1"><strong className="text-slate-300">Habitat:</strong> {aiResult.habitat}</div>}
+                        {aiResult.diet && <div className="text-[10px] text-slate-400 pt-0.5"><strong className="text-slate-300">Diet & Foraging:</strong> {aiResult.diet}</div>}
+                        {aiResult.keyTraits && <div className="text-[10px] text-slate-400 pt-0.5"><strong className="text-slate-300">Field Marks:</strong> {aiResult.keyTraits}</div>}
+                      </div>
+                    ) : aiResult && aiResult.error ? (
+                      <div className="space-y-2 bg-red-950/40 border border-red-500/40 p-3 rounded-xl text-xs">
+                        <div className="flex items-center space-x-1.5 text-red-400 font-bold">
+                          <Icon name="shield" className="w-4 h-4" />
+                          <span>{aiResult.error}</span>
+                        </div>
+                        <p className="text-slate-300 text-[11px] leading-relaxed">{aiResult.message}</p>
+                      </div>
+                    ) : null}
+
+                    <button
+                      type="button"
+                      onClick={handleRunAiIdentification}
+                      disabled={identifying || evaluatingFocus}
+                      aria-label={identifying ? 'Identifying species' : evaluatingFocus ? 'Rating image' : 'Identify species with AI'}
+                      className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow transition flex items-center justify-center space-x-1.5 touch-manipulation"
+                    >
+                      <Icon name="sparkles" className={`w-3.5 h-3.5 ${identifying || evaluatingFocus ? 'animate-spin' : ''}`} />
+                      <span>{identifying ? 'Identifying species...' : evaluatingFocus ? 'Rating image...' : aiResult ? 'Identify Again' : 'Identify Bird'}</span>
+                    </button>
+                  </div>
+                </Accordion>
+              </div>
+            </div>
+          )}
 
           {showCongratModal && congratData && (
             <div className="fixed inset-0 z-[70] bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 animate-fadeIn">

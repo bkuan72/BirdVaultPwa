@@ -41,7 +41,7 @@ Designed specifically for wildlife photographers handling high-resolution DSLR a
 
 ### 5. Multimodal Gemini Vision AI Identification & Heatmap
 * **Multimodal Identification**: Transmits cropped ROI JPEG payloads to Google's `gemini-3-flash-preview` model along with localized spatial prompts.
-* **Geographic Grounding Context**: Incorporates device GPS or user-defined regional location text into the system prompt to restrict candidate species strictly to local avifauna.
+* **Regional AI Identification Dialog**: Open species identification from the photo preview's ID button, choose a birding region with region-first autocomplete or GPS reverse geocoding, then review results and heatmap controls in the dialog. GPS and suggestions prefer state/province/administrative-region labels over street addresses.
 * **Diagnostic Heatmap Grounding**: Returns diagnostic visual feature points (eye contrast, beak structure, wing plumage) rendered as pulsing target overlays.
 * **Focus Rating in the Same Request**: The identification response also rates visible bird sharpness; selecting generic batch rating never calls Gemini.
 * **Lifer List Vault**: Persistent master catalog recording species taxonomy, scientific names, sighting timestamps, cropped focus thumbnails, location context, and star ratings. Export complete vault backups, including all referenced image versions, and merge a backup into the current vault from the header actions menu. API key and quota settings are also in that menu.

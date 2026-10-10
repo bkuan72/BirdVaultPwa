@@ -133,14 +133,14 @@ To manage client-side API requests against free tier restrictions, BirdVault Pro
 
 Location context significantly improves species identification accuracy by constraining candidate taxonomy to region-specific avifauna:
 
-1. **HTML5 Geolocation Integration**: Captures precise latitude and longitude coordinates from device hardware.
-2. **OpenStreetMap Nominatim Reverse Geocoding**: Fetches human-readable address string (e.g., *"Auckland, New Zealand"*) asynchronously:
+1. **HTML5 Geolocation Integration**: Captures the device position and reverse-geocodes it to a broad administrative region instead of retaining a street address.
+2. **OpenStreetMap Nominatim Reverse Geocoding**: Prioritizes the state, province, or region and country (for example, *"Auckland, New Zealand"*) asynchronously:
 
 $$
-\text{GET } \texttt{https://nominatim.openstreetmap.org/reverse?lat=\{lat\}\&lon=\{lon\}\&format=json}
+\text{GET } \texttt{https://nominatim.openstreetmap.org/reverse?lat=\{lat\}\&lon=\{lon\}\&format=jsonv2\&addressdetails=1}
 $$
 
-3. **Global Hotspot Autocomplete**: Pre-populated with world-famous birding reserves (e.g., *Monteverde Cloud Forest, Costa Rica*; *Kruger National Park, South Africa*; *Fiordland National Park, New Zealand*).
+3. **Region-First Autocomplete**: Searches Nominatim administrative states (`featuretype=state`) so species grounding favors a state, province, or region rather than a street-address match. Users can also enter a location manually.
 4. **Prompt Injection**: Injects geographical constraints into the Gemini Vision API prompt to filter out non-native confusion species.
 
 ---
