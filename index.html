@@ -4049,11 +4049,12 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                 onPointerDown={event => event.stopPropagation()}
                 onClick={event => {
                   event.stopPropagation();
-                  if (onDeletePhoto) onDeletePhoto(photo.id);
+                  if (!isVaultPreview && onDeletePhoto) onDeletePhoto(photo.id);
                 }}
+                disabled={isVaultPreview}
                 aria-label="Delete photo"
-                title="Delete photo"
-                className="absolute top-3 left-3 sm:top-4 sm:left-4 z-30 min-w-10 min-h-10 p-2 bg-slate-900/90 hover:bg-red-600 text-slate-300 hover:text-white rounded-xl border border-slate-700/80 shadow-xl backdrop-blur-md transition-all touch-manipulation"
+                title={isVaultPreview ? "Photos cannot be deleted from the vault preview" : "Delete photo"}
+                className="absolute top-3 left-3 sm:top-4 sm:left-4 z-30 min-w-10 min-h-10 p-2 bg-slate-900/90 hover:bg-red-600 text-slate-300 hover:text-white rounded-xl border border-slate-700/80 shadow-xl backdrop-blur-md transition-all touch-manipulation disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-slate-900/90"
               >
                 <Icon name="trash" className="w-5 h-5 text-red-400 hover:text-white" />
               </button>
