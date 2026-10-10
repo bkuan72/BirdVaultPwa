@@ -111,7 +111,7 @@ Designed specifically for wildlife photographers handling high-resolution DSLR a
 
 BirdVault Pro is PWA-ready and optimized for mobile browsers (iOS Safari & Android Chrome):
 * Add the app to your phone's home screen via **Add to Home Screen** to launch in full-screen standalone mode without browser URL bars.
-* Mobile touch gestures support pinch-to-zoom in Lightbox view and direct touch dragging for the Loupe magnifier.
+* Mobile touch gestures support pinch-to-zoom in Lightbox view and direct touch dragging for the Loupe magnifier. Browser page zoom by pinching is disabled outside the image preview.
 
 ---
 
