@@ -132,7 +132,9 @@ Used for:
 
 ## Focus culling logic
 
-The app converts an image to luminance and evaluates normalized edge acutance and local edge-direction continuity over overlapping regions. It scores the best-supported detail region rather than assuming the subject is centered, and isolated high-frequency texture is less likely to count as sharp focus. The output is a score between 0 and 10, mapped to a 1–5 star rating. This remains a free on-device heuristic, not a guarantee of subject recognition or a substitute for visual review.
+The app converts an image to luminance and evaluates normalized edge acutance and local edge-direction continuity over overlapping regions. For an uncropped frame, it additionally looks for a localized concentration of crisp detail relative to surrounding regions, discounting evenly distributed texture that is more likely to be background. An explicit crop or focus region is scored directly; changing or clearing a crop recalculates the score for the selected area or the full frame. The output is a score between 0 and 10, mapped to a 1–5 star rating.
+
+This local subject-region test is a visual heuristic, not semantic bird/object recognition. It cannot guarantee that a detected region is a bird or distinguish every subject from background detail; AI focus scoring during identification remains the semantic alternative.
 
 Manual star ratings take precedence over the estimated rating in the sharpness filters. If image loading or canvas analysis fails, the app reports the failure and leaves the focus score unrated rather than treating it as a low score.
 

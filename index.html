@@ -564,7 +564,7 @@
       };
     }
 
-    function scoreFocusLuminance(luminance, width, height) {
+    function scoreFocusLuminance(luminance, width, height, assumeSubjectRegion = false) {
       const pixelCount = width * height;
       const gradientX = new Float32Array(pixelCount);
       const gradientY = new Float32Array(pixelCount);
@@ -701,12 +701,58 @@
         left: 0,
         top: 0
       };
-      let score = Math.max(1, Math.min(10, Math.round(1 + selectedRegion.quality * 9)));
+      let subjectConfidence = assumeSubjectRegion ? 1 : 0;
+      let subjectRegion = null;
+      if (!assumeSubjectRegion) {
+        const totalSharpEdges = grid.reduce((total, cell) => total + cell.sharpEdges, 0);
+        let bestSubjectQuality = 0;
+        for (let regionHeight = 2; regionHeight <= 6; regionHeight++) {
+          for (let regionWidth = 2; regionWidth <= 6; regionWidth++) {
+            for (let top = 0; top <= gridSize - regionHeight; top++) {
+              for (let left = 0; left <= gridSize - regionWidth; left++) {
+                let insideSharpEdges = 0;
+                let outsideSharpEdges = 0;
+                let outsideCellCount = 0;
+                for (let y = 0; y < gridSize; y++) {
+                  for (let x = 0; x < gridSize; x++) {
+                    const cell = grid[y * gridSize + x];
+                    if (x >= left && x < left + regionWidth && y >= top && y < top + regionHeight) {
+                      insideSharpEdges += cell.sharpEdges;
+                    } else {
+                      outsideSharpEdges += cell.sharpEdges;
+                      outsideCellCount++;
+                    }
+                  }
+                }
+
+                if (insideSharpEdges < 20 || !totalSharpEdges) continue;
+                const insideDensity = insideSharpEdges / (regionWidth * regionHeight);
+                const outsideDensity = outsideSharpEdges / Math.max(1, outsideCellCount);
+                const densityContrast = Math.max(0, (insideDensity - outsideDensity) / (insideDensity + 0.1));
+                const edgeSupport = Math.min(1, insideSharpEdges / 100);
+                const edgeConcentration = Math.min(1, insideSharpEdges / totalSharpEdges / 0.65);
+                const quality = densityContrast * edgeSupport * edgeConcentration;
+                if (quality > bestSubjectQuality) {
+                  bestSubjectQuality = quality;
+                  subjectRegion = { x: left, y: top, width: regionWidth, height: regionHeight };
+                }
+              }
+            }
+          }
+        }
+        subjectConfidence = Math.max(0, Math.min(1, bestSubjectQuality));
+      }
+
+      let score = Math.max(1, Math.min(10, Math.round(
+        1 + selectedRegion.quality * (assumeSubjectRegion ? 1 : 0.12 + subjectConfidence * 0.88) * 9
+      )));
       let ruleReason = `Focus estimate from ${selectedRegion.sharpEdges} crisp, continuous edges in the best-detail area.`;
 
       if (!selectedRegion.edges || !selectedRegion.sharpEdges) {
         score = 1;
         ruleReason = "No sufficiently crisp, continuous edges were detected.";
+      } else if (!assumeSubjectRegion && subjectConfidence < 0.12) {
+        ruleReason = "No localized subject-like detail was detected; background sharpness was strongly discounted.";
       } else if (score >= 9) {
         ruleReason = "Strong, continuous edge transitions indicate a very sharp detail area.";
       } else if (score >= 7) {
@@ -727,6 +773,8 @@
           sharpEdgeRatioPct: Math.round(selectedRegion.sharpRatio * 100),
           avgAcutance: Math.round(selectedRegion.averageAcutance * 100) / 100,
           selectedRegion: { x: selectedRegion.left, y: selectedRegion.top, width: 4, height: 4 },
+          subjectConfidence: Math.round(subjectConfidence * 100) / 100,
+          subjectRegion,
           rule: `Grade ${score}/10 (${stars} Stars)`,
           reason: ruleReason
         }
@@ -1878,7 +1926,7 @@ Return STRICT JSON ONLY:
       });
     }
 
-    async function evaluatePhotoFocus(fileOrBlobUrl, targetRoi = null, cameraExif = null) {
+    async function evaluatePhotoFocus(fileOrBlobUrl, targetRoi = null, cameraExif = null, options = {}) {
       return new Promise((resolve) => {
         let focusSpot = null;
         let cropBoxRoi = null;
@@ -1889,7 +1937,7 @@ Return STRICT JSON ONLY:
           } else if (targetRoi.xPct !== undefined) {
             focusSpot = targetRoi;
           }
-        } else if (cameraExif?.focusArea) {
+        } else if (!options.ignoreExifFocusArea && cameraExif?.focusArea) {
           focusSpot = cameraExif.focusArea;
         }
 
@@ -1952,7 +2000,12 @@ Return STRICT JSON ONLY:
               luminance[i / 4] = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
             }
 
-            const { score, stars, debugDetails } = scoreFocusLuminance(luminance, w, h);
+            const { score, stars, debugDetails } = scoreFocusLuminance(
+              luminance,
+              w,
+              h,
+              !!(cropBoxRoi || focusSpot)
+            );
 
             if (srcToRevoke) URL.revokeObjectURL(srcToRevoke);
             canvas.width = 0; canvas.height = 0;
@@ -3655,9 +3708,9 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
         setEvaluatingFocus(false);
       };
 
-      const handleClearCropBox = (event) => {
+      const handleClearCropBox = async (event) => {
         event?.stopPropagation();
-        const updated = {
+        const updatedPhoto = {
           ...photo,
           cropBox: null,
           versions: photo.versions?.map(version => ({ ...version, cropBox: null }))
@@ -3668,6 +3721,27 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
         setIsCropToolActive(false);
         setIsDrawingCrop(false);
         cropStartRef.current = null;
+        setFocusEvaluationError('');
+        setEvaluatingFocus(true);
+        let evalRes;
+        try {
+          evalRes = await evaluatePhotoFocus(
+            photo.file || photo.blobUrl || photo.thumbnailUrl || photo.url,
+            null,
+            cameraExif,
+            { ignoreExifFocusArea: true }
+          );
+        } finally {
+          setEvaluatingFocus(false);
+        }
+        const updated = {
+          ...updatedPhoto,
+          sharpness: evalRes.error ? null : evalRes.score,
+          sharpnessSource: evalRes.error ? null : 'local',
+          stars: evalRes.error ? null : evalRes.stars
+        };
+        if (evalRes.error) setFocusEvaluationError(evalRes.error);
+        if (evalRes.debugDetails) setDebugData(evalRes.debugDetails);
         onUpdatePhoto(updated);
         saveFingerprintMetadata(updated);
       };
