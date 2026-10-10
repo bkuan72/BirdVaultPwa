@@ -15,12 +15,9 @@ Designed specifically for wildlife photographers handling high-resolution DSLR a
 * **Folder-Order Ingestion**: Keeps the order returned by the browser's folder or file picker instead of sorting imports by modification date. Folder-handle imports begin displaying each 20-file batch as it is read; thumbnail generation remains limited to the visible page. Browsers do not guarantee that picker order matches the order shown by the operating system's file browser.
 
 ### 2. Micro-Contrast Focus Engine & 5-Star Rating System
-* **Dual Focus Detection Pipeline**:
-  1. **Hardware EXIF AF Extraction**: Parses raw binary EXIF MakerNotes for camera SubjectArea AF point coordinates (`0x9214`).
-  2. **Spatial Laplacian Grid Variance**: For images missing hardware AF tags, the focus engine divides the image into a $5 \times 5$ spatial grid and calculates 2D discrete Laplacian edge variance:
-     $$L(x,y) = -4Y(x,y) + Y(x, y-1) + Y(x, y+1) + Y(x-1, y) + Y(x+1, y)$$
-     across BT.601 luminance values ($Y = 0.299R + 0.587G + 0.114B$) to pinpoint peak micro-contrast hotspots.
-* **5-Star Rating Conversion**: Focus quality scores ($0$–$10$) automatically map to a 5-star scale ($\bigstar \bigstar \bigstar \bigstar \bigstar$).
+* **Free On-Device Focus Ratings**: Generic batch culling compares normalized edge acutance and local edge continuity across overlapping image regions. It is less dependent on a centered subject and filters isolated texture/noise; analysis stays in the browser with no Gemini/API requests or quota usage.
+* **AI Focus Rating During Identification**: When the user explicitly identifies a bird, the same Gemini response includes a 0–10 bird-focus score and assessment alongside the species result and heatmap. No extra AI request is made for the rating.
+* **5-Star Rating Conversion**: Local or AI focus quality scores ($0$–$10$) automatically map to a 1–5 star scale ($\bigstar \bigstar \bigstar \bigstar \bigstar$).
 * **Manual Star Overrides & Filtering**: Adjust star ratings directly on thumbnail cards or inside the Photo Inspector sidebar. Filter the workspace by star rating (All, 5 Stars [Tack Sharp], 4+ Stars [Sharp], 1–3 Stars [Blurry/Soft], Unrated) and sort by filename, capture date, or star rating.
 * **Photo Sequence Video**: Select multiple culling photos to create a crossfade slideshow or a hard-cut animation. Slideshow durations range from 1 to 5 seconds; animation durations range from 0.1 to 2 seconds in 0.1-second steps, with no transitions between photos. Both modes include landscape/portrait/square formats, resolution, captions, and image-fit controls. Video encoding is componentized for reuse; MP4 is used when supported, otherwise the browser's supported WebM format is offered.
 
@@ -46,6 +43,7 @@ Designed specifically for wildlife photographers handling high-resolution DSLR a
 * **Geographic Grounding Context**: Incorporates device GPS or user-defined regional location text into the system prompt to restrict candidate species strictly to local avifauna.
 * **Diagnostic Heatmap Grounding**: Returns diagnostic visual feature points (eye contrast, beak structure, wing plumage) rendered as pulsing target overlays.
 * **Lifer List Vault**: Persistent master catalog recording species taxonomy, scientific names, sighting timestamps, cropped focus thumbnails, location context, and star ratings. Export complete vault backups, including all referenced image versions, and merge a backup into the current vault from the header actions menu. API key and quota settings are also in that menu.
+* **Focus Rating in the Same Request**: The identification response also rates visible bird sharpness; selecting generic batch rating never calls Gemini.
 
 ---
 
@@ -57,7 +55,7 @@ Designed specifically for wildlife photographers handling high-resolution DSLR a
 | :--- | :--- | :--- |
 | **Vision Image Tokens** | ~258 tokens | Bounded $2048 \times 2048\text{ px}$ cropped ROI JPEG payload |
 | **System & Prompt Context** | ~65–90 tokens | Ornithological system rules, location context & schema |
-| **Output Response** | ~100–150 tokens | JSON payload (species name, confidence, heatmap coordinates) |
+| **Output Response** | ~120–180 tokens | JSON payload (species name, confidence, focus rating, heatmap coordinates) |
 | **TOTAL PER REQUEST** | **~350–500 tokens** | Complete round-trip token expenditure |
 
 ### 2. Pricing & Cost Model ($ USD)

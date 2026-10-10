@@ -132,9 +132,11 @@ Used for:
 
 ## Focus culling logic
 
-The app estimates sharpness by analyzing the image’s edge structure and contrast. It converts to luminance and evaluates gradient intensity, subject-area edge concentration, and local contrast. The output is a score between 0 and 10, mapped to a 1–5 star rating.
+The app converts an image to luminance and evaluates normalized edge acutance and local edge-direction continuity over overlapping regions. It scores the best-supported detail region rather than assuming the subject is centered, and isolated high-frequency texture is less likely to count as sharp focus. The output is a score between 0 and 10, mapped to a 1–5 star rating. This remains a free on-device heuristic, not a guarantee of subject recognition or a substitute for visual review.
 
-This supports fast triage of large wildlife photo sets without manual review of every frame.
+Manual star ratings take precedence over the estimated rating in the sharpness filters. If image loading or canvas analysis fails, the app reports the failure and leaves the focus score unrated rather than treating it as a low score.
+
+Generic and batch ratings run entirely on-device: they make no Gemini/API requests and use no API quota. This supports fast triage of large wildlife photo sets without manual review of every frame.
 
 ## AI identification flow
 
@@ -142,8 +144,9 @@ This supports fast triage of large wildlife photo sets without manual review of 
 2. The app crops the image if a crop box is defined.
 3. The cropped image is converted to JPEG and sent to Gemini.
 4. A location string is included to ground species predictions in the local geography.
-5. Gemini returns structured JSON containing species metadata and a diagnostic heatmap.
-6. The app stores the identification result and optionally saves it to the vault.
+5. Gemini returns structured JSON containing species metadata, a diagnostic heatmap, and a 0–10 focus score with a short assessment.
+6. The app uses that score as the photo's AI focus rating, without making a separate rating request.
+7. The app stores the identification result and optionally saves it to the vault.
 
 ## Security and operational considerations
 
