@@ -5947,7 +5947,6 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
         const CHUNK_SIZE = 20;
 
         let isFirstChunk = true;
-                  sharpnessSource: savedMeta.sharpnessSource || null,
         for (let i = 0; i < total; i += CHUNK_SIZE) {
           if (abortUploadRef.current) break;
           const chunkFiles = files.slice(i, i + CHUNK_SIZE);
@@ -6093,7 +6092,6 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
           }
 
           onUpdatePhotos(prev => prev.filter(p => !idsToRemove.has(p.id)));
-            sharpnessSource: 'local',
         }
         setCurrentPage(1);
       };
@@ -7248,7 +7246,6 @@ const handleDeletePhotoInViewer = async (photoId) => {
           throw new Error('The vault sighting could not be found. The enhanced version was not saved.');
         }
 
-          sharpnessSource: photoWithAi.sharpnessSource,
         const category = vaultEntry?.category || idInfo.category || 'Other';
         const speciesName = vaultEntry?.speciesName || idInfo.speciesName || 'Uncategorized';
         const verId = versionMeta.versionId;
@@ -7564,7 +7561,6 @@ const handleDeletePhotoInViewer = async (photoId) => {
             <button
               onClick={() => setActiveTab('vault')}
               className={`px-4 py-1.5 rounded-xl text-xs font-bold transition flex items-center space-x-1.5 touch-manipulation ${
-                  sharpnessSource: updatedPhoto.sharpnessSource ?? sighting.photo?.sharpnessSource ?? null,
                 activeTab === 'vault' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-200'
               }`}
             >
