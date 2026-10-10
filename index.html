@@ -6400,6 +6400,11 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
         [photos, selectedIds]
       );
       const unratedCount = photos.filter(p => getEffectiveStars(p) === 0).length;
+      const starCounts = photos.reduce((counts, photo) => {
+        const stars = getEffectiveStars(photo);
+        if (stars >= 1 && stars <= 5) counts[stars]++;
+        return counts;
+      }, [0, 0, 0, 0, 0, 0]);
 
       const showFooterBar = uploading || (loadingThumbnails && !isPreviewOpen) || rating;
 
@@ -6548,6 +6553,11 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                     <option value="5star">5 Stars (9-10 Tack Sharp)</option>
                     <option value="4star">4+ Stars (7-10 Sharp)</option>
                     <option value="soft">1-3 Stars (1-6 Soft/Blurry)</option>
+                    <option value="star-5">Exactly 5 Stars ({starCounts[5]})</option>
+                    <option value="star-4">Exactly 4 Stars ({starCounts[4]})</option>
+                    <option value="star-3">Exactly 3 Stars ({starCounts[3]})</option>
+                    <option value="star-2">Exactly 2 Stars ({starCounts[2]})</option>
+                    <option value="star-1">Exactly 1 Star ({starCounts[1]})</option>
                     <option value="unrated">Unrated ({unratedCount})</option>
                   </select>
                 </div>
@@ -7055,6 +7065,9 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
           result = result.filter(p => getEffectiveStars(p) >= 1 && getEffectiveStars(p) <= 3);
         } else if (filterSharpness === 'unrated') {
           result = result.filter(p => getEffectiveStars(p) === 0);
+        } else if (/^star-[1-5]$/.test(filterSharpness)) {
+          const exactStars = Number(filterSharpness.slice(5));
+          result = result.filter(p => getEffectiveStars(p) === exactStars);
         }
 
         if (sortBy === 'name') {
