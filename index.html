@@ -5583,7 +5583,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                   <Icon name="feather" className="w-5 h-5 sm:w-6 sm:h-6 text-emerald-400" />
                   <span>Lifer Species List Vault</span>
                 </h2>
-                <p className="hidden sm:block text-[11px] sm:text-xs text-slate-400">Master life-list species catalog displaying taxonomic records, species traits, and sighting timelines</p>
+                <p className="hidden sm:bloc k text-[11px] sm:text-xs text-slate-400">Master life-list species catalog displaying taxonomic records, species traits, and sighting timelines</p>
               </div>
 
               <div className="flex items-center space-x-2 w-full sm:w-auto">
@@ -5802,10 +5802,10 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                 console.warn(`Could not read folder image "${chunkEntries[index].name}":`, result.reason);
                 return [];
               });
-              const chunkObjs = await Promise.all(chunkFiles.map(async file => {
+              const chunkObjs = chunkFiles.map(file => {
                 const fpId = generateFingerprintId(file);
                 const savedMeta = fpDb[fpId] || {};
-                const cameraExif = savedMeta.cameraExif || await extractCameraExif(file);
+                const cameraExif = savedMeta.cameraExif || null;
                 const photoObj = {
                   id: fpId,
                   fingerprintId: fpId,
@@ -5834,7 +5834,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                 };
                 saveFingerprintMetadata(photoObj);
                 return photoObj;
-              }));
+              });
 
               onUpdatePhotos(prev => {
                 const existingIds = new Set(prev.map(p => p.id));
@@ -5883,10 +5883,10 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
         for (let i = 0; i < total; i += CHUNK_SIZE) {
           if (abortUploadRef.current) break;
           const chunkFiles = files.slice(i, i + CHUNK_SIZE);
-          const chunkObjs = await Promise.all(chunkFiles.map(async file => {
+          const chunkObjs = chunkFiles.map(file => {
             const fpId = generateFingerprintId(file);
             const savedMeta = fpDb[fpId] || {};
-            const cameraExif = savedMeta.cameraExif || await extractCameraExif(file);
+            const cameraExif = savedMeta.cameraExif || null;
             const photoObj = {
               id: fpId,
               fingerprintId: fpId,
@@ -5914,7 +5914,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
             };
             saveFingerprintMetadata(photoObj);
             return photoObj;
-          }));
+            });
 
         if (isFirstChunk) {
           onUpdatePhotos(chunkObjs);
