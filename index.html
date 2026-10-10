@@ -5829,12 +5829,12 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
         if (e) e.preventDefault();
 
         const isSandboxedIframe = typeof window !== 'undefined' && window.self !== window.top;
-          abortUploadRef.current = false;
 
         if (!isSandboxedIframe && 'showDirectoryPicker' in window) {
-            if (abortUploadRef.current) return;
+          abortUploadRef.current = false;
           try {
             const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+            if (abortUploadRef.current) return;
             setUploading(true);
             setSortBy('default');
             onUpdatePhotos([]);
@@ -5842,9 +5842,9 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
             setCurrentPage(1);
             const fpDb = getStoredFingerprintDb();
 
-              if (abortUploadRef.current) break;
             const fileEntries = [];
             for await (const [name, handle] of dirHandle.entries()) {
+              if (abortUploadRef.current) break;
               if (handle.kind === 'file' && /\.(jpe?g|png|webp|cr2|nef|arw|dng)$/i.test(name)) {
                 fileEntries.push({ name, handle });
               }
@@ -5854,16 +5854,16 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
 
             const total = fileEntries.length;
             const CHUNK_SIZE = 20;
-              if (abortUploadRef.current) break;
 
             for (let i = 0; i < total; i += CHUNK_SIZE) {
+              if (abortUploadRef.current) break;
               const chunkEntries = fileEntries.slice(i, i + CHUNK_SIZE);
               const fileResults = await Promise.allSettled(chunkEntries.map(async entry => {
                 const file = await entry.handle.getFile();
                 file.handle = entry.handle;
-              if (abortUploadRef.current) break;
                 return file;
               }));
+              if (abortUploadRef.current) break;
               const chunkFiles = fileResults.flatMap((result, index) => {
                 if (result.status === 'fulfilled') return [result.value];
                 console.warn(`Could not read folder image "${chunkEntries[index].name}":`, result.reason);
