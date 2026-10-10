@@ -1879,7 +1879,7 @@ Return STRICT JSON ONLY:
     }
 
     async function evaluatePhotoFocus(fileOrBlobUrl, targetRoi = null, cameraExif = null) {
-      return new Promise(async (resolve) => {
+      return new Promise((resolve) => {
         let focusSpot = null;
         let cropBoxRoi = null;
 
@@ -3904,8 +3904,6 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
             setFocusEvaluationError(evalRes.error);
           }
           if (evalRes.debugDetails) setDebugData(evalRes.debugDetails);
-          onUpdatePhoto(currentPhoto);
-          saveFingerprintMetadata(currentPhoto);
           setEvaluatingFocus(false);
         }
 
@@ -3921,9 +3919,9 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
         setAiResult(result);
         setIdentifying(false);
         setShowMobileSidebar(true);
-        const hasAiFocusScore = !result?.error && Number.isFinite(result?.focusScore) && result.focusScore >= 0 && result.focusScore <= 10;
         
         let updatedFocusSpot = currentPhoto.focusSpot;
+        const hasAiFocusScore = !result?.error && Number.isFinite(result?.focusScore) && result.focusScore >= 0 && result.focusScore <= 10;
         if (result && result.heatmapPoints && result.heatmapPoints.length > 0) {
           const eyePt = result.heatmapPoints.find(p => p.label && p.label.toLowerCase().includes('eye')) || result.heatmapPoints[0];
           if (eyePt && eyePt.x !== undefined && eyePt.y !== undefined) {
@@ -4597,12 +4595,12 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                       <span className="text-xs font-bold font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
                         {photo.sharpness} / 10
                       </span>
+                    </div>
+                  )}
                   {photo.sharpnessSource === 'ai' && photo.identification?.focusAssessment && (
                     <p className="text-[10px] text-slate-400 leading-relaxed">
                       AI assessment: {photo.identification.focusAssessment}
                     </p>
-                  )}
-                    </div>
                   )}
                 </div>
 
@@ -5705,9 +5703,9 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
     }) {
       const pageSize = BATCH_PAGE_SIZE;
 
-      const [showMobileActions, setShowMobileActions] = useState(false);
       const [selectedIds, setSelectedIds] = useState(new Set());
       const [showFilterBar, setShowFilterBar] = useState(false);
+      const [showMobileActions, setShowMobileActions] = useState(false);
       const [uploading, setUploading] = useState(false);
       const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0 });
       const [loadingThumbnails, setLoadingThumbnails] = useState(false);
@@ -5720,12 +5718,14 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
       const abortUploadRef = useRef(false);
       const abortRatingRef = useRef(false);
       const fileInputRef = useRef(null);
-      const mobileActionsRef = useRef(null);
       const folderInputRef = useRef(null);
       const cullingGridScrollRef = useRef(null);
+      const mobileActionsRef = useRef(null);
 
       useEffect(() => {
         if (cullingGridScrollRef.current) cullingGridScrollRef.current.scrollTop = 0;
+      }, [currentPage]);
+
       useEffect(() => {
         if (!showMobileActions) return undefined;
         const handlePointerDown = (event) => {
@@ -5741,8 +5741,6 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
           document.removeEventListener('keydown', handleKeyDown);
         };
       }, [showMobileActions]);
-
-      }, [currentPage]);
 
       const toggleSelectPhoto = (photoId, e) => {
         if (e) e.stopPropagation();
@@ -5763,6 +5761,8 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
         } else {
           setSelectedIds(new Set(processedPhotos.map(p => p.id)));
         }
+      };
+
       const handleCloseFolder = () => {
         abortUploadRef.current = true;
         abortRatingRef.current = true;
@@ -5798,8 +5798,6 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
         setShowDeleteConfirmModal(false);
         if (fileInputRef.current) fileInputRef.current.value = '';
         if (folderInputRef.current) folderInputRef.current.value = '';
-      };
-
       };
 
       const handleDeleteSinglePhoto = async (photoId, e) => {
@@ -5888,6 +5886,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                   naturalWidth: 1000,
                   naturalHeight: 750,
                   sharpness: savedMeta.sharpness !== undefined ? savedMeta.sharpness : null,
+                  sharpnessSource: savedMeta.sharpnessSource || null,
                   stars: savedMeta.stars !== undefined ? savedMeta.stars : null,
                   userStars: savedMeta.userStars !== undefined ? savedMeta.userStars : null,
                   focusSpot: savedMeta.focusSpot || savedMeta.cameraExif?.focusArea || null,
@@ -5968,6 +5967,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
               naturalWidth: 1000,
               naturalHeight: 750,
               sharpness: savedMeta.sharpness !== undefined ? savedMeta.sharpness : null,
+              sharpnessSource: savedMeta.sharpnessSource || null,
               stars: savedMeta.stars !== undefined ? savedMeta.stars : null,
               userStars: savedMeta.userStars !== undefined ? savedMeta.userStars : null,
               focusSpot: savedMeta.focusSpot || savedMeta.cameraExif?.focusArea || null,
@@ -6032,8 +6032,8 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
             ...target, 
             cameraExif: cameraExif || target.cameraExif,
             sharpness: evalResult.score,
+            sharpnessSource: 'local',
             stars: evalResult.stars,
-              sharpnessSource: savedMeta.sharpnessSource || null,
             focusSpot: evalResult.focusSpot 
           };
 
@@ -6305,7 +6305,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
               <div ref={mobileActionsRef} className="relative flex items-center space-x-1.5 sm:space-x-2 py-0.5 w-full sm:w-auto">
                 <button
                   onClick={() => setShowFilterBar(!showFilterBar)}
-                  className={`font-semibold text-[11px] sm:text-xs px-2.5 sm:px-3.5 py-2 sm:py-2.5 rounded-xl border transition flex items-center space-x-1 sm:space-x-1.5 flex-1 sm:flex-none justify-center touch-manipulation ${
+                  className={`hidden sm:flex font-semibold text-[11px] sm:text-xs px-2.5 sm:px-3.5 py-2 sm:py-2.5 rounded-xl border transition items-center space-x-1 sm:space-x-1.5 flex-1 sm:flex-none justify-center touch-manipulation ${
                     showFilterBar || filterSharpness !== 'all' 
                       ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' 
                       : 'bg-slate-800 text-slate-300 border-slate-700 hover:text-white'
@@ -6322,7 +6322,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                   onClick={handleSelectAll}
                   disabled={!processedPhotos.length}
                   aria-label={canDeselectAll ? "Deselect all photos" : `Select all ${processedPhotos.length} photos`}
-                  className="bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 font-semibold text-[11px] sm:text-xs px-2.5 sm:px-3.5 py-2 sm:py-2.5 rounded-xl border border-slate-700 transition flex items-center justify-center space-x-1 sm:space-x-1.5 flex-1 sm:flex-none touch-manipulation whitespace-nowrap"
+                  className="hidden sm:flex bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 font-semibold text-[11px] sm:text-xs px-2.5 sm:px-3.5 py-2 sm:py-2.5 rounded-xl border border-slate-700 transition items-center justify-center space-x-1 sm:space-x-1.5 flex-1 sm:flex-none touch-manipulation whitespace-nowrap"
                 >
                   <Icon name="check" className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-400" />
                   <span className="hidden sm:inline">{canDeselectAll ? 'Deselect All' : `Select All (${processedPhotos.length})`}</span>
@@ -6336,6 +6336,8 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                 >
                   <Icon name="upload" className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                   <span className="hidden sm:inline">Open Folder</span>
+                  <span className="sm:hidden">Folder</span>
+                </button>
                 <button
                   type="button"
                   onClick={handleCloseFolder}
@@ -6347,8 +6349,6 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                   <Icon name="x" className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                   <span className="hidden sm:inline">Close Folder</span>
                   <span className="sm:hidden">Close</span>
-                </button>
-                  <span className="sm:hidden">Folder</span>
                 </button>
                 <input
                   ref={folderInputRef}
@@ -6371,12 +6371,14 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                 <button
                   onClick={handleBatchRateFocus}
                   disabled={rating || unratedCount === 0}
+                  title="Rate focus on this device; this does not call Gemini or use API quota"
                   className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-[11px] sm:text-xs px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl shadow-lg transition flex items-center justify-center space-x-1.5 active:scale-95 touch-manipulation flex-1 sm:flex-none"
                   aria-label={`Cull blur: rate ${unratedCount} unrated photos locally for free`}
                 >
                   <Icon name="sparkles" className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-200" />
                   <span className="hidden sm:inline">Cull Blur · Free ({unratedCount})</span>
                   <span className="sm:hidden">Cull · Free ({unratedCount})</span>
+                </button>
                 <button
                   type="button"
                   onClick={() => setShowMobileActions(open => !open)}
@@ -6431,7 +6433,6 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                     </button>
                   </div>
                 )}
-                </button>
               </div>
             </div>
 
@@ -7120,6 +7121,7 @@ const handleDeletePhotoInViewer = async (photoId) => {
           lastModified: photoWithAi.lastModified,
           thumbnailUrl: sanitizeUrl(photoWithAi.thumbnailUrl),
           sharpness: photoWithAi.sharpness,
+          sharpnessSource: photoWithAi.sharpnessSource,
           stars: photoWithAi.stars,
           userStars: photoWithAi.userStars,
           focusSpot: photoWithAi.focusSpot || cameraExif?.focusArea,
@@ -7435,6 +7437,7 @@ const handleDeletePhotoInViewer = async (photoId) => {
                   stars: updatedPhoto.stars ?? sighting.photo?.stars ?? null,
                   userStars: updatedPhoto.userStars ?? sighting.photo?.userStars ?? null,
                   sharpness: updatedPhoto.sharpness ?? sighting.photo?.sharpness ?? null,
+                  sharpnessSource: updatedPhoto.sharpnessSource ?? sighting.photo?.sharpnessSource ?? null,
                   cropBox: updatedPhoto.cropBox ?? null,
                   activeVersionId: updatedPhoto.activeVersionId || sighting.photo?.activeVersionId,
                   opfsFileName: updatedPhoto.opfsFileName || sighting.photo?.opfsFileName,
@@ -7609,12 +7612,12 @@ const handleDeletePhotoInViewer = async (photoId) => {
                 currentPage={currentPage}
                 setCurrentPage={setCurrentPage}
                 processedPhotos={processedPhotos}
+                isPreviewOpen={!!selectedPhoto}
                 onClosePhotoPreview={() => {
                   if (selectedPhotoVaultRef) return;
                   setSelectedPhoto(null);
                   setSelectedPhotoVaultItems([]);
                 }}
-                isPreviewOpen={!!selectedPhoto}
               />
             )}
           </div>

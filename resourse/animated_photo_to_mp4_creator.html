@@ -1,0 +1,1410 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>FrameMotion - Photo to MP4 Video Generator</title>
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#eef2ff',
+              100: '#e0e7ff',
+              500: '#6366f1',
+              600: '#4f46e5',
+              700: '#4338ca',
+              800: '#3730a3',
+              900: '#312e81',
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <style>
+    html, body {
+      overscroll-behavior-y: none;
+      touch-action: manipulation;
+    }
+    ::-webkit-scrollbar {
+      width: 5px;
+      height: 5px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #0f172a;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 4px;
+    }
+    .grid-bg {
+      background-image: radial-gradient(#334155 1px, transparent 1px);
+      background-size: 16px 16px;
+    }
+    input[type=range]::-webkit-slider-thumb {
+      width: 22px;
+      height: 22px;
+    }
+    input[type=range]::-moz-range-thumb {
+      width: 22px;
+      height: 22px;
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans antialiased selection:bg-brand-500 selection:text-white">
+
+  <header class="border-b border-slate-800 bg-slate-900/90 backdrop-blur sticky top-0 z-30 px-3 py-2.5 flex items-center justify-between shrink-0">
+    <div class="flex items-center gap-2.5">
+      <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-brand-600 to-indigo-400 flex items-center justify-center shadow-lg shadow-brand-500/20 shrink-0">
+        <i data-lucide="film" class="w-4 h-4 text-white"></i>
+      </div>
+      <div>
+        <h1 class="font-bold text-base leading-tight flex items-center gap-1.5">
+          FrameMotion <span class="text-[10px] bg-brand-500/20 text-brand-300 font-semibold px-1.5 py-0.5 rounded-full border border-brand-500/30">Studio Preview</span>
+        </h1>
+        <p class="text-[10px] text-slate-400 hidden sm:block">Animate photos & export high-quality video files</p>
+      </div>
+    </div>
+
+    <div class="flex items-center gap-1.5">
+      <button id="btn-load-demo" class="text-xs px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 active:bg-slate-700 text-slate-200 font-medium transition flex items-center gap-1.5 border border-slate-700 min-h-[38px]">
+        <i data-lucide="sparkles" class="w-3.5 h-3.5 text-amber-400"></i>
+        <span>Load Demo</span>
+      </button>
+      <button id="btn-export" class="text-xs sm:text-sm px-3.5 py-1.5 rounded-lg bg-gradient-to-r from-brand-600 to-indigo-600 hover:from-brand-500 hover:to-indigo-500 text-white font-semibold transition flex items-center gap-1.5 shadow-lg shadow-brand-600/30 min-h-[38px]">
+        <i data-lucide="download" class="w-4 h-4"></i>
+        <span>Export Video</span>
+      </button>
+    </div>
+  </header>
+
+  <div class="lg:hidden bg-slate-900 border-b border-slate-800 flex items-center justify-around text-xs font-medium text-slate-400 p-1 shrink-0">
+    <button id="tab-btn-photos" class="mobile-tab-btn flex-1 py-2 rounded-lg flex items-center justify-center gap-1.5 text-brand-400 bg-brand-500/10 font-semibold">
+      <i data-lucide="images" class="w-4 h-4"></i>
+      <span>Photos (<span id="mobile-photo-count">0</span>)</span>
+    </button>
+    <button id="tab-btn-preview" class="mobile-tab-btn flex-1 py-2 rounded-lg flex items-center justify-center gap-1.5">
+      <i data-lucide="play-circle" class="w-4 h-4"></i>
+      <span>Preview</span>
+    </button>
+    <button id="tab-btn-settings" class="mobile-tab-btn flex-1 py-2 rounded-lg flex items-center justify-center gap-1.5">
+      <i data-lucide="sliders" class="w-4 h-4"></i>
+      <span>Settings</span>
+    </button>
+  </div>
+
+  <div class="flex-1 flex flex-col lg:flex-row overflow-hidden relative min-h-0">
+
+    <!-- Left Sidebar: Photo Sequence Management -->
+    <aside id="panel-photos" class="mobile-panel w-full lg:w-80 border-b lg:border-b-0 lg:border-r border-slate-800 bg-slate-900 flex flex-col h-[calc(100vh-110px)] lg:h-[calc(100vh-57px)] shrink-0">
+
+      <!-- Upload Drop Zone -->
+      <div class="p-3 border-b border-slate-800 shrink-0">
+        <div id="drop-zone" class="border-2 border-dashed border-slate-700 hover:border-brand-500 bg-slate-800/50 rounded-xl p-3 flex flex-col items-center justify-center cursor-pointer transition text-center active:bg-slate-800">
+          <input type="file" id="file-input" multiple accept="image/*" class="hidden" />
+          <div class="w-9 h-9 rounded-full bg-slate-700 text-brand-400 flex items-center justify-center mb-1 pointer-events-none">
+            <i data-lucide="plus-circle" class="w-5 h-5"></i>
+          </div>
+          <span class="text-xs font-semibold text-slate-200 pointer-events-none">Tap or Drop Photos Here</span>
+          <span class="text-[10px] text-slate-400 mt-0.5 pointer-events-none">Select multiple photos from gallery</span>
+        </div>
+      </div>
+
+      <!-- Section Title Header -->
+      <div class="px-3 py-2 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between text-xs text-slate-400 font-medium shrink-0">
+        <span>Timeline Sequence (<span id="photo-count">0</span>)</span>
+        <button id="btn-clear-all" class="text-rose-400 hover:underline text-[11px] flex items-center gap-1 p-1">
+          <i data-lucide="trash-2" class="w-3 h-3"></i> Clear
+        </button>
+      </div>
+
+      <!-- Photo Cards Container -->
+      <div id="photo-list" class="flex-1 overflow-y-auto p-2.5 space-y-2 min-h-0">
+        <div id="empty-state" class="h-48 flex flex-col items-center justify-center text-center p-4 text-slate-500">
+          <i data-lucide="image" class="w-10 h-10 mb-2 opacity-40"></i>
+          <p class="text-xs font-medium">No photos added yet.</p>
+          <p class="text-[11px] text-slate-600 mt-1">Tap "Load Demo" above to instantly test</p>
+        </div>
+      </div>
+    </aside>
+
+    <main id="panel-preview" class="mobile-panel hidden lg:flex flex-1 bg-slate-950 flex-col relative grid-bg h-[calc(100vh-110px)] lg:h-[calc(100vh-57px)]">
+
+      <!-- Video Canvas Area -->
+      <div class="flex-1 flex items-center justify-center p-2 sm:p-4 relative overflow-hidden min-h-[220px]">
+        <div class="relative max-w-full max-h-full flex items-center justify-center shadow-2xl rounded-lg overflow-hidden border border-slate-800 bg-black">
+          <canvas id="preview-canvas" class="max-w-full max-h-[50vh] sm:max-h-[60vh] object-contain block"></canvas>
+
+          <button id="canvas-overlay-play" class="absolute inset-0 bg-black/20 opacity-0 active:opacity-100 transition flex items-center justify-center">
+            <div class="w-14 h-14 rounded-full bg-brand-600/90 text-white flex items-center justify-center shadow-2xl">
+              <i data-lucide="play" class="w-7 h-7 fill-current ml-0.5" id="overlay-play-icon"></i>
+            </div>
+          </button>
+        </div>
+      </div>
+
+      <!-- Player Controls Bar -->
+      <div class="p-3 bg-slate-900 border-t border-slate-800 space-y-2.5 shrink-0">
+        <!-- Time scrubber -->
+        <div class="space-y-1">
+          <div class="flex justify-between text-xs text-slate-400 font-mono px-1">
+            <span id="time-current">00:00.0</span>
+            <span id="time-total">00:00.0</span>
+          </div>
+          <div class="relative flex items-center px-1">
+            <input type="range" id="scrubber" min="0" max="100" value="0" step="0.1"
+              class="w-full h-3 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-brand-500 touch-none" />
+          </div>
+        </div>
+
+        <!-- Buttons -->
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-1.5">
+            <button id="btn-prev" class="p-2.5 rounded-lg text-slate-400 active:bg-slate-800 min-w-[40px] flex items-center justify-center">
+              <i data-lucide="skip-back" class="w-4 h-4"></i>
+            </button>
+            <button id="btn-play" class="p-3 rounded-xl bg-brand-600 hover:bg-brand-500 text-white active:bg-brand-700 shadow-md shadow-brand-600/30 min-w-[44px] flex items-center justify-center">
+              <i data-lucide="play" class="w-5 h-5 fill-current" id="play-btn-icon"></i>
+            </button>
+            <button id="btn-next" class="p-2.5 rounded-lg text-slate-400 active:bg-slate-800 min-w-[40px] flex items-center justify-center">
+              <i data-lucide="skip-forward" class="w-4 h-4"></i>
+            </button>
+            <button id="btn-loop" class="p-2.5 rounded-lg text-brand-400 bg-brand-500/10 border border-brand-500/20">
+              <i data-lucide="repeat" class="w-4 h-4"></i>
+            </button>
+          </div>
+
+          <div class="flex items-center gap-2 text-xs">
+            <div class="flex items-center gap-1 text-slate-400">
+              <i data-lucide="gauge" class="w-3.5 h-3.5"></i>
+              <select id="fps-select" class="bg-slate-800 border border-slate-700 text-slate-200 rounded px-1.5 py-1 focus:outline-none">
+                <option value="24">24</option>
+                <option value="30" selected>30 fps</option>
+                <option value="60">60</option>
+              </select>
+            </div>
+            <div class="text-slate-400 font-medium text-[11px]">
+              <span id="current-frame-num" class="text-slate-200 font-mono">0 / 0</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <aside id="panel-settings" class="mobile-panel hidden lg:block w-full lg:w-80 border-t lg:border-t-0 lg:border-l border-slate-800 bg-slate-900 p-4 space-y-5 overflow-y-auto h-[calc(100vh-110px)] lg:h-[calc(100vh-57px)] shrink-0">
+
+      <!-- Timing -->
+      <div class="space-y-2.5">
+        <h3 class="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+          <i data-lucide="clock" class="w-4 h-4 text-brand-400"></i> Interval & Timing
+        </h3>
+
+        <div class="space-y-1">
+          <div class="flex justify-between text-xs">
+            <label for="global-duration" class="text-slate-300 font-medium">Photo Interval</label>
+            <span id="global-duration-val" class="text-brand-400 font-mono font-semibold">1.5s</span>
+          </div>
+          <input type="range" id="global-duration" min="0.1" max="10.0" step="0.1" value="1.5"
+            class="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-brand-500" />
+        </div>
+
+        <div class="grid grid-cols-3 gap-1.5 pt-1">
+          <button data-preset="0.2" class="preset-btn text-xs py-2 rounded-lg bg-slate-800 active:bg-slate-700 text-slate-300 border border-slate-700 font-medium">0.2s Fast</button>
+          <button data-preset="1.0" class="preset-btn text-xs py-2 rounded-lg bg-slate-800 active:bg-slate-700 text-slate-300 border border-slate-700 font-medium">1.0s Normal</button>
+          <button data-preset="3.0" class="preset-btn text-xs py-2 rounded-lg bg-slate-800 active:bg-slate-700 text-slate-300 border border-slate-700 font-medium">3.0s Slow</button>
+        </div>
+      </div>
+
+      <hr class="border-slate-800" />
+
+      <!-- Transition Style -->
+      <div class="space-y-2.5">
+        <h3 class="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+          <i data-lucide="wand-2" class="w-4 h-4 text-brand-400"></i> Transition Effect
+        </h3>
+
+        <div class="space-y-1">
+          <label class="text-xs text-slate-300 font-medium">Effect Style</label>
+          <select id="transition-style" class="w-full bg-slate-800 border border-slate-700 rounded-lg p-2 text-xs text-slate-200 focus:outline-none">
+            <option value="none">Instant Cut</option>
+            <option value="crossfade" selected>Smooth Crossfade</option>
+            <option value="fade-black">Fade to Black</option>
+            <option value="slide-left">Slide Left</option>
+            <option value="slide-up">Slide Up</option>
+            <option value="zoom-in">Zoom In</option>
+          </select>
+        </div>
+
+        <div class="space-y-1">
+          <div class="flex justify-between text-xs">
+            <label for="transition-duration" class="text-slate-300 font-medium">Transition Duration</label>
+            <span id="transition-duration-val" class="text-brand-400 font-mono font-semibold">0.5s</span>
+          </div>
+          <input type="range" id="transition-duration" min="0.1" max="2.0" step="0.1" value="0.5"
+            class="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-brand-500" />
+        </div>
+      </div>
+
+      <hr class="border-slate-800" />
+
+      <!-- Framing & Video Resolution -->
+      <div class="space-y-2.5">
+        <h3 class="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+          <i data-lucide="aspect-ratio" class="w-4 h-4 text-brand-400"></i> Format & Framing
+        </h3>
+
+        <div class="grid grid-cols-2 gap-2">
+          <label class="space-y-1">
+            <span class="text-xs text-slate-300">Aspect Ratio</span>
+            <select id="aspect-ratio" class="w-full bg-slate-800 border border-slate-700 rounded-lg p-2 text-xs text-slate-200 focus:outline-none">
+              <option value="16:9">16:9 (Horizontal)</option>
+              <option value="9:16" selected>9:16 (Android / Reels)</option>
+              <option value="1:1">1:1 (Square)</option>
+              <option value="4:3">4:3 (Classic Video)</option>
+            </select>
+          </label>
+
+          <label class="space-y-1">
+            <span class="text-xs text-slate-300">Resolution</span>
+            <select id="video-resolution" class="w-full bg-slate-800 border border-slate-700 rounded-lg p-2 text-xs text-slate-200 focus:outline-none">
+              <option value="720" selected>720p HD</option>
+              <option value="1080">1080p Full HD</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="space-y-1">
+          <label class="text-xs text-slate-300 font-medium">Photo Fit Mode</label>
+          <select id="fit-mode" class="w-full bg-slate-800 border border-slate-700 rounded-lg p-2 text-xs text-slate-200 focus:outline-none">
+            <option value="blur" selected>Blurred Background</option>
+            <option value="contain">Solid Background</option>
+            <option value="cover">Crop to Fill Frame</option>
+          </select>
+        </div>
+      </div>
+
+      <hr class="border-slate-800" />
+
+      <!-- Audio Track -->
+      <div class="space-y-2.5">
+        <h3 class="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+          <i data-lucide="music" class="w-4 h-4 text-brand-400"></i> Audio Track
+        </h3>
+
+        <div class="space-y-2">
+          <label class="flex items-center justify-center border border-slate-700 bg-slate-800/60 rounded-xl p-3 cursor-pointer text-xs text-slate-300 active:bg-slate-800 gap-2">
+            <i data-lucide="upload-cloud" class="w-4 h-4 text-brand-400"></i>
+            <span id="audio-filename">Select Audio (MP3/WAV)</span>
+            <input type="file" id="audio-input" accept="audio/*" class="hidden" />
+          </label>
+          <button id="btn-remove-audio" class="text-[11px] text-rose-400 hover:underline hidden flex items-center gap-1">
+            <i data-lucide="x" class="w-3 h-3"></i> Remove Audio
+          </button>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <div id="export-modal" class="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-50 flex items-center justify-center p-4 hidden">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-sm w-full p-5 text-center space-y-4 shadow-2xl">
+
+      <div id="export-spinner" class="relative w-16 h-16 mx-auto flex items-center justify-center">
+        <svg class="animate-spin w-full h-full text-brand-500" viewBox="0 0 100 100">
+          <circle class="text-slate-800" stroke-width="8" stroke="currentColor" fill="none" r="38" cx="50" cy="50"/>
+          <circle class="text-brand-500" stroke-width="8" stroke-dasharray="240" stroke-dashoffset="60" stroke-linecap="round" stroke="currentColor" fill="none" r="38" cx="50" cy="50"/>
+        </svg>
+        <i data-lucide="video" class="w-7 h-7 text-brand-400 absolute"></i>
+      </div>
+
+      <div>
+        <h3 class="text-base font-bold text-white">Encoding Video</h3>
+        <p class="text-xs text-slate-400 mt-0.5">Recording canvas frame stream...</p>
+      </div>
+
+      <div id="export-progress-wrapper" class="space-y-1.5">
+        <div class="w-full bg-slate-800 h-2.5 rounded-full overflow-hidden p-0.5 border border-slate-700">
+          <div id="export-progress-bar" class="bg-gradient-to-r from-brand-500 to-indigo-500 h-full rounded-full w-0 transition-all duration-150"></div>
+        </div>
+        <div class="flex justify-between text-xs font-mono text-slate-400">
+          <span id="export-status-text">Processing...</span>
+          <span id="export-percent-text">0%</span>
+        </div>
+      </div>
+
+      <!-- Result Video Container -->
+      <div id="export-result-container" class="hidden space-y-3 pt-1">
+        <div class="p-2.5 bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-[11px] rounded-xl flex items-center justify-center gap-1.5">
+          <i data-lucide="check-circle-2" class="w-4 h-4 text-emerald-400 shrink-0"></i>
+          <span>Video ready! Tap below or long-press player to save.</span>
+        </div>
+
+        <video id="export-preview-video" controls playsinline class="w-full rounded-xl max-h-56 border border-slate-700 bg-black shadow-lg"></video>
+
+        <div class="flex flex-col gap-2">
+          <button id="btn-save-video" class="w-full py-3 rounded-xl bg-brand-600 hover:bg-brand-500 active:bg-brand-700 text-white font-semibold text-xs transition flex items-center justify-center gap-2 shadow-lg shadow-brand-600/30">
+            <i data-lucide="download" class="w-4 h-4"></i>
+            <span>Save File to Device</span>
+          </button>
+
+          <button id="btn-open-new-tab" class="w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium text-xs border border-slate-700 flex items-center justify-center gap-1.5">
+            <i data-lucide="external-link" class="w-3.5 h-3.5 text-brand-400"></i>
+            <span>Open Player in New Window</span>
+          </button>
+
+          <button id="btn-close-export" class="w-full py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium text-xs">
+            Done
+          </button>
+        </div>
+      </div>
+
+      <button id="btn-cancel-export" class="text-xs text-slate-400 underline pt-1">
+        Cancel
+      </button>
+    </div>
+  </div>
+
+  <div id="toast-container" class="fixed bottom-4 right-4 left-4 sm:left-auto z-50 flex flex-col gap-2 pointer-events-none"></div>
+
+  <script>
+    const state = {
+      photos: [],
+      audioTrack: null,
+      audioFilename: '',
+      isPlaying: false,
+      currentTime: 0,
+      loop: true,
+      globalDuration: 1.5,
+      transitionStyle: 'crossfade',
+      transitionDuration: 0.5,
+      aspectRatio: '9:16',
+      resolutionHeight: 720,
+      fitMode: 'blur',
+      fps: 30,
+      animationFrameId: null,
+      lastTimestamp: 0,
+      isExporting: false,
+      exportedBlob: null,
+      exportedUrl: null,
+      exportedDataBase64: null,
+      exportedMime: 'video/mp4'
+    };
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+    }
+
+    function isImageFile(file) {
+      if (!file) return false;
+      if (file.type && file.type.startsWith('image/')) return true;
+      const ext = file.name ? file.name.split('.').pop().toLowerCase() : '';
+      return ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'heic', 'heif', 'svg'].includes(ext) || !file.type;
+    }
+
+    let globalAudioCtx = null;
+    function unlockAudioOnAndroid() {
+      if (!globalAudioCtx) {
+        globalAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      if (globalAudioCtx.state === 'suspended') {
+        globalAudioCtx.resume();
+      }
+    }
+    document.addEventListener('touchstart', unlockAudioOnAndroid, { once: true });
+    document.addEventListener('click', unlockAudioOnAndroid, { once: true });
+
+    const canvas = document.getElementById('preview-canvas');
+    const ctx = canvas.getContext('2d');
+    const dropZone = document.getElementById('drop-zone');
+    const fileInput = document.getElementById('file-input');
+    const photoList = document.getElementById('photo-list');
+    const photoCountEl = document.getElementById('photo-count');
+    const mobilePhotoCountEl = document.getElementById('mobile-photo-count');
+    const btnPlay = document.getElementById('btn-play');
+    const playBtnIcon = document.getElementById('play-btn-icon');
+    const overlayPlayIcon = document.getElementById('overlay-play-icon');
+    const canvasOverlayPlay = document.getElementById('canvas-overlay-play');
+    const btnPrev = document.getElementById('btn-prev');
+    const btnNext = document.getElementById('btn-next');
+    const btnLoop = document.getElementById('btn-loop');
+    const scrubber = document.getElementById('scrubber');
+    const timeCurrentEl = document.getElementById('time-current');
+    const timeTotalEl = document.getElementById('time-total');
+    const currentFrameNumEl = document.getElementById('current-frame-num');
+    const globalDurationInput = document.getElementById('global-duration');
+    const globalDurationVal = document.getElementById('global-duration-val');
+    const transitionStyleSelect = document.getElementById('transition-style');
+    const transitionDurationInput = document.getElementById('transition-duration');
+    const transitionDurationVal = document.getElementById('transition-duration-val');
+    const aspectRatioSelect = document.getElementById('aspect-ratio');
+    const videoResolutionSelect = document.getElementById('video-resolution');
+    const fitModeSelect = document.getElementById('fit-mode');
+    const fpsSelect = document.getElementById('fps-select');
+    const btnLoadDemo = document.getElementById('btn-load-demo');
+    const btnClearAll = document.getElementById('btn-clear-all');
+    const audioInput = document.getElementById('audio-input');
+    const audioFilenameEl = document.getElementById('audio-filename');
+    const btnRemoveAudio = document.getElementById('btn-remove-audio');
+    const btnExport = document.getElementById('btn-export');
+
+    const exportModal = document.getElementById('export-modal');
+    const exportSpinner = document.getElementById('export-spinner');
+    const exportProgressWrapper = document.getElementById('export-progress-wrapper');
+    const exportProgressBar = document.getElementById('export-progress-bar');
+    const exportStatusText = document.getElementById('export-status-text');
+    const exportPercentText = document.getElementById('export-percent-text');
+    const exportResultContainer = document.getElementById('export-result-container');
+    const exportPreviewVideo = document.getElementById('export-preview-video');
+    const btnSaveVideo = document.getElementById('btn-save-video');
+    const btnOpenNewTab = document.getElementById('btn-open-new-tab');
+    const btnCloseExport = document.getElementById('btn-close-export');
+    const btnCancelExport = document.getElementById('btn-cancel-export');
+
+    const tabBtnPhotos = document.getElementById('tab-btn-photos');
+    const tabBtnPreview = document.getElementById('tab-btn-preview');
+    const tabBtnSettings = document.getElementById('tab-btn-settings');
+    const panelPhotos = document.getElementById('panel-photos');
+    const panelPreview = document.getElementById('panel-preview');
+    const panelSettings = document.getElementById('panel-settings');
+
+    function switchMobileTab(tab) {
+      if (window.innerWidth >= 1024) return;
+      [panelPhotos, panelPreview, panelSettings].forEach(p => p.classList.add('hidden'));
+      [tabBtnPhotos, tabBtnPreview, tabBtnSettings].forEach(b => {
+        b.className = 'mobile-tab-btn flex-1 py-2 rounded-lg flex items-center justify-center gap-1.5 text-slate-400';
+      });
+
+      if (tab === 'photos') {
+        panelPhotos.classList.remove('hidden');
+        tabBtnPhotos.className = 'mobile-tab-btn flex-1 py-2 rounded-lg flex items-center justify-center gap-1.5 text-brand-400 bg-brand-500/10 font-semibold';
+      } else if (tab === 'preview') {
+        panelPreview.classList.remove('hidden');
+        panelPreview.classList.add('flex');
+        tabBtnPreview.className = 'mobile-tab-btn flex-1 py-2 rounded-lg flex items-center justify-center gap-1.5 text-brand-400 bg-brand-500/10 font-semibold';
+        updateCanvasSize();
+      } else if (tab === 'settings') {
+        panelSettings.classList.remove('hidden');
+        tabBtnSettings.className = 'mobile-tab-btn flex-1 py-2 rounded-lg flex items-center justify-center gap-1.5 text-brand-400 bg-brand-500/10 font-semibold';
+      }
+    }
+
+    tabBtnPhotos.addEventListener('click', () => switchMobileTab('photos'));
+    tabBtnPreview.addEventListener('click', () => switchMobileTab('preview'));
+    tabBtnSettings.addEventListener('click', () => switchMobileTab('settings'));
+
+    lucide.createIcons();
+
+    function getCanvasDimensions() {
+      const h = state.resolutionHeight;
+      let w = h * (16 / 9);
+      if (state.aspectRatio === '9:16') w = h * (9 / 16);
+      if (state.aspectRatio === '1:1') w = h;
+      if (state.aspectRatio === '4:3') w = h * (4 / 3);
+      return { width: Math.round(w), height: Math.round(h) };
+    }
+
+    function updateCanvasSize() {
+      const { width, height } = getCanvasDimensions();
+      canvas.width = width;
+      canvas.height = height;
+      renderAtTime(state.currentTime);
+    }
+
+    function getTotalDuration() {
+      if (state.photos.length === 0) return 0;
+      return state.photos.reduce((acc, p) => acc + (p.duration || state.globalDuration), 0);
+    }
+
+    function getTimelineStateAtTime(t) {
+      if (state.photos.length === 0) return null;
+      const totalD = getTotalDuration();
+      if (t >= totalD) t = totalD;
+
+      let accumulated = 0;
+      for (let i = 0; i < state.photos.length; i++) {
+        const itemDuration = state.photos[i].duration || state.globalDuration;
+        if (t >= accumulated && t < accumulated + itemDuration) {
+          const itemTime = t - accumulated;
+          const transD = Math.min(state.transitionDuration, itemDuration / 2);
+          const isTrans = (itemTime >= itemDuration - transD) && (i < state.photos.length - 1);
+          const transitionProgress = isTrans ? (itemTime - (itemDuration - transD)) / transD : 0;
+
+          return {
+            currentIndex: i,
+            nextIndex: i < state.photos.length - 1 ? i + 1 : (state.loop ? 0 : i),
+            isTransitioning: isTrans && state.transitionStyle !== 'none',
+            transitionProgress,
+            itemTime
+          };
+        }
+        accumulated += itemDuration;
+      }
+      const last = state.photos.length - 1;
+      return { currentIndex: last, nextIndex: last, isTransitioning: false, transitionProgress: 0, itemTime: 0 };
+    }
+
+    function drawImageToCanvas(cCtx, img, mode, width, height, alpha = 1.0, transform = null) {
+      cCtx.save();
+      cCtx.globalAlpha = alpha;
+
+      if (transform) {
+        cCtx.translate(transform.translateX || 0, transform.translateY || 0);
+        if (transform.scale) {
+          cCtx.translate(width / 2, height / 2);
+          cCtx.scale(transform.scale, transform.scale);
+          cCtx.translate(-width / 2, -height / 2);
+        }
+      }
+
+      const imgAspect = img.width / img.height;
+      const canvasAspect = width / height;
+
+      if (mode === 'cover') {
+        let drawW, drawH, offsetX, offsetY;
+        if (imgAspect > canvasAspect) {
+          drawH = height;
+          drawW = height * imgAspect;
+          offsetX = (width - drawW) / 2;
+          offsetY = 0;
+        } else {
+          drawW = width;
+          drawH = width / imgAspect;
+          offsetX = 0;
+          offsetY = (height - drawH) / 2;
+        }
+        cCtx.drawImage(img, offsetX, offsetY, drawW, drawH);
+      } else if (mode === 'blur') {
+        cCtx.save();
+        cCtx.filter = 'blur(30px) brightness(0.6)';
+        cCtx.drawImage(img, -width * 0.05, -height * 0.05, width * 1.1, height * 1.1);
+        cCtx.restore();
+
+        let fitW, fitH, fitX, fitY;
+        if (imgAspect > canvasAspect) {
+          fitW = width;
+          fitH = width / imgAspect;
+          fitX = 0;
+          fitY = (height - fitH) / 2;
+        } else {
+          fitH = height;
+          fitW = height * imgAspect;
+          fitX = (width - fitW) / 2;
+          fitY = 0;
+        }
+        cCtx.drawImage(img, fitX, fitY, fitW, fitH);
+      } else {
+        cCtx.fillStyle = '#000000';
+        cCtx.fillRect(0, 0, width, height);
+        let fitW, fitH, fitX, fitY;
+        if (imgAspect > canvasAspect) {
+          fitW = width;
+          fitH = width / imgAspect;
+          fitX = 0;
+          fitY = (height - fitH) / 2;
+        } else {
+          fitH = height;
+          fitW = height * imgAspect;
+          fitX = (width - fitW) / 2;
+          fitY = 0;
+        }
+        cCtx.drawImage(img, fitX, fitY, fitW, fitH);
+      }
+      cCtx.restore();
+    }
+
+    function renderAtTime(t, targetCtx = ctx, canvasWidth = canvas.width, canvasHeight = canvas.height) {
+      targetCtx.clearRect(0, 0, canvasWidth, canvasHeight);
+
+      if (state.photos.length === 0) {
+        targetCtx.fillStyle = '#0f172a';
+        targetCtx.fillRect(0, 0, canvasWidth, canvasHeight);
+        targetCtx.fillStyle = '#64748b';
+        targetCtx.font = '500 20px sans-serif';
+        targetCtx.textAlign = 'center';
+        targetCtx.textBaseline = 'middle';
+        targetCtx.fillText('Add photos to render video', canvasWidth / 2, canvasHeight / 2);
+        return;
+      }
+
+      const timeline = getTimelineStateAtTime(t);
+      if (!timeline) return;
+
+      const currentPhoto = state.photos[timeline.currentIndex];
+      const nextPhoto = state.photos[timeline.nextIndex];
+
+      if (!timeline.isTransitioning || !nextPhoto) {
+        drawImageToCanvas(targetCtx, currentPhoto.imgElement, state.fitMode, canvasWidth, canvasHeight);
+        drawCaption(targetCtx, currentPhoto.caption, canvasWidth, canvasHeight);
+      } else {
+        const p = timeline.transitionProgress;
+        const style = state.transitionStyle;
+
+        if (style === 'crossfade') {
+          drawImageToCanvas(targetCtx, currentPhoto.imgElement, state.fitMode, canvasWidth, canvasHeight, 1.0);
+          drawImageToCanvas(targetCtx, nextPhoto.imgElement, state.fitMode, canvasWidth, canvasHeight, p);
+        } else if (style === 'fade-black') {
+          const alpha = p < 0.5 ? 1 - p * 2 : (p - 0.5) * 2;
+          const targetImg = p < 0.5 ? currentPhoto.imgElement : nextPhoto.imgElement;
+          drawImageToCanvas(targetCtx, targetImg, state.fitMode, canvasWidth, canvasHeight, alpha);
+        } else if (style === 'slide-left') {
+          drawImageToCanvas(targetCtx, currentPhoto.imgElement, state.fitMode, canvasWidth, canvasHeight, 1.0, { translateX: -p * canvasWidth });
+          drawImageToCanvas(targetCtx, nextPhoto.imgElement, state.fitMode, canvasWidth, canvasHeight, 1.0, { translateX: (1 - p) * canvasWidth });
+        } else if (style === 'slide-up') {
+          drawImageToCanvas(targetCtx, currentPhoto.imgElement, state.fitMode, canvasWidth, canvasHeight, 1.0, { translateY: -p * canvasHeight });
+          drawImageToCanvas(targetCtx, nextPhoto.imgElement, state.fitMode, canvasWidth, canvasHeight, 1.0, { translateY: (1 - p) * canvasHeight });
+        } else if (style === 'zoom-in') {
+          drawImageToCanvas(targetCtx, currentPhoto.imgElement, state.fitMode, canvasWidth, canvasHeight, 1 - p, { scale: 1 + p * 0.15 });
+          drawImageToCanvas(targetCtx, nextPhoto.imgElement, state.fitMode, canvasWidth, canvasHeight, p);
+        }
+      }
+    }
+
+    function drawCaption(cCtx, text, width, height) {
+      if (!text || !text.trim()) return;
+      cCtx.save();
+      cCtx.font = `600 ${Math.round(height * 0.045)}px sans-serif`;
+      cCtx.textAlign = 'center';
+      cCtx.textBaseline = 'bottom';
+
+      const padding = Math.round(height * 0.02);
+      const textWidth = cCtx.measureText(text).width;
+      const bgY = height - Math.round(height * 0.12);
+
+      cCtx.fillStyle = 'rgba(0,0,0,0.65)';
+      cCtx.fillRect((width - textWidth) / 2 - padding, bgY - Math.round(height * 0.045) - padding / 2, textWidth + padding * 2, Math.round(height * 0.05) + padding);
+
+      cCtx.fillStyle = '#ffffff';
+      cCtx.fillText(text, width / 2, bgY);
+      cCtx.restore();
+    }
+
+    function tick(timestamp) {
+      if (!state.isPlaying) return;
+      if (!state.lastTimestamp) state.lastTimestamp = timestamp;
+      const delta = (timestamp - state.lastTimestamp) / 1000;
+      state.lastTimestamp = timestamp;
+
+      state.currentTime += delta;
+      const totalD = getTotalDuration();
+
+      if (state.currentTime >= totalD) {
+        if (state.loop) {
+          state.currentTime = 0;
+        } else {
+          state.currentTime = totalD;
+          pause();
+        }
+      }
+
+      updateUIForTime();
+      renderAtTime(state.currentTime);
+
+      if (state.isPlaying) {
+        state.animationFrameId = requestAnimationFrame(tick);
+      }
+    }
+
+    function play() {
+      if (state.photos.length === 0) {
+        showToast('Please add photos first.', 'warning');
+        return;
+      }
+      unlockAudioOnAndroid();
+      if (state.currentTime >= getTotalDuration()) {
+        state.currentTime = 0;
+      }
+      state.isPlaying = true;
+      state.lastTimestamp = 0;
+      playBtnIcon.setAttribute('data-lucide', 'pause');
+      overlayPlayIcon.setAttribute('data-lucide', 'pause');
+      lucide.createIcons();
+
+      if (state.audioTrack) {
+        state.audioTrack.currentTime = state.currentTime;
+        state.audioTrack.play().catch(() => {});
+      }
+
+      state.animationFrameId = requestAnimationFrame(tick);
+    }
+
+    function pause() {
+      state.isPlaying = false;
+      playBtnIcon.setAttribute('data-lucide', 'play');
+      overlayPlayIcon.setAttribute('data-lucide', 'play');
+      lucide.createIcons();
+
+      if (state.animationFrameId) cancelAnimationFrame(state.animationFrameId);
+      if (state.audioTrack) state.audioTrack.pause();
+    }
+
+    function togglePlay() {
+      if (state.isPlaying) pause();
+      else play();
+    }
+
+    function updateUIForTime() {
+      const totalD = getTotalDuration();
+      scrubber.max = totalD || 1;
+      scrubber.value = state.currentTime;
+
+      timeCurrentEl.textContent = formatTime(state.currentTime);
+      timeTotalEl.textContent = formatTime(totalD);
+
+      const timeline = getTimelineStateAtTime(state.currentTime);
+      const curFrame = timeline ? timeline.currentIndex + 1 : 0;
+      currentFrameNumEl.textContent = `${curFrame} / ${state.photos.length}`;
+    }
+
+    function formatTime(sec) {
+      const m = Math.floor(sec / 60).toString().padStart(2, '0');
+      const s = (sec % 60).toFixed(1).padStart(4, '0');
+      return `${m}:${s}`;
+    }
+
+    function readSinglePhotoFile(file) {
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const img = new Image();
+          img.onload = () => {
+            const fileNameClean = file.name ? file.name.replace(/\.[^/.]+$/, "") : "Photo";
+            resolve({
+              id: 'p_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
+              url: e.target.result,
+              imgElement: img,
+              duration: null,
+              caption: fileNameClean
+            });
+          };
+          img.onerror = () => resolve(null);
+          img.src = e.target.result;
+        };
+        reader.onerror = () => resolve(null);
+        reader.readAsDataURL(file);
+      });
+    }
+
+    async function addPhotoFiles(files) {
+      if (!files || files.length === 0) return;
+      const imageFiles = Array.from(files).filter(isImageFile);
+
+      if (imageFiles.length === 0) {
+        showToast('No valid images found in selection', 'warning');
+        return;
+      }
+
+      showToast(`Loading ${imageFiles.length} photo${imageFiles.length > 1 ? 's' : ''}...`);
+
+      const loadedPhotos = [];
+      for (const file of imageFiles) {
+        const photoObj = await readSinglePhotoFile(file);
+        if (photoObj) loadedPhotos.push(photoObj);
+      }
+
+      if (loadedPhotos.length > 0) {
+        state.photos.push(...loadedPhotos);
+        switchMobileTab('photos');
+        renderPhotoListUI();
+        updateCanvasSize();
+        showToast(`Added ${loadedPhotos.length} photo${loadedPhotos.length > 1 ? 's' : ''}`);
+      } else {
+        showToast('Failed to load selected photos', 'error');
+      }
+    }
+
+    function renderPhotoListUI() {
+      if (!photoCountEl || !mobilePhotoCountEl || !photoList) return;
+      const count = state.photos.length;
+      photoCountEl.textContent = count;
+      mobilePhotoCountEl.textContent = count;
+
+      if (count === 0) {
+        photoList.innerHTML = `
+          <div id="empty-state" class="h-48 flex flex-col items-center justify-center text-center p-4 text-slate-500">
+            <i data-lucide="image" class="w-10 h-10 mb-2 opacity-40"></i>
+            <p class="text-xs font-medium">No photos added yet.</p>
+            <p class="text-[11px] text-slate-600 mt-1">Tap above or click "Load Demo" to start</p>
+          </div>
+        `;
+        lucide.createIcons();
+        updateUIForTime();
+        renderAtTime(0);
+        return;
+      }
+
+      photoList.innerHTML = '';
+
+      state.photos.forEach((photo, idx) => {
+        const durationVal = photo.duration || state.globalDuration;
+        const card = document.createElement('div');
+        card.className = 'group relative flex items-center gap-2.5 bg-slate-800/90 p-2.5 rounded-xl border border-slate-700/80 shadow-sm transition hover:bg-slate-800';
+        card.dataset.id = photo.id;
+
+        card.innerHTML = `
+          <div class="text-xs font-bold text-slate-400 w-4 text-center shrink-0">${idx + 1}</div>
+          <div class="w-12 h-12 rounded-lg overflow-hidden bg-slate-900 border border-slate-700 shrink-0 relative">
+            <img src="${photo.url}" alt="Thumbnail ${idx + 1}" class="w-full h-full object-cover" />
+          </div>
+          <div class="flex-1 min-w-0 space-y-1">
+            <input type="text" placeholder="Caption..." value="${escapeHtml(photo.caption)}"
+              class="photo-caption-input w-full bg-slate-900/90 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 focus:outline-none focus:border-brand-500" />
+            <div class="flex items-center gap-1 text-[11px] text-slate-400">
+              <span>Interval:</span>
+              <input type="number" step="0.1" min="0.1" max="20" value="${durationVal}"
+                class="photo-duration-input w-14 bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-center font-mono text-brand-300 focus:outline-none focus:border-brand-500" />
+              <span>s</span>
+            </div>
+          </div>
+          <div class="flex flex-col gap-1 shrink-0">
+            <button class="btn-move-up p-1 text-slate-400 active:text-white ${idx === 0 ? 'opacity-20 cursor-not-allowed' : 'hover:text-slate-200'}" ${idx === 0 ? 'disabled' : ''}>
+              <i data-lucide="chevron-up" class="w-4 h-4"></i>
+            </button>
+            <button class="btn-delete p-1 text-slate-400 active:text-rose-400 hover:text-rose-400">
+              <i data-lucide="trash-2" class="w-4 h-4"></i>
+            </button>
+            <button class="btn-move-down p-1 text-slate-400 active:text-white ${idx === state.photos.length - 1 ? 'opacity-20 cursor-not-allowed' : 'hover:text-slate-200'}" ${idx === state.photos.length - 1 ? 'disabled' : ''}>
+              <i data-lucide="chevron-down" class="w-4 h-4"></i>
+            </button>
+          </div>
+        `;
+
+        card.querySelector('.photo-caption-input').addEventListener('input', (e) => {
+          photo.caption = e.target.value;
+          renderAtTime(state.currentTime);
+        });
+
+        card.querySelector('.photo-duration-input').addEventListener('change', (e) => {
+          const v = parseFloat(e.target.value);
+          if (!isNaN(v) && v > 0) {
+            photo.duration = v;
+            updateUIForTime();
+          }
+        });
+
+        card.querySelector('.btn-move-up').addEventListener('click', () => {
+          if (idx > 0) {
+            const temp = state.photos[idx];
+            state.photos[idx] = state.photos[idx - 1];
+            state.photos[idx - 1] = temp;
+            renderPhotoListUI();
+            renderAtTime(state.currentTime);
+          }
+        });
+
+        card.querySelector('.btn-move-down').addEventListener('click', () => {
+          if (idx < state.photos.length - 1) {
+            const temp = state.photos[idx];
+            state.photos[idx] = state.photos[idx + 1];
+            state.photos[idx + 1] = temp;
+            renderPhotoListUI();
+            renderAtTime(state.currentTime);
+          }
+        });
+
+        card.querySelector('.btn-delete').addEventListener('click', () => {
+          state.photos.splice(idx, 1);
+          renderPhotoListUI();
+          renderAtTime(state.currentTime);
+        });
+
+        photoList.appendChild(card);
+      });
+
+      lucide.createIcons();
+      updateUIForTime();
+      renderAtTime(state.currentTime);
+    }
+
+    async function loadDemoPhotos() {
+      const demoTitles = ["Sunset Glow", "High Peaks", "Neon City", "Clear Lake", "Galaxy"];
+      const demoColors = [
+        ["#f59e0b", "#d97706"],
+        ["#10b981", "#059669"],
+        ["#8b5cf6", "#6d28d9"],
+        ["#06b6d4", "#0891b2"],
+        ["#ec4899", "#be185d"]
+      ];
+
+      showToast('Generating demo photos...');
+      const loadedDemos = [];
+
+      for (let i = 0; i < demoTitles.length; i++) {
+        const title = demoTitles[i];
+        const colors = demoColors[i];
+
+        const c = document.createElement('canvas');
+        c.width = 720;
+        c.height = 1280;
+        const ctx2 = c.getContext('2d');
+
+        const grad = ctx2.createLinearGradient(0, 0, 720, 1280);
+        grad.addColorStop(0, colors[0]);
+        grad.addColorStop(1, colors[1]);
+        ctx2.fillStyle = grad;
+        ctx2.fillRect(0, 0, 720, 1280);
+
+        ctx2.fillStyle = 'rgba(255,255,255,0.15)';
+        for (let j = 0; j < 6; j++) {
+          ctx2.beginPath();
+          ctx2.arc((j * 140 + i * 60) % 720, (j * 220 + i * 50) % 1280, 100 + j * 20, 0, Math.PI * 2);
+          ctx2.fill();
+        }
+
+        ctx2.fillStyle = '#ffffff';
+        ctx2.font = 'bold 54px sans-serif';
+        ctx2.textAlign = 'center';
+        ctx2.textBaseline = 'middle';
+        ctx2.fillText(title, 360, 640);
+
+        const dataUrl = c.toDataURL('image/png');
+
+        await new Promise((resolve) => {
+          const img = new Image();
+          img.onload = () => {
+            loadedDemos.push({
+              id: 'demo_' + i + '_' + Date.now(),
+              url: dataUrl,
+              imgElement: img,
+              duration: 1.5,
+              caption: `Photo #${i + 1}: ${title}`
+            });
+            resolve();
+          };
+          img.onerror = () => resolve();
+          img.src = dataUrl;
+        });
+      }
+
+      state.photos = loadedDemos;
+      switchMobileTab('photos');
+      renderPhotoListUI();
+      updateCanvasSize();
+      showToast('Demo photos loaded!');
+    }
+
+    function getAudioStreamTrack() {
+      if (!state.audioTrack) return null;
+      try {
+        unlockAudioOnAndroid();
+        if (!state.audioTrack._sourceNode) {
+          state.audioTrack._sourceNode = globalAudioCtx.createMediaElementSource(state.audioTrack);
+        }
+        const dest = globalAudioCtx.createMediaStreamDestination();
+        state.audioTrack._sourceNode.disconnect();
+        state.audioTrack._sourceNode.connect(dest);
+        state.audioTrack._sourceNode.connect(globalAudioCtx.destination);
+        return dest.stream.getAudioTracks()[0] || null;
+      } catch (err) {
+        console.warn("Audio stream track error:", err);
+        return null;
+      }
+    }
+
+    function getAndroidSupportedMimeType() {
+      const types = [
+        'video/webm;codecs=vp8,opus',
+        'video/webm;codecs=vp9,opus',
+        'video/webm',
+        'video/mp4;codecs=avc1',
+        'video/mp4'
+      ];
+      for (const type of types) {
+        if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(type)) {
+          return type;
+        }
+      }
+      return 'video/webm';
+    }
+
+    function exportMP4Video() {
+      if (state.photos.length === 0) {
+        showToast('No photos to export!', 'error');
+        return;
+      }
+
+      pause();
+      switchMobileTab('preview');
+
+      exportModal.classList.remove('hidden');
+      exportSpinner.classList.remove('hidden');
+      exportProgressWrapper.classList.remove('hidden');
+      exportResultContainer.classList.add('hidden');
+      btnCancelExport.classList.remove('hidden');
+
+      exportProgressBar.style.width = '0%';
+      exportPercentText.textContent = '0%';
+      exportStatusText.textContent = 'Encoding...';
+
+      state.isExporting = true;
+      state.currentTime = 0;
+
+      const { width, height } = getCanvasDimensions();
+      canvas.width = width;
+      canvas.height = height;
+
+      const totalD = getTotalDuration();
+      const selectedMime = getAndroidSupportedMimeType();
+      state.exportedMime = selectedMime;
+
+      let stream;
+      try {
+        stream = canvas.captureStream(state.fps);
+      } catch (e) {
+        showToast('Canvas stream capture error.', 'error');
+        exportModal.classList.add('hidden');
+        return;
+      }
+
+      const audioTrack = getAudioStreamTrack();
+      if (audioTrack) {
+        stream.addTrack(audioTrack);
+        if (state.audioTrack) {
+          state.audioTrack.currentTime = 0;
+          state.audioTrack.play().catch(() => {});
+        }
+      }
+
+      let recorder;
+      try {
+        recorder = new MediaRecorder(stream, {
+          mimeType: selectedMime,
+          videoBitsPerSecond: 5000000
+        });
+      } catch (err) {
+        recorder = new MediaRecorder(stream);
+      }
+
+      const chunks = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) chunks.push(e.data);
+      };
+
+      recorder.onstop = () => {
+        if (!state.isExporting) return;
+
+        if (state.audioTrack) {
+          state.audioTrack.pause();
+        }
+
+        const finalBlob = new Blob(chunks, { type: selectedMime });
+        state.exportedBlob = finalBlob;
+
+        if (state.exportedUrl) URL.revokeObjectURL(state.exportedUrl);
+        state.exportedUrl = URL.createObjectURL(finalBlob);
+
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          state.exportedDataBase64 = reader.result;
+
+          exportPreviewVideo.src = state.exportedUrl;
+          exportSpinner.classList.add('hidden');
+          exportProgressWrapper.classList.add('hidden');
+          exportResultContainer.classList.remove('hidden');
+          btnCancelExport.classList.add('hidden');
+
+          updateCanvasSize();
+        };
+        reader.readAsDataURL(finalBlob);
+      };
+
+      recorder.start();
+
+      let lastTime = performance.now();
+
+      function exportStep(now) {
+        if (!state.isExporting) {
+          if (recorder.state !== 'inactive') recorder.stop();
+          return;
+        }
+
+        const delta = (now - lastTime) / 1000;
+        lastTime = now;
+
+        state.currentTime += delta;
+
+        const progress = Math.min(100, Math.round((state.currentTime / totalD) * 100));
+        exportProgressBar.style.width = `${progress}%`;
+        exportPercentText.textContent = `${progress}%`;
+        exportStatusText.textContent = `Recording (${state.currentTime.toFixed(1)}s / ${totalD.toFixed(1)}s)...`;
+
+        renderAtTime(state.currentTime, ctx, width, height);
+
+        if (state.currentTime < totalD) {
+          requestAnimationFrame(exportStep);
+        } else {
+          state.currentTime = totalD;
+          renderAtTime(totalD, ctx, width, height);
+          setTimeout(() => {
+            if (recorder.state !== 'inactive') recorder.stop();
+          }, 300);
+        }
+      }
+
+      requestAnimationFrame((now) => {
+        lastTime = now;
+        exportStep(now);
+      });
+    }
+
+    async function handleSaveOrShare() {
+      if (!state.exportedBlob) {
+        showToast('No exported video available.', 'error');
+        return;
+      }
+
+      const ext = state.exportedMime.includes('mp4') ? 'mp4' : 'webm';
+      const fileName = `FrameMotion_${Date.now()}.${ext}`;
+
+      if (navigator.share) {
+        try {
+          const file = new File([state.exportedBlob], fileName, { type: state.exportedBlob.type || 'video/mp4' });
+          if (navigator.canShare && navigator.canShare({ files: [file] })) {
+            await navigator.share({
+              files: [file],
+              title: 'FrameMotion Video',
+              text: 'Here is your photo animation video!'
+            });
+            showToast('Shared successfully!', 'info');
+            return;
+          }
+        } catch (err) {
+          if (err.name === 'AbortError') return;
+        }
+      }
+
+      const a = document.createElement('a');
+      a.style.display = 'none';
+      a.href = state.exportedDataBase64 || state.exportedUrl;
+      a.download = fileName;
+      a.target = '_blank';
+      document.body.appendChild(a);
+      a.click();
+
+      setTimeout(() => {
+        if (document.body.contains(a)) {
+          document.body.removeChild(a);
+        }
+      }, 1000);
+
+      showToast('Download triggered! If blocked, long press the video box above.', 'info');
+    }
+
+    function openVideoInNewTab() {
+      if (!state.exportedUrl && !state.exportedDataBase64) {
+        showToast('No video available to open.', 'error');
+        return;
+      }
+      const mediaUrl = state.exportedDataBase64 || state.exportedUrl;
+      const newWin = window.open();
+      if (newWin) {
+        newWin.document.write(`
+          <!DOCTYPE html>
+          <html>
+          <head><title>FrameMotion Video Preview</title><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+          <body style="margin:0;background:#0f172a;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;color:#fff;font-family:sans-serif;">
+            <p style="font-size:14px;color:#94a3b8;margin-bottom:12px;text-align:center;padding:0 16px;">Long press the video below to save it to your gallery</p>
+            <video src="${mediaUrl}" controls autoplay playsinline style="max-width:95vw;max-height:80vh;border-radius:12px;background:#000;"></video>
+            <br/>
+            <a href="${mediaUrl}" download="animation.mp4" style="display:inline-block;padding:12px 24px;background:#4f46e5;color:#fff;text-decoration:none;font-weight:bold;border-radius:8px;font-size:14px;">Direct File Link</a>
+          </body>
+          </html>
+        `);
+      } else {
+        showToast('Popups blocked. Tap and hold the video box above to save.', 'warning');
+      }
+    }
+
+    function showToast(message, type = 'info') {
+      const container = document.getElementById('toast-container');
+      const toast = document.createElement('div');
+      const colors = type === 'error' ? 'bg-rose-600 text-white' : (type === 'warning' ? 'bg-amber-600 text-white' : 'bg-slate-800 border border-slate-700 text-slate-100');
+
+      toast.className = `px-3.5 py-2 rounded-xl shadow-xl text-xs font-medium flex items-center justify-center gap-2 transform transition-all duration-300 translate-y-2 opacity-0 pointer-events-auto ${colors}`;
+      toast.innerHTML = `<span>${message}</span>`;
+
+      container.appendChild(toast);
+
+      setTimeout(() => {
+        toast.classList.remove('translate-y-2', 'opacity-0');
+      }, 10);
+
+      setTimeout(() => {
+        toast.classList.add('opacity-0', 'translate-y-2');
+        setTimeout(() => toast.remove(), 300);
+      }, 3500);
+    }
+
+    dropZone.addEventListener('click', (e) => {
+      if (e.target !== fileInput) fileInput.click();
+    });
+
+    fileInput.addEventListener('change', (e) => {
+      if (e.target.files) {
+        addPhotoFiles(e.target.files);
+        fileInput.value = '';
+      }
+    });
+
+    btnPlay.addEventListener('click', togglePlay);
+    canvasOverlayPlay.addEventListener('click', togglePlay);
+
+    btnPrev.addEventListener('click', () => {
+      const timeline = getTimelineStateAtTime(state.currentTime);
+      if (!timeline) return;
+      const prevIdx = Math.max(0, timeline.currentIndex - 1);
+      let t = 0;
+      for (let i = 0; i < prevIdx; i++) {
+        t += state.photos[i].duration || state.globalDuration;
+      }
+      state.currentTime = t;
+      updateUIForTime();
+      renderAtTime(state.currentTime);
+    });
+
+    btnNext.addEventListener('click', () => {
+      const timeline = getTimelineStateAtTime(state.currentTime);
+      if (!timeline) return;
+      const nextIdx = Math.min(state.photos.length - 1, timeline.currentIndex + 1);
+      let t = 0;
+      for (let i = 0; i < nextIdx; i++) {
+        t += state.photos[i].duration || state.globalDuration;
+      }
+      state.currentTime = t;
+      updateUIForTime();
+      renderAtTime(state.currentTime);
+    });
+
+    btnLoop.addEventListener('click', () => {
+      state.loop = !state.loop;
+      btnLoop.className = state.loop
+        ? 'p-2.5 rounded-lg text-brand-400 bg-brand-500/10 border border-brand-500/20'
+        : 'p-2.5 rounded-lg text-slate-500';
+    });
+
+    scrubber.addEventListener('input', (e) => {
+      pause();
+      state.currentTime = parseFloat(e.target.value);
+      updateUIForTime();
+      renderAtTime(state.currentTime);
+    });
+
+    globalDurationInput.addEventListener('input', (e) => {
+      state.globalDuration = parseFloat(e.target.value);
+      globalDurationVal.textContent = state.globalDuration.toFixed(1) + 's';
+      renderPhotoListUI();
+    });
+
+    document.querySelectorAll('.preset-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const val = parseFloat(btn.dataset.preset);
+        state.globalDuration = val;
+        globalDurationInput.value = val;
+        globalDurationVal.textContent = val.toFixed(1) + 's';
+        renderPhotoListUI();
+      });
+    });
+
+    transitionStyleSelect.addEventListener('change', (e) => {
+      state.transitionStyle = e.target.value;
+      renderAtTime(state.currentTime);
+    });
+
+    transitionDurationInput.addEventListener('input', (e) => {
+      state.transitionDuration = parseFloat(e.target.value);
+      transitionDurationVal.textContent = state.transitionDuration.toFixed(1) + 's';
+    });
+
+    aspectRatioSelect.addEventListener('change', (e) => {
+      state.aspectRatio = e.target.value;
+      updateCanvasSize();
+    });
+
+    videoResolutionSelect.addEventListener('change', (e) => {
+      state.resolutionHeight = parseInt(e.target.value);
+      updateCanvasSize();
+    });
+
+    fitModeSelect.addEventListener('change', (e) => {
+      state.fitMode = e.target.value;
+      renderAtTime(state.currentTime);
+    });
+
+    fpsSelect.addEventListener('change', (e) => {
+      state.fps = parseInt(e.target.value);
+    });
+
+    btnLoadDemo.addEventListener('click', loadDemoPhotos);
+
+    btnClearAll.addEventListener('click', () => {
+      pause();
+      state.photos = [];
+      state.currentTime = 0;
+      renderPhotoListUI();
+    });
+
+    audioInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const url = URL.createObjectURL(file);
+      state.audioTrack = new Audio(url);
+      state.audioFilename = file.name;
+
+      audioFilenameEl.textContent = file.name;
+      btnRemoveAudio.classList.remove('hidden');
+      showToast('Audio loaded');
+    });
+
+    btnRemoveAudio.addEventListener('click', () => {
+      if (state.audioTrack) state.audioTrack.pause();
+      state.audioTrack = null;
+      state.audioFilename = '';
+      audioInput.value = '';
+      audioFilenameEl.textContent = 'Select Audio (MP3/WAV)';
+      btnRemoveAudio.classList.add('hidden');
+      showToast('Audio removed');
+    });
+
+    btnExport.addEventListener('click', exportMP4Video);
+    btnSaveVideo.addEventListener('click', handleSaveOrShare);
+    btnOpenNewTab.addEventListener('click', openVideoInNewTab);
+
+    btnCancelExport.addEventListener('click', () => {
+      state.isExporting = false;
+      exportModal.classList.add('hidden');
+      updateCanvasSize();
+      showToast('Export cancelled');
+    });
+
+    btnCloseExport.addEventListener('click', () => {
+      exportModal.classList.add('hidden');
+      updateCanvasSize();
+    });
+
+    window.addEventListener('resize', () => {
+      if (window.innerWidth >= 1024) {
+        [panelPhotos, panelPreview, panelSettings].forEach(p => {
+          p.classList.remove('hidden');
+          if (p === panelPreview) p.classList.add('flex');
+        });
+      } else {
+        switchMobileTab('photos');
+      }
+      updateCanvasSize();
+    });
+
+    updateCanvasSize();
+    loadDemoPhotos();
+  </script>
+</body>
+</html>
