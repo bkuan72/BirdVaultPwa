@@ -27,7 +27,7 @@ Designed specifically for wildlife photographers handling high-resolution DSLR a
 * **Crop AI Tool**: Interactive region of interest (ROI) framing box to isolate diagnostic visual features (head, beak, eyes) prior to AI evaluation.
 * **Screen-Calibrated & Persistent Loupe Magnifier**: Calibrates magnification relative to displayed on-screen image dimensions ($1.0\times$ baseline matching screen resolution up to $20.0\times$ detail zoom). The lens remains anchored on the photo during adjustment without vanishing.
 * **AI Photo Processing Controls**: On mobile, open processing tools from the preview toolbar; adjustments appear in a compact panel below the image so the live preview remains visible while tuning sliders.
-* **Image Version History**: Switch the active image version from the preview controls and delete processed versions; the original capture is protected from deletion.
+* **Image Version History**: Switch the active image version from the preview controls and delete processed versions; the original capture is protected from deletion. Saving an AI-processed version recalculates and stores its local focus rating, while switching versions restores each version's saved rating.
 * **Conditional Focus Target Overlay**: Displays a sky-blue target marker over camera AF spot coordinates or computed micro-contrast hotspots, automatically hiding during active zoom or crop preview.
 
 ### 4. Selection, Deletion & Local Export

@@ -2004,7 +2004,7 @@ Return STRICT JSON ONLY:
               luminance,
               w,
               h,
-              !!(cropBoxRoi || focusSpot)
+              !!(options.assumeSubjectRegion || cropBoxRoi || focusSpot)
             );
 
             if (srcToRevoke) URL.revokeObjectURL(srcToRevoke);
@@ -3400,6 +3400,10 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
             cropBox: selectedVer.cropBox !== undefined ? selectedVer.cropBox : photo.cropBox,
             blobUrl: newBlobUrl,
             thumbnailUrl: newThumbUrl || newBlobUrl,
+            sharpness: selectedVer.sharpness !== undefined ? selectedVer.sharpness : selectedVer.isOriginal ? photo.sharpness : null,
+            sharpnessSource: selectedVer.sharpnessSource !== undefined ? selectedVer.sharpnessSource : selectedVer.isOriginal ? photo.sharpnessSource : null,
+            stars: selectedVer.stars !== undefined ? selectedVer.stars : selectedVer.isOriginal ? photo.stars : null,
+            userStars: selectedVer.userStars !== undefined ? selectedVer.userStars : selectedVer.isOriginal ? photo.userStars : null,
             versions: updatedVersions
           };
           onUpdatePhoto(updated);
@@ -3523,6 +3527,38 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
           const enhancedBlob = await applyAiEnhancementsToImage(source, enhanceParams, enhanceScope === 'crop' ? cropBox : null, aiResult?.heatmapPoints || [], enhanceScope === 'crop');
           if (!enhancedBlob) return;
 
+          setFocusEvaluationError('');
+          setEvaluatingFocus(true);
+          let focusEval;
+          try {
+            const identifiedBirdPoint = aiResult?.heatmapPoints?.find(point =>
+              point.label && point.label.toLowerCase().includes('eye') &&
+              Number.isFinite(point.x) && Number.isFinite(point.y)
+            ) || aiResult?.heatmapPoints?.find(point =>
+              Number.isFinite(point.x) && Number.isFinite(point.y)
+            );
+            const targetFocusArea = enhanceScope === 'crop'
+              ? null
+              : cropBox || (identifiedBirdPoint && {
+                xPct: identifiedBirdPoint.x,
+                yPct: identifiedBirdPoint.y,
+                widthPct: 20,
+                heightPct: 20
+              });
+            focusEval = await evaluatePhotoFocus(
+              enhancedBlob,
+              targetFocusArea,
+              cameraExif,
+              {
+                ignoreExifFocusArea: !targetFocusArea,
+                assumeSubjectRegion: enhanceScope === 'crop' || !!targetFocusArea
+              }
+            );
+          } finally {
+            setEvaluatingFocus(false);
+          }
+          if (focusEval.error) setFocusEvaluationError(focusEval.error);
+
           if (enhanceScope === 'crop') {
             if (cropOutputDirectoryHandle) {
               let candidateName = cropOutputFileName;
@@ -3562,20 +3598,37 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
             cropBox: enhanceScope === 'crop' ? null : cropBox || photo.cropBox || null,
             isCropOutput: enhanceScope === 'crop',
             savedFileName: enhanceScope === 'crop' ? cropOutputFileName : null,
-            processingParams: { ...enhanceParams }
+            processingParams: { ...enhanceParams },
+            sharpness: focusEval.error ? null : focusEval.score,
+            sharpnessSource: focusEval.error ? null : 'local',
+            stars: focusEval.error ? null : focusEval.stars
           };
 
           if (onCommitNewVersion) {
             await onCommitNewVersion(photo, enhancedBlob, newVersionObj);
           } else {
             const newUrl = URL.createObjectURL(enhancedBlob);
-            const updatedVersions = [...activeVersions, { ...newVersionObj, blobUrl: newUrl, thumbnailUrl: newUrl }];
+            const ratedVersions = activeVersions.map(version => version.versionId === activeVersionId
+              ? {
+                ...version,
+                sharpness: photo.sharpness,
+                sharpnessSource: photo.sharpnessSource,
+                stars: photo.stars,
+                userStars: photo.userStars
+              }
+              : version
+            );
+            const updatedVersions = [...ratedVersions, { ...newVersionObj, blobUrl: newUrl, thumbnailUrl: newUrl }];
             const updatedPhoto = {
               ...photo,
               blobUrl: newUrl,
               thumbnailUrl: newUrl,
               activeVersionId: verId,
               cropBox: newVersionObj.cropBox,
+              sharpness: newVersionObj.sharpness,
+              sharpnessSource: newVersionObj.sharpnessSource,
+              stars: newVersionObj.stars,
+              userStars: null,
               versions: updatedVersions
             };
             onUpdatePhoto(updatedPhoto);
@@ -7400,7 +7453,17 @@ const handleDeletePhotoInViewer = async (photoId) => {
             : version
         ));
 
-        const updatedVersions = [...existingVersions, fullVerMeta];
+        const ratedVersions = existingVersions.map(version => version.versionId === photo.activeVersionId
+          ? {
+            ...version,
+            sharpness: photo.sharpness,
+            sharpnessSource: photo.sharpnessSource,
+            stars: photo.stars,
+            userStars: photo.userStars
+          }
+          : version
+        );
+        const updatedVersions = [...ratedVersions, fullVerMeta];
 
         const updatedPhoto = {
           ...photo,
@@ -7409,6 +7472,10 @@ const handleDeletePhotoInViewer = async (photoId) => {
           thumbnailUrl: freshBlobUrl,
           activeVersionId: verId,
           cropBox: versionMeta.cropBox,
+          sharpness: versionMeta.sharpness,
+          sharpnessSource: versionMeta.sharpnessSource,
+          stars: versionMeta.stars,
+          userStars: null,
           versions: updatedVersions
         };
 
@@ -7437,6 +7504,10 @@ const handleDeletePhotoInViewer = async (photoId) => {
                       opfsFileName: verFileName,
                       activeVersionId: verId,
                       cropBox: versionMeta.cropBox,
+                      sharpness: versionMeta.sharpness,
+                      sharpnessSource: versionMeta.sharpnessSource,
+                      stars: versionMeta.stars,
+                      userStars: null,
                       versions: updatedVersions
                     }
                   };
