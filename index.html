@@ -6689,7 +6689,7 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                 />
 
                 <button
-                  onClick={handleBatchRateFocus}
+                  onClick={() => handleBatchRateFocus()}
                   disabled={rating || unratedCount === 0}
                   title="Rate focus on this device; this does not call Gemini or use API quota"
                   className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-[11px] sm:text-xs px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl shadow-lg transition flex items-center justify-center space-x-1.5 active:scale-95 touch-manipulation flex-1 sm:flex-none"
