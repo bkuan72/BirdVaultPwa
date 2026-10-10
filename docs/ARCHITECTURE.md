@@ -136,7 +136,7 @@ The app converts an image to luminance and evaluates normalized edge acutance an
 
 This local subject-region test is a visual heuristic, not semantic bird/object recognition. It cannot guarantee that a detected region is a bird or distinguish every subject from background detail; AI focus scoring during identification remains the semantic alternative.
 
-Manual star ratings take precedence over the estimated rating in the sharpness filters. If image loading or canvas analysis fails, the app reports the failure and leaves the focus score unrated rather than treating it as a low score.
+Manual star ratings take precedence over the estimated rating in the sharpness filters. **Re-rate selected** explicitly replaces local focus scores and clears manual star overrides for those selected photos; it uses the crop when present, otherwise analyzes the full image without relying on camera focus-point metadata. If image loading or canvas analysis fails, the app reports the failure and leaves the focus score unrated rather than treating it as a low score.
 
 Generic and batch ratings run entirely on-device: they make no Gemini/API requests and use no API quota. This supports fast triage of large wildlife photo sets without manual review of every frame.
 

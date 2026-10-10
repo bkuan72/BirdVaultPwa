@@ -6104,47 +6104,60 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
       if (folderInputRef.current) folderInputRef.current.value = '';
     };
 
-    const handleBatchRateFocus = async () => {
-        const unrated = photos.filter(p => getEffectiveStars(p) === 0);
-        if (!unrated.length) return;
+    const handleBatchRateFocus = async (photoIds = null) => {
+        const selectedIdsToRate = photoIds ? new Set(photoIds) : null;
+        const targetsToRate = photos.filter(photo =>
+          selectedIdsToRate
+            ? selectedIdsToRate.has(photo.id)
+            : getEffectiveStars(photo) === 0
+        );
+        if (!targetsToRate.length || rating) return;
 
         setRating(true);
         abortRatingRef.current = false;
-        setRatingProgress({ current: 0, total: unrated.length });
+        setRatingProgress({ current: 0, total: targetsToRate.length });
 
-        for (let i = 0; i < unrated.length; i++) {
-          if (abortRatingRef.current) break;
+        try {
+          for (let i = 0; i < targetsToRate.length; i++) {
+            if (abortRatingRef.current) break;
 
-          const target = unrated[i];
-          let cameraExif = target.cameraExif;
-          if (!cameraExif && target.file) {
-            cameraExif = await extractCameraExif(target.file);
+            const target = targetsToRate[i];
+            let cameraExif = target.cameraExif;
+            if (!cameraExif && target.file) {
+              cameraExif = await extractCameraExif(target.file);
+            }
+
+            if (abortRatingRef.current) break;
+            const evalResult = await evaluatePhotoFocus(
+              target.file || target.blobUrl || target.thumbnailUrl || target.url,
+              target.cropBox || null,
+              cameraExif || target.cameraExif,
+              { ignoreExifFocusArea: !target.cropBox }
+            );
+            if (abortRatingRef.current) break;
+            if (evalResult.error) {
+              setRatingProgress({ current: i + 1, total: targetsToRate.length });
+              continue;
+            }
+
+            const ratingUpdate = {
+              cameraExif: cameraExif || target.cameraExif,
+              sharpness: evalResult.score,
+              sharpnessSource: 'local',
+              stars: evalResult.stars,
+              ...(selectedIdsToRate ? { userStars: null } : {})
+            };
+
+            onUpdatePhotos(prev => prev.map(photo =>
+              photo.id === target.id ? { ...photo, ...ratingUpdate } : photo
+            ));
+            saveFingerprintMetadata({ ...target, ...ratingUpdate });
+            setRatingProgress({ current: i + 1, total: targetsToRate.length });
           }
-
-          if (abortRatingRef.current) break;
-          const evalResult = await evaluatePhotoFocus(target.file || target.blobUrl || target.thumbnailUrl || target.url, target.cropBox || target.focusSpot, cameraExif || target.cameraExif);
-          if (abortRatingRef.current) break;
-          if (evalResult.error) {
-            setRatingProgress({ current: i + 1, total: unrated.length });
-            continue;
-          }
-
-          const updated = { 
-            ...target, 
-            cameraExif: cameraExif || target.cameraExif,
-            sharpness: evalResult.score,
-            sharpnessSource: 'local',
-            stars: evalResult.stars,
-            focusSpot: evalResult.focusSpot 
-          };
-
-          saveFingerprintMetadata(updated);
-
-          onUpdatePhotos(prev => prev.map(p => p.id === target.id ? updated : p));
-          setRatingProgress({ current: i + 1, total: unrated.length });
+        } finally {
+          setRating(false);
         }
 
-        setRating(false);
       };
 
       const handleCardStarClick = (photoId, newStars) => {
@@ -6488,6 +6501,21 @@ Return STRICT JSON ONLY without markdown fences or code blocks:
                     >
                       <Icon name="check" className="w-4 h-4 text-emerald-400" />
                       <span>{canDeselectAll ? 'Deselect All' : `Select All (${processedPhotos.length})`}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const selectedPhotoIds = Array.from(selectedIds);
+                        setShowMobileActions(false);
+                        handleBatchRateFocus(selectedPhotoIds);
+                      }}
+                      disabled={!selectedIds.size || rating}
+                      aria-label={`Re-rate ${selectedIds.size} selected photos on this device`}
+                      title="Recalculate local focus scores and replace manual star overrides for the selected photos"
+                      className="w-full flex items-center space-x-2 rounded-lg px-3 py-3 text-left text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:opacity-50 touch-manipulation"
+                    >
+                      <Icon name="sparkles" className="w-4 h-4 text-emerald-400" />
+                      <span>Re-rate selected ({selectedIds.size})</span>
                     </button>
                     <button
                       type="button"
